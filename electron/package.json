@@ -1,0 +1,44 @@
+{
+  "name": "termtastic-electron",
+  "version": "0.1.0",
+  "description": "Electron desktop wrapper for the Termtastic web app",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "se.soderbjorn.termtastic",
+    "productName": "Termtastic",
+    "copyright": "Copyright © 2026 Robert Söderbjörn",
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/server.jar",
+        "to": "server.jar"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

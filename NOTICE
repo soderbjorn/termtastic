@@ -1,0 +1,118 @@
+Termtastic
+Copyright (c) 2026 Robert Söderbjörn
+
+This product includes software developed by third parties. Their licenses
+and copyright notices are listed below. For the full license texts, see the
+referenced files or URLs.
+
+For a comprehensive dependency audit, see docs/third-party-licenses.md.
+
+================================================================================
+VENDORED CODE
+================================================================================
+
+terminal-emulator module (unmodified copy)
+  Original: Terminal Emulator for Android by Jack Palevich
+  Source:   https://github.com/jackpal/Android-Terminal-Emulator
+  Via:      https://github.com/termux/termux-app
+  License:  Apache License 2.0
+  See:      terminal-emulator/LICENSE.md
+
+terminal-view module (modified fork)
+  Original: Terminal Emulator for Android by Jack Palevich
+  Source:   https://github.com/jackpal/Android-Terminal-Emulator
+  Via:      https://github.com/termux/termux-app
+  License:  Apache License 2.0
+  See:      terminal-view/LICENSE.md
+
+================================================================================
+BUNDLED FONTS
+================================================================================
+
+JetBrains Mono
+  Copyright 2020 The JetBrains Mono Project Authors
+  Source:  https://github.com/JetBrains/JetBrainsMono
+  License: SIL Open Font License 1.1
+  See:     androidApp/src/main/assets/fonts/JetBrainsMono-OFL.txt
+
+Iosevka
+  Copyright 2015-2024 Renzhi Li (aka. Belleve Invis)
+  Source:  https://github.com/be5invis/Iosevka
+  License: SIL Open Font License 1.1
+  See:     androidApp/src/main/assets/fonts/Iosevka-OFL.txt
+
+================================================================================
+LGPL DEPENDENCIES (server-side, dynamically linked via JVM classpath)
+================================================================================
+
+JediTerm Core
+  Copyright JetBrains s.r.o.
+  Source:  https://github.com/JetBrains/jediterm
+  License: GNU Lesser General Public License v3.0 (LGPL-3.0)
+  URL:     https://www.gnu.org/licenses/lgpl-3.0.html
+
+  Users may replace this library with a compatible alternative. The source
+  code is available at the URL above.
+
+Logback Classic
+  Copyright QOS.ch Sarl
+  Source:  https://github.com/qos-ch/logback
+  License: Eclipse Public License 1.0 (EPL-1.0) / GNU Lesser General Public
+           License 2.1 (LGPL-2.1), dual-licensed
+  URL:     https://www.eclipse.org/legal/epl-v10.html
+
+  Used under the EPL 1.0 license.
+
+================================================================================
+APACHE 2.0 DEPENDENCIES
+================================================================================
+
+The following dependencies are used under the Apache License, Version 2.0
+(https://www.apache.org/licenses/LICENSE-2.0):
+
+  Kotlin stdlib, kotlinx-coroutines, kotlinx-serialization
+    Copyright JetBrains s.r.o. and Kotlin Programming Language contributors
+
+  Ktor (Client & Server)
+    Copyright JetBrains s.r.o. and Ktor contributors
+
+  AndroidX libraries (activity-compose, navigation, datastore, webkit,
+  lifecycle, annotation)
+    Copyright The Android Open Source Project
+
+  Jetpack Compose (UI, Material3, Foundation, Animation)
+    Copyright The Android Open Source Project
+
+  pty4j
+    Copyright JetBrains s.r.o.
+
+  SQLDelight
+    Copyright Square, Inc. / CashApp
+
+  kotlinx-html
+    Copyright JetBrains s.r.o.
+
+================================================================================
+MIT DEPENDENCIES
+================================================================================
+
+The following dependencies are used under the MIT License:
+
+  xterm.js — https://github.com/xtermjs/xterm.js
+  SwiftTerm — https://github.com/migueldeicaza/SwiftTerm
+  jsoup — https://github.com/jhy/jsoup
+  Electron — https://github.com/electron/electron
+  ws — https://github.com/websockets/ws
+
+================================================================================
+BSD DEPENDENCIES
+================================================================================
+
+  flexmark-all
+    Copyright Vladimir Schneider
+    License: BSD 2-Clause
+    Source:  https://github.com/vsch/flexmark-java
+
+  Chromium (bundled via Electron)
+    Copyright The Chromium Authors
+    License: BSD 3-Clause

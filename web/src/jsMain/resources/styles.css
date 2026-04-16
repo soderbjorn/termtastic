@@ -1,0 +1,3437 @@
+:root {
+    --termtastic-orange: #F4B869;
+    --termtastic-orange-accent: #E89A3C;
+    --background: #1C1C1E;
+    --surface: #2C2C2E;
+    --bg-elevated: #3A3A3C;
+    --text-primary: #F5F5F5;
+    --text-secondary: #8E8E93;
+    --separator: rgba(255, 255, 255, 0.1);
+    --terminal-bg: #000000;
+    --toolbar-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    --header-height: 40px;
+    /* Outer breathing room around the terminal cards. Bumped from 12px after
+       removing the inner .terminal padding — without inner padding the cards
+       were sitting too close to the window edges. */
+    --terminal-padding: 18px;
+    --terminal-gap: 12px;
+}
+
+body.appearance-light {
+    --background: #E8EDF4;
+    --surface: #F2F5FA;
+    --bg-elevated: #DDE3EC;
+    --text-primary: #1C1C1E;
+    --text-secondary: #5E6B7E;
+    --separator: rgba(30, 50, 90, 0.14);
+    --terminal-bg: #FFFFFF;
+    --toolbar-shadow: 0 2px 10px rgba(30, 50, 90, 0.08);
+}
+
+/* Light mode: make the active tab's "body" pure white so it visually
+   connects to the content surface below, and tint it faintly with the
+   accent. In dark mode the default (var(--background)) already works. */
+body.appearance-light .tab-button.active {
+    background: linear-gradient(
+        180deg,
+        rgba(244, 184, 105, 0.10) 0%,
+        #FFFFFF 60%
+    );
+}
+
+/* Stronger accent wash on the selected sidebar pane in light mode — the
+   default 0.08 alpha is nearly invisible against the tinted chrome. */
+body.appearance-light .sidebar-pane-item.active-pane {
+    background: rgba(232, 154, 60, 0.14);
+}
+
+/* Give the app header a hairline accent stripe along the bottom so the
+   chrome/content boundary reads as intentional instead of incidental. */
+body.appearance-light .app-header {
+    box-shadow:
+        var(--toolbar-shadow),
+        inset 0 -1px 0 rgba(232, 154, 60, 0.18);
+}
+
+/* #1 — tint the sidebar a shade darker/cooler than the header so the
+   chrome has internal hierarchy instead of reading as one flat slab.
+   Also drop the hard 1px right border in favor of a soft shadow (#4). */
+body.appearance-light .sidebar {
+    background: linear-gradient(
+        180deg,
+        #E3E9F2 0%,
+        #DDE4EE 100%
+    );
+    border-right: none;
+    box-shadow:
+        2px 0 8px rgba(30, 50, 90, 0.06),
+        inset -1px 0 0 rgba(30, 50, 90, 0.08);
+}
+
+/* #4 — swap the terminal card's 1px ring for a soft elevated shadow so
+   the cards float above the tinted chrome instead of sitting inside a
+   hairline box. Dark mode keeps the ring (shadows don't read there). */
+body.appearance-light .terminal-inner {
+    box-shadow:
+        0 1px 2px rgba(30, 50, 90, 0.06),
+        0 6px 18px rgba(30, 50, 90, 0.08),
+        0 0 0 1px rgba(30, 50, 90, 0.05);
+}
+
+/* ---- Dark-mode "spiced" treatment (gated by the .dark-spiced class,
+   toggled from main.kt via the DARK_SPICED constant). Parallels the
+   light-mode tweaks above: cooler tint, sidebar hierarchy, accent
+   stripe on the header, orange glow on the active tab, deeper card
+   shadows. */
+body.appearance-dark.dark-spiced {
+    --background: #191B22;
+    --surface: #23262F;
+    --bg-elevated: #2E323D;
+    --separator: rgba(140, 160, 200, 0.12);
+}
+
+body.appearance-dark.dark-spiced .app-header {
+    box-shadow:
+        var(--toolbar-shadow),
+        inset 0 -1px 0 rgba(232, 154, 60, 0.22);
+}
+
+body.appearance-dark.dark-spiced .sidebar {
+    background: linear-gradient(
+        180deg,
+        #14161C 0%,
+        #191C24 100%
+    );
+    border-right: none;
+    box-shadow:
+        2px 0 10px rgba(0, 0, 0, 0.35),
+        inset -1px 0 0 rgba(244, 184, 105, 0.06);
+}
+
+body.appearance-dark.dark-spiced .tab-button.active {
+    background: linear-gradient(
+        180deg,
+        rgba(244, 184, 105, 0.18) 0%,
+        var(--background) 60%
+    );
+}
+
+body.appearance-dark.dark-spiced .sidebar-pane-item.active-pane {
+    background: rgba(232, 154, 60, 0.16);
+}
+
+body.appearance-dark.dark-spiced .terminal-inner {
+    box-shadow:
+        0 2px 6px rgba(0, 0, 0, 0.32),
+        0 10px 28px rgba(0, 0, 0, 0.38),
+        0 0 0 1px rgba(244, 184, 105, 0.06);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--background);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+}
+
+/* Scrollbars — adapt to current appearance. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+body.appearance-light * {
+    scrollbar-color: rgba(0, 0, 0, 0.25) transparent;
+}
+
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.32);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+}
+
+body.appearance-light *::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.22);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+}
+
+body.appearance-light *::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.38);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+}
+
+.app-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.app-header {
+    display: flex;
+    align-items: flex-start;
+    padding: 6px 16px 0 12px;
+    min-height: var(--header-height);
+    background: var(--background);
+    border-bottom: 1px solid var(--separator);
+    box-shadow: var(--toolbar-shadow);
+    flex-shrink: 0;
+    z-index: 10;
+    gap: 12px;
+}
+
+.header-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    padding-top: 10px;
+}
+
+.header-title {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    color: var(--text-primary);
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    align-self: flex-end;
+    gap: 10px;
+    margin-left: auto;
+    flex-shrink: 0;
+    padding-bottom: 0;
+}
+
+/* Settings button matches tab-button height and bottom alignment. */
+.header-actions > .icon-button {
+    height: 30px;
+    width: 30px;
+    padding: 0;
+    border-radius: 6px 6px 0 0;
+    border-bottom: none;
+    margin-bottom: -1px;
+}
+
+/* Claude Code usage bar (bottom of window) */
+.claude-usage-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 3px 12px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary, #999);
+    background: var(--bg-secondary, #1e1e1e);
+    border-top: 1px solid var(--border-color, #333);
+    white-space: nowrap;
+    user-select: none;
+    flex-shrink: 0;
+}
+.claude-usage-bar .usage-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.claude-usage-bar .usage-pct { font-weight: 600; }
+.claude-usage-bar.usage-ok { color: #34C759; }
+.claude-usage-bar.usage-warn { color: #FFD60A; }
+.claude-usage-bar.usage-critical { color: #FF6961; }
+.claude-usage-bar .usage-refresh-btn {
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.7;
+    margin-left: -10px;
+}
+.claude-usage-bar .usage-refresh-btn:hover { opacity: 1; }
+
+.status-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #34C759;
+    box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.2);
+    transition: background-color 120ms ease-in-out, box-shadow 120ms ease-in-out;
+    flex-shrink: 0;
+}
+
+
+.tab-bar {
+    display: flex;
+    align-self: flex-end;
+    align-items: flex-end;
+    flex: 1;
+    min-width: 0;
+    gap: 6px;
+    /* Wrap tabs to additional rows when they don't fit in one line. */
+    flex-wrap: wrap;
+    /* Anchor for the absolutely-positioned .tab-active-indicator. */
+    position: relative;
+}
+
+/* Sliding orange ring around the active tab. Sized & positioned in JS via
+   inline `transform: translate(...)` and `width`/`height` so the ring glides
+   between tabs instead of jumping. The active .tab-button itself drops its
+   own border so the indicator is the sole owner of the ring (otherwise the
+   tab's padding would shift when the ring leaves). */
+.tab-active-indicator {
+    position: absolute;
+    /* `top` is set in JS to match the active button's offsetTop so the ring
+       lines up with the button's top edge regardless of bar padding. */
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
+    border: 2px solid var(--termtastic-orange);
+    border-radius: 6px 6px 0 0;
+    box-shadow: 0 0 0 0 rgba(244, 184, 105, 0.0);
+    pointer-events: none;
+    /* Sit above the active tab button so the 2px border draws on top of it.
+       The indicator has no background, so the button's text and fill still
+       show through everywhere except along the 2px stroke. */
+    z-index: 5;
+    opacity: 0;
+    /* The translate/width/height transitions create the slide. Easing is
+       smooth (no overshoot) so it doesn't visually wobble during fast tab
+       switching. */
+    transition:
+        transform 170ms cubic-bezier(.2, .8, .2, 1),
+        width 170ms cubic-bezier(.2, .8, .2, 1),
+        height 170ms cubic-bezier(.2, .8, .2, 1),
+        top 170ms cubic-bezier(.2, .8, .2, 1),
+        opacity 140ms ease-out;
+    will-change: transform, width, height;
+}
+
+.tab-active-indicator.ready {
+    opacity: 1;
+}
+
+/* Snap the indicator into place without animating on the very first paint
+   (so it doesn't slide in from (0, 0)). The .ready class is added on the
+   next frame after the first positioning pass. */
+.tab-active-indicator.no-transition {
+    transition: none !important;
+}
+
+.tab-bar::-webkit-scrollbar {
+    height: 6px;
+}
+
+.tab-bar::-webkit-scrollbar-thumb {
+    background: var(--separator);
+    border-radius: 3px;
+}
+
+.tab-bar::-webkit-scrollbar-thumb:hover {
+    background: var(--text-secondary);
+}
+
+.tab-bar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.tab-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 14px;
+    cursor: pointer;
+    border: 1px solid var(--separator);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    margin-bottom: -1px;
+    transition: background-color 120ms ease-in-out, color 120ms ease-in-out;
+    user-select: none;
+    white-space: nowrap;
+    max-width: 220px;
+    /* Don't shrink — overflow into the tab bar's horizontal scroll area
+       instead, so labels stay readable when there are lots of tabs. */
+    flex-shrink: 0;
+}
+
+.tab-button:hover {
+    color: var(--text-primary);
+    background: var(--separator);
+}
+
+.tab-button.active {
+    color: var(--termtastic-orange);
+    background: var(--background);
+    /* The orange ring is now drawn by the shared .tab-active-indicator
+       element (which slides between tabs). Keep the same 1px transparent
+       border as the inactive style so the box never resizes when the
+       active class flips on/off — the indicator overlays the button. */
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    font-weight: 700;
+    position: relative;
+    z-index: 1;
+}
+
+/* The menu element is attached to every tab (active and inactive) so every
+   tab reserves the same horizontal space for the ⋯ button — the box never
+   resizes when the active class flips or the user hovers. At rest the
+   glyph is just `visibility: hidden`; it fades in after ~1.5s of hover on
+   the active tab. */
+.tab-menu {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    visibility: hidden;
+}
+
+.tab-button.active:hover .tab-menu {
+    visibility: visible;
+    /* The delay applies on the hover-in transition; on hover-out there is
+       no transition, so the button disappears immediately. */
+    transition: visibility 0s linear 1.5s;
+}
+
+/* Suppress the ⋯ button entirely while the tab is being renamed. */
+.tab-button.renaming .tab-menu {
+    visibility: hidden !important;
+}
+
+/* Once opened, force visibility regardless of hover state so the menu
+   stays put while the dropdown is on screen. */
+.tab-menu.open {
+    visibility: visible !important;
+}
+
+.tab-menu-button {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 1px;
+}
+
+.tab-menu-button:hover {
+    background: var(--separator);
+}
+
+.tab-menu-list {
+    display: none;
+    /* The .tab-bar ancestor uses overflow-x:auto, which would clip an
+       absolutely-positioned dropdown. Render it as a fixed-position layer
+       and let JS place it at the button's screen rect. */
+    position: fixed;
+    top: 0;
+    left: 0;
+    min-width: 160px;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    z-index: 1000;
+}
+
+.tab-menu-list.open {
+    display: block;
+}
+
+.tab-menu-item {
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.tab-menu-item:hover {
+    background: var(--separator);
+}
+
+.tab-button {
+    position: relative;
+}
+
+.tab-button.dragging {
+    opacity: 0.5;
+}
+
+.tab-button.drop-before::before,
+.tab-button.drop-after::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    bottom: 0;
+    width: 2px;
+    background: var(--text-primary);
+    border-radius: 1px;
+    pointer-events: none;
+}
+
+.tab-button.drop-before::before {
+    left: -1px;
+}
+
+.tab-button.drop-after::after {
+    right: -1px;
+}
+
+/* Whole-tab highlight when a pane is being dragged onto this tab. The
+   destination is the tab itself (not a position in the tab bar), so we
+   show a fill+outline rather than a left/right insertion marker. */
+.tab-button.drop-pane {
+    background: var(--separator);
+    box-shadow: inset 0 0 0 2px var(--text-primary);
+    border-radius: 6px;
+}
+
+.tab-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tab-label-input {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    border-radius: 4px;
+    padding: 2px 6px;
+    outline: none;
+    width: 140px;
+}
+
+.tab-close {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 1px 5px;
+    border-radius: 3px;
+    transition: background-color 120ms ease-in-out, color 120ms ease-in-out;
+}
+
+.tab-close:hover {
+    background: var(--separator);
+    color: var(--text-primary);
+}
+
+.tab-add {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 10px;
+    margin: 0 0 -1px 4px;
+    border-radius: 6px 6px 0 0;
+    transition: color 120ms ease-in-out, background-color 120ms ease-in-out;
+    align-self: flex-end;
+    flex-shrink: 0;
+}
+
+.tab-add:hover {
+    color: var(--text-primary);
+    background: var(--separator);
+}
+
+.terminal-wrap {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    /* No padding here — it would be ignored by the absolutely-positioned
+       .tab-pane inside (absolute children fill the parent's padding box, so
+       the parent's padding doesn't push them inward). The outer breathing
+       room is applied directly via `inset: var(--terminal-padding)` on
+       .tab-pane below. */
+    background: var(--background);
+    position: relative;
+}
+
+/* ---------- Sidebar ------------------------------------------------------ */
+
+.sidebar {
+    width: 260px;
+    min-width: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--separator);
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    transition: width 200ms ease;
+}
+
+/* Sidebar toggle sits in the tab row, styled to match tab-button height
+   and bottom-alignment so it looks like it belongs with the tabs. */
+.sidebar-toggle-btn {
+    flex-shrink: 0;
+    align-self: flex-end;
+    height: 30px;
+    width: 30px;
+    padding: 0;
+    border-radius: 6px 6px 0 0;
+    border-bottom: none;
+    margin-bottom: -1px;
+}
+
+.app-header > .status-dot {
+    align-self: center;
+}
+
+.sidebar-divider {
+    width: 9px;
+    margin: 0 -2px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: transparent;
+    position: relative;
+    z-index: 5;
+}
+.sidebar-divider::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 4px;
+    width: 1px;
+    background: var(--separator, #333);
+}
+.sidebar-divider:hover::after,
+.sidebar-divider.dragging::after {
+    background: var(--termtastic-orange);
+    width: 2px;
+    left: 3.5px;
+}
+
+/* Tree structure inside the sidebar */
+.sidebar-tree {
+    padding: 8px 0;
+}
+
+.sidebar-tab-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    user-select: none;
+    transition: background 100ms ease;
+}
+
+.sidebar-tab-header:hover {
+    background: var(--separator);
+}
+
+.sidebar-tab-header.active-tab {
+    color: var(--termtastic-orange);
+}
+
+.sidebar-tab-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    transition: transform 150ms ease;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.sidebar-tab-header.collapsed-tree .sidebar-tab-chevron {
+    transform: rotate(-90deg);
+}
+
+.sidebar-tab-children {
+    overflow: hidden;
+    transition: max-height 200ms ease-in-out;
+}
+
+.sidebar-tab-children.collapsed-tree {
+    max-height: 0 !important;
+}
+
+.sidebar-pane-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px 5px 30px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+    transition: background 100ms ease, color 100ms ease;
+}
+
+.sidebar-pane-item:hover {
+    background: var(--separator);
+    color: var(--text-primary);
+}
+
+.sidebar-pane-item.active-pane {
+    color: var(--termtastic-orange);
+    background: rgba(244, 184, 105, 0.08);
+}
+
+.sidebar-pane-icon {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    opacity: 0.6;
+}
+
+.sidebar-pane-item.floating .sidebar-pane-icon {
+    opacity: 0.9;
+}
+
+/* All tab panes are stacked on top of each other inside .terminal-wrap so we
+   can cross-fade between them. The wrap is `position: relative`, so absolute
+   positioning here keeps every pane at the wrap's full size — important so
+   that floating panes (which anchor against .tab-pane) don't collapse while
+   their tab is inactive. Inactive panes are kept in the DOM so xterm keeps
+   streaming output, but they're invisible, non-interactive, and don't take
+   layout space. */
+.tab-pane {
+    position: absolute;
+    /* Inset by the configured outer breathing room so the cards aren't flush
+       against the window edges. (Setting padding on .terminal-wrap doesn't
+       work — see comment there.) */
+    inset: var(--terminal-padding);
+    display: flex;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    /* Pure cross-fade between tabs — no transform. The visibility transition
+       is delayed by the same amount as the fade-out so the leaving pane
+       stays paintable while it's animating away. */
+    transition:
+        opacity 280ms ease-in-out,
+        visibility 0s linear 280ms;
+    will-change: opacity;
+}
+
+.tab-pane.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    z-index: 1;
+    transition:
+        opacity 280ms ease-in-out,
+        visibility 0s linear 0s;
+}
+
+.tab-pane > * {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* Splits are nested flex containers; the orientation class controls the
+   direction. Each split-child wrapper carries a flex-grow value derived from
+   the configured ratio, so future ratio changes can animate / take effect by
+   simply mutating the inline style. */
+.split {
+    display: flex;
+    gap: 0;
+    min-width: 0;
+    min-height: 0;
+}
+
+.split-horizontal { flex-direction: row; }
+.split-vertical { flex-direction: column; }
+
+.split-child {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+}
+
+.split-child > * {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* Draggable seam between two split children. Occupies exactly the previous
+   gap width so it visually replaces the gutter, with an enlarged invisible
+   hit area via ::after for easier grabbing. */
+.split-divider {
+    flex: 0 0 var(--terminal-gap);
+    position: relative;
+    user-select: none;
+    z-index: 1;
+}
+
+.split-divider-horizontal {
+    cursor: col-resize;
+}
+
+.split-divider-vertical {
+    cursor: row-resize;
+}
+
+/* Visible centered line that mimics the original gutter look. */
+.split-divider::before {
+    content: "";
+    position: absolute;
+    background: var(--separator);
+    transition: background-color 120ms ease-in-out;
+}
+
+.split-divider-horizontal::before {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    transform: translateX(-0.5px);
+}
+
+.split-divider-vertical::before {
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+    transform: translateY(-0.5px);
+}
+
+/* Enlarged hit area so you don't have to land precisely on the gutter. */
+.split-divider::after {
+    content: "";
+    position: absolute;
+}
+
+.split-divider-horizontal::after {
+    top: 0;
+    bottom: 0;
+    left: -3px;
+    right: -3px;
+}
+
+.split-divider-vertical::after {
+    left: 0;
+    right: 0;
+    top: -3px;
+    bottom: -3px;
+}
+
+.split-divider:hover::before,
+.split-divider.dragging::before {
+    background: var(--accent, var(--text-secondary));
+}
+
+.split-divider-horizontal:hover::before,
+.split-divider-horizontal.dragging::before {
+    width: 2px;
+    transform: translateX(-1px);
+}
+
+.split-divider-vertical:hover::before,
+.split-divider-vertical.dragging::before {
+    height: 2px;
+    transform: translateY(-1px);
+}
+
+.terminal-cell {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.terminal-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 4px 6px;
+    flex-shrink: 0;
+}
+
+/* Docked pane headers are HTML5-draggable so they can be dropped on a tab
+   button to move the pane between tabs. The grab cursor is only set on
+   the inert spacer area so the title (rename) and ⋯ button still get
+   their own cursors. Floating panes use a custom mouse-driven drag and
+   are not [draggable], so this rule doesn't affect them. */
+.terminal-header[draggable="true"] .terminal-header-spacer {
+    cursor: grab;
+}
+
+.terminal-cell.pane-dragging {
+    opacity: 0.6;
+}
+
+.terminal-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    /* No special cursor — rename is on hover-arm + click, and the title
+       doubles as a drag handle, so a text-caret cursor would be misleading. */
+    cursor: default;
+    /* Don't let dragging the title bar accidentally start a text selection. */
+    user-select: none;
+    -webkit-user-select: none;
+    max-width: 60%;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* When truncated, show the tail of the path (e.g. "…/my-project")
+       instead of the head. direction:rtl flips the ellipsis to the left
+       while text-align:left keeps the text left-aligned when it fits. */
+    direction: rtl;
+    text-align: left;
+    transition: background-color 120ms ease-in-out, color 120ms ease-in-out;
+}
+
+/* Only highlight (and become click-to-rename) once the JS hover-arm timer
+   has elapsed and added the `.armed` class. Plain :hover is intentionally
+   left untouched so the title stays inert during a drag start. */
+.terminal-title.armed {
+    background: var(--separator);
+    color: var(--text-primary);
+    cursor: text;
+}
+
+.terminal-title-input {
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    border-radius: 4px;
+    padding: 2px 6px;
+    outline: none;
+    width: 200px;
+    max-width: 60%;
+}
+
+.terminal-header-spacer {
+    flex: 1;
+}
+
+/* Small dot next to pane title indicating session state: AI assistant activity
+   (Claude Code, Codex CLI, Gemini CLI). Hidden by default;
+   visibility is driven by body.show-pane-dots. Sidebar dots always show. */
+.pane-state-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: none;
+}
+
+/* Sidebar dots always visible regardless of the pane-status setting. */
+.sidebar-state-dot.state-working,
+.sidebar-state-dot.state-waiting {
+    display: block;
+}
+
+/* Non-sidebar dots only visible when show-pane-dots is active. */
+body.show-pane-dots .pane-state-dot.state-working,
+body.show-pane-dots .pane-state-dot.state-waiting {
+    display: block;
+}
+
+.pane-state-dot.state-working {
+    background: #5AC8FA;
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.pane-state-dot.state-waiting {
+    background: #FF6961;
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.sidebar-state-dot {
+    width: 6px;
+    height: 6px;
+}
+
+.tab-state-dot {
+    width: 7px;
+    height: 7px;
+    /* Ensure the dot doesn't affect the tab's overall height. */
+    align-self: center;
+    margin-top: -1px;
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* ── Pulsating glow around panes with active status ──
+   Uses ::before (::after is reserved for the orange focus ring).
+   Only shown when body.show-pane-glow is active. */
+@keyframes pulse-glow-blue {
+    0%, 100% { border-color: rgba(90, 200, 250, 0.8);  box-shadow: inset 0 0 12px 4px rgba(90, 200, 250, 0.3); }
+    50%      { border-color: rgba(90, 200, 250, 0.3);  box-shadow: inset 0 0 20px 6px rgba(90, 200, 250, 0.08); }
+}
+
+@keyframes pulse-glow-red {
+    0%, 100% { border-color: rgba(255, 105, 97, 0.8);  box-shadow: inset 0 0 12px 4px rgba(255, 105, 97, 0.3); }
+    50%      { border-color: rgba(255, 105, 97, 0.3);  box-shadow: inset 0 0 20px 6px rgba(255, 105, 97, 0.08); }
+}
+
+body.show-pane-glow .terminal-cell.pane-working::before,
+body.show-pane-glow .terminal-cell.pane-waiting::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 8px;
+    border: 2px solid transparent;
+    pointer-events: none;
+    z-index: 2;
+}
+
+body.show-pane-glow .terminal-cell.pane-working::before {
+    animation: pulse-glow-blue 1.5s ease-in-out infinite;
+}
+
+body.show-pane-glow .terminal-cell.pane-waiting::before {
+    animation: pulse-glow-red 1.5s ease-in-out infinite;
+}
+
+/* ── Pulsating glow on pane title bar with active status ── */
+@keyframes pulse-glow-blue-header {
+    0%, 100% { background-color: rgba(90, 200, 250, 0.15); }
+    50%      { background-color: rgba(90, 200, 250, 0.04); }
+}
+
+@keyframes pulse-glow-red-header {
+    0%, 100% { background-color: rgba(255, 105, 97, 0.15); }
+    50%      { background-color: rgba(255, 105, 97, 0.04); }
+}
+
+body.show-pane-glow .terminal-cell.pane-working > .terminal-header {
+    border-radius: 6px;
+    animation: pulse-glow-blue-header 1.5s ease-in-out infinite;
+}
+
+body.show-pane-glow .terminal-cell.pane-waiting > .terminal-header {
+    border-radius: 6px;
+    animation: pulse-glow-red-header 1.5s ease-in-out infinite;
+}
+
+/* When focused + status: both the orange ring and the status glow show.
+   The orange ::after sits at z-index:10, the glow ::before at z-index:2,
+   with the glow inset so a gap is visible between them. */
+
+/* ── Pulsating glow on tab buttons with active status ── */
+@keyframes pulse-glow-blue-tab {
+    0%, 100% { box-shadow: 0 0 8px 2px rgba(90, 200, 250, 0.5),  inset 0 0 0 1px rgba(90, 200, 250, 0.5); }
+    50%      { box-shadow: 0 0 14px 4px rgba(90, 200, 250, 0.15), inset 0 0 0 1px rgba(90, 200, 250, 0.2); }
+}
+
+@keyframes pulse-glow-red-tab {
+    0%, 100% { box-shadow: 0 0 8px 2px rgba(255, 105, 97, 0.5),  inset 0 0 0 1px rgba(255, 105, 97, 0.5); }
+    50%      { box-shadow: 0 0 14px 4px rgba(255, 105, 97, 0.15), inset 0 0 0 1px rgba(255, 105, 97, 0.2); }
+}
+
+body.show-pane-glow .tab-button.tab-working {
+    animation: pulse-glow-blue-tab 1.5s ease-in-out infinite;
+}
+
+body.show-pane-glow .tab-button.tab-waiting {
+    animation: pulse-glow-red-tab 1.5s ease-in-out infinite;
+}
+
+.pane-menu {
+    position: relative;
+}
+
+.pane-menu-button {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    letter-spacing: 1px;
+    transition: background-color 120ms ease-in-out, color 120ms ease-in-out;
+}
+
+.pane-menu-button:hover {
+    background: var(--separator);
+    color: var(--text-primary);
+}
+
+.pane-menu-list {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 180px;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    z-index: 50;
+}
+
+.pane-menu.open .pane-menu-list {
+    display: block;
+}
+
+.pane-menu-item {
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.pane-menu-item:hover {
+    background: var(--separator);
+}
+
+/* Submenu (e.g. "Set state" debug menu) */
+.pane-submenu {
+    position: relative;
+}
+
+.pane-submenu::after {
+    content: "▸";
+    float: right;
+    opacity: 0.5;
+}
+
+.pane-submenu-list {
+    display: none;
+    position: absolute;
+    left: calc(100% + 4px);
+    top: -4px;
+    min-width: 140px;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    z-index: 51;
+}
+
+/* When the submenu would overflow the right edge, flip to the left. */
+.pane-submenu.open-left > .pane-submenu-list {
+    left: auto;
+    right: calc(100% + 4px);
+}
+
+.pane-submenu.open-left > .pane-submenu-list::before {
+    right: auto;
+    left: 100%;
+}
+
+/* Invisible bridge so the mouse can travel from the parent item to the
+   submenu without crossing a dead zone that closes the hover. */
+.pane-submenu-list::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 100%;
+    width: 12px;
+}
+
+.pane-submenu:hover > .pane-submenu-list {
+    display: block;
+}
+
+.pane-header-spacer {
+    width: 12px;
+    flex-shrink: 0;
+}
+
+/* Inline icon action buttons in the pane header — replace the old ⋯ menu. */
+.pane-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.pane-action-btn {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: background-color 120ms ease-in-out, color 120ms ease-in-out;
+}
+
+.pane-action-btn:hover {
+    background: var(--separator);
+    color: var(--text-primary);
+}
+
+.pane-action-btn.close:hover {
+    background: #c94b4b;
+    color: #ffffff;
+}
+
+.pane-action-btn.close {
+    margin-left: 0;
+}
+
+/* Generic flyout wrapper — reused for split menu and pane-settings flyouts. */
+.pane-flyout-wrap, .pane-split-wrap {
+    position: relative;
+    display: inline-flex;
+}
+.pane-flyout {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 168px;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 6px;
+    z-index: 50;
+}
+.pane-flyout-wrap.open .pane-flyout {
+    display: block;
+}
+.pane-flyout-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 0;
+}
+.pane-flyout-label {
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    padding: 4px 4px 2px;
+    user-select: none;
+}
+.pane-action-btn.active {
+    color: var(--termtastic-orange, #f4b869);
+}
+.pane-action-btn.active:hover {
+    color: var(--termtastic-orange, #f4b869);
+    background: var(--separator);
+}
+
+.pane-split-flyout {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 168px;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    z-index: 50;
+}
+
+.pane-split-wrap.open .pane-split-flyout {
+    display: block;
+}
+
+.pane-split-compass {
+    position: relative;
+    width: 108px;
+    height: 108px;
+    margin: 2px auto;
+}
+
+.pane-split-compass .pane-action-btn {
+    position: absolute;
+    width: 36px;
+    height: 36px;
+}
+
+.pane-split-compass .pane-action-btn.dir-up {
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.pane-split-compass .pane-action-btn.dir-down {
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.pane-split-compass .pane-action-btn.dir-left {
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+}
+
+.pane-split-compass .pane-action-btn.dir-right {
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+}
+
+.pane-split-sep {
+    height: 1px;
+    background: var(--separator);
+    margin: 4px 2px;
+}
+
+.pane-split-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.pane-split-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.pane-split-item-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+}
+
+.pane-split-item-label {
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+/* The .terminal element is intentionally just a transparent flex wrapper.
+   We used to put the rounded background, padding, and box-shadow here, but
+   xterm.js writes its own inline `background-color` on the .xterm-viewport
+   inside, and the two backgrounds couldn't be made to match reliably (any
+   subpixel mismatch showed the viewport's bounding box as a visible inner
+   ring — the "double border" issue). Moving the visible card to
+   .terminal-inner instead means there is exactly one rounded surface, and
+   the .xterm-viewport's bg sits flush against the rounded clip with no
+   second edge to show. */
+.terminal {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Tinted overlay drawn on top of the cells that fall outside the
+   authoritative PTY grid (because another attached client — e.g. the
+   Android app — most recently asserted a smaller size). A diagonal hatch
+   in the Termtastic orange makes the "dead" area immediately obvious
+   without hiding the stale content underneath. Pointer-events off so the
+   xterm below still receives clicks, and z-index just above the xterm
+   layer so it sits over the canvas but beneath menus. */
+.oob-overlay {
+    position: absolute;
+    pointer-events: none;
+    display: none;
+    z-index: 3;
+    background-image: repeating-linear-gradient(
+        45deg,
+        rgba(244, 184, 105, 0.22) 0,
+        rgba(244, 184, 105, 0.22) 6px,
+        rgba(244, 184, 105, 0.08) 6px,
+        rgba(244, 184, 105, 0.08) 12px
+    );
+    border: 1px dashed rgba(244, 184, 105, 0.55);
+    border-radius: 2px;
+}
+
+.terminal-inner {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    background: var(--terminal-bg);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px var(--separator);
+    /* Inner breathing room so text isn't flush with the rounded edge. The
+       .xterm-viewport inside fills the content area; for this padding strip
+       to be invisible (no second border), the .xterm-viewport's bg must
+       match var(--terminal-bg). main.kt's ensureTerminal forces a theme
+       update after term.open() so xterm.js writes the matching color into
+       the viewport's inline style. */
+    padding: 10px 12px 12px;
+}
+
+/* Focused pane: orange ring wraps the entire cell (header + content).
+   Uses a ::after overlay so the ring sits on top of opaque child
+   backgrounds and is never clipped by parent overflow. */
+.terminal-cell {
+    position: relative;
+}
+.terminal-cell.focused::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border: 2px solid var(--termtastic-orange);
+    border-radius: 10px;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.terminal-cell.focused .terminal-title {
+    color: rgba(244, 184, 105, 0.75);
+}
+
+/* Dropdowns in header */
+.dropdown {
+    position: relative;
+}
+
+.icon-button {
+    appearance: none;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    color: var(--text-secondary);
+    padding: 0 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    line-height: 0;
+    transition: color 120ms ease-in-out, border-color 120ms ease-in-out;
+}
+
+.icon-button:hover {
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
+}
+
+.dropdown-button {
+    appearance: none;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+}
+
+.dropdown-button:hover {
+    border-color: var(--text-secondary);
+}
+
+.dropdown-caret {
+    font-size: 10px;
+    color: var(--text-secondary);
+}
+
+.dropdown-label {
+    font-weight: 500;
+}
+
+.theme-swatch {
+    display: inline-flex;
+    width: 28px;
+    height: 14px;
+    border-radius: 3px;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px var(--separator);
+}
+
+.theme-swatch .half {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: Menlo, Monaco, monospace;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+/* Backgrounds are set inline per-theme so each swatch shows its real colors
+   (e.g. Solarized Light's cream background, Ubuntu's eggplant). */
+
+/* Larger swatches inside the dropdown menu so the colors are easier to read. */
+.dropdown-menu .theme-swatch {
+    width: 60px;
+    height: 30px;
+    border-radius: 5px;
+    flex-shrink: 0;
+}
+
+.dropdown-menu .theme-swatch .half {
+    font-size: 18px;
+}
+
+/* Theme menu lays out as a wide grid so all themes fit without scrolling. */
+.dropdown.open #theme-menu {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(190px, 1fr));
+    gap: 2px;
+    width: max-content;
+    max-width: calc(100vw - 24px);
+    max-height: none;
+    overflow: visible;
+}
+
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 260px;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    z-index: 100;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.dropdown.open .dropdown-menu {
+    display: block;
+}
+
+#debug-menu {
+    min-width: 160px;
+    overflow: visible;
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.dropdown-item:hover {
+    background: var(--separator);
+}
+
+.dropdown-item.selected {
+    background: var(--separator);
+}
+
+.dropdown-item .name {
+    flex: 1;
+}
+
+.dropdown-item .check {
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+#font-size-menu {
+    min-width: 180px;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+}
+
+.dropdown.open #font-size-menu {
+    display: grid;
+}
+
+.xterm, .xterm-viewport, .xterm-screen {
+    height: 100%;
+}
+
+/* Reserve gutter space for the scrollbar so the rightmost column of text
+   never sits under it. FitAddon subtracts `.xterm`'s padding from the width
+   it hands to the column calculation, so padding-right here is the only
+   place a gutter can live that xterm.js will actually honor — padding on
+   `.terminal-inner` just shrinks the whole terminal without creating any
+   gap between the text and the scrollbar. */
+.xterm {
+    padding-right: 14px;
+}
+
+/* ---------- Empty-tab placeholder ----------------------------------- */
+
+.empty-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-secondary);
+}
+
+.empty-tab-message {
+    font-size: 13px;
+    opacity: 0.8;
+}
+
+.empty-tab-button {
+    appearance: none;
+    background: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--separator);
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 120ms ease-in-out, border-color 120ms ease-in-out;
+}
+
+.empty-tab-button:hover {
+    background: var(--separator);
+    border-color: var(--text-secondary);
+}
+
+/* ---------- Floating panes ------------------------------------------ */
+
+/* The layer covers the whole tab area but lets pointer events fall through
+   to the underlying split tree everywhere except inside an actual float. */
+.floating-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.floating-pane {
+    position: absolute;
+    pointer-events: auto;
+    background: var(--terminal-bg);
+    border: 1px solid rgba(255, 255, 255, 0.32);
+    border-radius: 8px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.floating-pane:has(.terminal-cell.focused) {
+    border-color: rgba(244, 184, 105, 0.9);
+}
+
+.floating-pane .terminal-inner {
+    box-shadow: none;
+}
+
+.floating-pane .terminal-cell.focused::after {
+    display: none;
+}
+
+.floating-pane > .terminal-cell {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    /* No gutter: .terminal-inner is the single visible rounded card and any
+       padding here would just create a band of .floating-pane background
+       around it. */
+    padding: 0;
+    box-sizing: border-box;
+}
+
+.floating-pane.dragging {
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    user-select: none;
+}
+
+.floating-header {
+    cursor: grab;
+    background: var(--terminal-bg);
+}
+
+.floating-pane.dragging .floating-header {
+    cursor: grabbing;
+}
+
+.floating-resize-handle {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+    /* Visible diagonal grip. */
+    background: linear-gradient(
+        135deg,
+        transparent 0,
+        transparent 6px,
+        var(--text-secondary) 6px,
+        var(--text-secondary) 7px,
+        transparent 7px,
+        transparent 9px,
+        var(--text-secondary) 9px,
+        var(--text-secondary) 10px,
+        transparent 10px
+    );
+    opacity: 0.6;
+}
+
+.floating-resize-handle:hover {
+    opacity: 1;
+}
+
+/* ====================================================================== */
+/*  Animations & micro-interactions                                       */
+/* ====================================================================== */
+
+/* ---------- Tab open / close grow / shrink ---------------------------- */
+
+/* New tabs grow in: width expands from 0, scale and opacity ease in with a
+   slight overshoot for a playful pop. The Kotlin side adds .entering to any
+   tab button it just created and removes it on animationend. */
+.tab-button.entering {
+    animation: tab-enter 320ms cubic-bezier(.34, 1.4, .64, 1);
+    overflow: hidden;
+    transform-origin: bottom center;
+}
+
+@keyframes tab-enter {
+    from {
+        max-width: 0;
+        opacity: 0;
+        transform: scale(0.6);
+    }
+    60% {
+        opacity: 1;
+    }
+    to {
+        max-width: 240px;
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Closing tabs shrink out: the JS sets .leaving on the button, waits for
+   animationend, then issues the actual close command (or detaches the node
+   directly if the close came from the server side). */
+.tab-button.leaving {
+    animation: tab-leave 240ms cubic-bezier(.4, 0, 1, 1) forwards;
+    overflow: hidden;
+    pointer-events: none;
+    transform-origin: bottom center;
+}
+
+@keyframes tab-leave {
+    from {
+        max-width: 240px;
+        opacity: 1;
+        transform: scale(1);
+    }
+    to {
+        max-width: 0;
+        opacity: 0;
+        transform: scale(0.6);
+        padding-left: 0;
+        padding-right: 0;
+        margin-left: 0;
+        margin-right: 0;
+    }
+}
+
+/* Tab buttons get a tiny press-down effect for tactile feedback. Extends
+   the existing color/background transition to include transform. */
+.tab-button {
+    transition:
+        background-color 120ms ease-in-out,
+        color 120ms ease-in-out,
+        transform 100ms ease-out;
+}
+
+.tab-button:active {
+    transform: scale(0.96);
+}
+
+/* The close button rotates 90° on hover — small, fun, no perf cost. */
+.tab-close {
+    transition:
+        background-color 120ms ease-in-out,
+        color 120ms ease-in-out,
+        transform 180ms cubic-bezier(.34, 1.4, .64, 1);
+}
+
+.tab-close:hover {
+    transform: rotate(90deg);
+}
+
+/* ---------- Pane open / close ----------------------------------------- */
+
+/* Newly added split-children fade & scale in. Slightly slower than tab
+   enter so a tab-with-many-panes doesn't feel chaotic. */
+.split-child.entering > * {
+    animation: pane-enter 280ms cubic-bezier(.34, 1.4, .64, 1);
+    transform-origin: center;
+}
+
+@keyframes pane-enter {
+    from { opacity: 0; transform: scale(0.94); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+/* Removing a pane: opacity & scale collapse, then JS detaches on animationend. */
+.split-child.leaving {
+    animation: pane-leave 220ms cubic-bezier(.4, 0, 1, 1) forwards;
+    pointer-events: none;
+    transform-origin: center;
+}
+
+@keyframes pane-leave {
+    from { opacity: 1; transform: scale(1); }
+    to   { opacity: 0; transform: scale(0.92); }
+}
+
+/* Floating panes fade in too. */
+.floating-pane.entering {
+    animation: floating-enter 260ms cubic-bezier(.34, 1.4, .64, 1);
+}
+
+@keyframes floating-enter {
+    from { opacity: 0; transform: scale(0.92); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+.floating-pane.leaving {
+    animation: pane-leave 200ms cubic-bezier(.4, 0, 1, 1) forwards;
+    pointer-events: none;
+}
+
+/* Allow split ratio changes to animate smoothly when the user (or the
+   server) updates the flex-grow inline style. */
+.split-child {
+    transition: flex-grow 240ms cubic-bezier(.2, .8, .2, 1);
+}
+
+/* Suppress the ratio transition while the user is actively dragging the
+   divider — we want frame-perfect tracking, not lag. The Kotlin drag
+   handler adds .resizing to .split during a drag. */
+.split.resizing > .split-child {
+    transition: none;
+}
+
+/* ---------- Split divider grab feedback ------------------------------- */
+
+.split-divider::before {
+    transition:
+        background-color 160ms ease-out,
+        box-shadow 160ms ease-out,
+        width 160ms ease-out,
+        height 160ms ease-out;
+}
+
+.split-divider.dragging::before {
+    background: var(--termtastic-orange);
+    box-shadow: 0 0 8px 2px rgba(244, 184, 105, 0.4);
+}
+
+.split-divider:hover::before {
+    background: var(--termtastic-orange-accent);
+}
+
+/* ---------- Pane maximize / restore ---------------------------------- */
+
+.maximized-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 15;
+    opacity: 0;
+    transition: opacity 300ms ease-out;
+    pointer-events: none;
+}
+
+.maximized-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.terminal-cell.maximizing,
+.terminal-cell.restoring {
+    position: absolute !important;
+    z-index: 20;
+    transition:
+        top 300ms cubic-bezier(.2, .8, .2, 1),
+        left 300ms cubic-bezier(.2, .8, .2, 1),
+        width 300ms cubic-bezier(.2, .8, .2, 1),
+        height 300ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.terminal-cell.maximized {
+    position: absolute !important;
+    z-index: 20;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--terminal-bg);
+}
+
+.terminal-cell.maximizing,
+.terminal-cell.restoring {
+    background: var(--terminal-bg);
+}
+
+.status-dot {
+    position: relative;
+}
+
+/* When any pane across all tabs is in a working/waiting state, the logo
+   dot mirrors that state with a pulsating color override. */
+.status-dot.pane-state-working {
+    background: #5AC8FA;
+    box-shadow: 0 0 0 3px rgba(90, 200, 250, 0.2);
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.status-dot.pane-state-waiting {
+    background: #FF6961;
+    box-shadow: 0 0 0 3px rgba(255, 105, 97, 0.2);
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* ---------- First-paint fade ----------------------------------------- */
+
+/* Soft fade-in for the whole terminal area on initial load so the app
+   doesn't snap into existence. JS removes .booting after the first
+   renderConfig completes, and the wrap fades to its final state. */
+.terminal-wrap {
+    transition: opacity 320ms ease-out, transform 360ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.terminal-wrap.booting {
+    opacity: 0;
+    transform: translateY(6px);
+}
+
+/* The header gets the same boot-fade so the whole app appears as one piece. */
+.app-header {
+    transition: opacity 320ms ease-out, transform 360ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.app-header.booting {
+    opacity: 0;
+    transform: translateY(-6px);
+}
+
+/* ---------- FLIP transitions for tab reorder -------------------------- */
+
+/* The Kotlin side sets `transform: translateX(...)` inline on tabs that
+   need to glide to a new position after a reorder, then on the next frame
+   adds .flip-animating which provides the easing. */
+.tab-button.flip-animating {
+    transition: transform 280ms cubic-bezier(.2, .8, .2, 1);
+}
+
+/* ---------- Reduced motion -------------------------------------------- */
+
+/* Respect the OS-level "reduce motion" preference. Terminal users sometimes
+   actively prefer instant UIs, and animation can be a vestibular trigger. */
+@media (prefers-reduced-motion: reduce) {
+    .tab-pane,
+    .tab-pane.active,
+    .tab-active-indicator,
+    .tab-button,
+    .tab-button.entering,
+    .tab-button.leaving,
+    .tab-button.flip-animating,
+    .tab-close,
+    .split-child,
+    .split-child.entering > *,
+    .split-child.leaving,
+    .floating-pane.entering,
+    .floating-pane.leaving,
+    .terminal-wrap,
+    .app-header,
+    .sidebar,
+    .sidebar-tab-chevron,
+    .sidebar-tab-children,
+    .terminal-cell.maximizing,
+    .terminal-cell.restoring,
+    .maximized-backdrop {
+        transition: none !important;
+        animation: none !important;
+    }
+    .terminal-wrap.booting,
+    .app-header.booting {
+        opacity: 1;
+        transform: none;
+    }
+    .tab-pane {
+        transform: none;
+    }
+}
+
+/* --- Popout mode ---------------------------------------------------------
+ * Applied by main.kt when the renderer detects ?popout=<paneId> in the URL.
+ * An Electron BrowserWindow was opened to host a single popped-out pane, so
+ * we hide all the main-app chrome (header, tab bar, sidebar, divider) and
+ * let the single .popout-cell fill the viewport. The pane's content kind
+ * (terminal / markdown / git) is resolved from the first server config push.
+ */
+body.popout-mode .app-header,
+body.popout-mode .sidebar,
+body.popout-mode .sidebar-divider,
+body.popout-mode .settings-sidebar {
+    display: none !important;
+}
+body.popout-mode .app-body {
+    height: 100%;
+}
+body.popout-mode .terminal-wrap {
+    padding: 0;
+    background: var(--terminal-bg);
+}
+body.popout-mode .popout-cell {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+}
+body.popout-mode .popout-cell .terminal {
+    flex: 1;
+    min-height: 0;
+}
+/* Markdown / git pane bodies inside a popout cell — fill the viewport too. */
+body.popout-mode .popout-cell .md-view,
+body.popout-mode .popout-cell .git-view {
+    flex: 1;
+    min-height: 0;
+}
+.popout-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    color: var(--muted-text, #888);
+    font-size: 13px;
+}
+
+/* Picker shown inside a freshly-split (empty) pane until the user chooses a kind. */
+.pane-picker {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(8px, 4cqi, 24px);
+    padding: clamp(8px, 4cqi, 24px);
+    background: var(--background, #1e1e1e);
+    container-type: inline-size;
+    overflow: hidden;
+}
+.pane-picker-btn {
+    appearance: none;
+    background: var(--surface, #252526);
+    color: var(--text-primary, #d4d4d4);
+    border: 1px solid var(--separator, #333);
+    border-radius: 8px;
+    padding: clamp(6px, 3cqi, 24px) clamp(8px, 4cqi, 28px);
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    max-width: 240px;
+    max-height: 220px;
+    aspect-ratio: 8 / 7;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(4px, 2cqi, 12px);
+    font-family: inherit;
+    font-size: clamp(10px, 2.4cqi, 13px);
+    cursor: pointer;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08),
+                0 1px 2px rgba(0, 0, 0, 0.04);
+    transition: background 80ms ease, border-color 80ms ease, transform 80ms ease;
+}
+.pane-picker-btn > .pane-picker-icon > svg {
+    width: clamp(18px, 10cqi, 40px);
+    height: auto;
+}
+.pane-picker-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pane-picker-btn:hover:not(.disabled) {
+    background: var(--bg-elevated, #2d2d30);
+    border-color: var(--accent, #0e639c);
+}
+.pane-picker-btn:active:not(.disabled) {
+    transform: translateY(1px);
+}
+.pane-picker-btn.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+body.appearance-light .pane-picker-btn {
+    border-color: rgba(0, 0, 0, 0.18);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.10),
+                0 2px 8px rgba(0, 0, 0, 0.04);
+}
+body.appearance-light .pane-picker-btn:hover:not(.disabled) {
+    border-color: var(--accent, #0e639c);
+}
+.pane-picker-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-primary, #d4d4d4);
+}
+.pane-picker-label {
+    color: var(--text-primary, #d4d4d4);
+    font-weight: 500;
+}
+
+/* Markdown overview pane: file list (left) + rendered preview (right). */
+.md-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+    background: var(--background, #1e1e1e);
+}
+.md-list {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--surface, #252526);
+    border-right: 1px solid var(--separator, #333);
+}
+.md-list-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--separator, #333);
+    color: var(--text-primary, #d4d4d4);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.md-list-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.md-list-auto {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--separator, #333);
+    color: var(--text-secondary, #888);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: normal;
+    cursor: pointer;
+    user-select: none;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: inherit;
+}
+.md-list-auto:hover {
+    color: var(--text-primary, #d4d4d4);
+    background: var(--bg-elevated, #2d2d30);
+}
+.md-list-auto.active {
+    color: var(--termtastic-orange, #f4b869);
+    border-color: var(--termtastic-orange, #f4b869);
+    background: rgba(244, 184, 105, 0.08);
+}
+.md-list-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+.md-list-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 10px 5px 4px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+    transition: background 100ms ease, color 100ms ease;
+}
+.md-list-chevron {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    opacity: 0.7;
+    font-size: 10px;
+    line-height: 1;
+}
+.md-list-chevron.empty {
+    visibility: hidden;
+}
+.md-list-chevron:hover {
+    color: var(--text-primary);
+    opacity: 1;
+}
+.md-list-item:hover {
+    background: var(--separator);
+    color: var(--text-primary);
+}
+.md-list-item.active {
+    background: rgba(244, 184, 105, 0.08);
+    color: var(--termtastic-orange);
+}
+.md-list-item.active .md-list-item-age {
+    color: var(--termtastic-orange);
+    opacity: 0.7;
+}
+.md-list-item-icon {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    opacity: 0.6;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.md-list-item-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+}
+.md-list-item-age {
+    color: var(--text-secondary);
+    font-size: 11px;
+    flex-shrink: 0;
+    opacity: 0.8;
+}
+.md-list-empty {
+    padding: 16px 12px;
+    color: var(--text-secondary, #888);
+    font-size: 12px;
+    text-align: center;
+}
+
+.md-list-section-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    user-select: none;
+    transition: background 100ms ease;
+}
+.md-list-section-header:hover {
+    background: var(--separator);
+}
+.md-list-section-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+}
+.md-list-section-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    transition: transform 150ms ease;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+.md-list-section-header.collapsed-tree .md-list-section-chevron {
+    transform: rotate(-90deg);
+}
+.md-list-section-children {
+    overflow: hidden;
+    transition: max-height 200ms ease-in-out;
+}
+.md-list-section-children.collapsed-tree {
+    max-height: 0 !important;
+}
+
+.md-divider {
+    width: 9px;
+    margin: 0 -2px;
+    cursor: col-resize;
+    background: transparent;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+}
+.md-divider::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 4px;
+    width: 1px;
+    background: var(--separator, #333);
+}
+.md-divider:hover::after,
+.md-divider.dragging::after {
+    background: var(--accent, #0e639c);
+    width: 2px;
+    left: 3.5px;
+}
+
+.md-rendered {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 24px 32px;
+    color: var(--text-primary, #d4d4d4);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    background: var(--surface, #252526);
+}
+/* Source code / binary view: drop the prose padding so .file-source can use
+   the full viewport. Keeps the markdown padding intact for prose files. */
+.md-rendered.is-source {
+    padding: 0;
+}
+.md-rendered.is-source .md-rendered-empty {
+    padding: 24px;
+}
+.md-rendered-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-secondary, #888);
+    user-select: none;
+}
+.md-rendered-empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.4; }
+.md-rendered-empty-title { font-size: 16px; font-weight: 500; margin-bottom: 6px; }
+.md-rendered-empty-subtitle { font-size: 13px; opacity: 0.6; }
+.md-rendered h1, .md-rendered h2, .md-rendered h3,
+.md-rendered h4, .md-rendered h5, .md-rendered h6 {
+    color: var(--text-primary, #d4d4d4);
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    line-height: 1.25;
+}
+.md-rendered h1 { font-size: 1.8em; border-bottom: 1px solid var(--separator, #333); padding-bottom: 0.3em; }
+.md-rendered h2 { font-size: 1.5em; border-bottom: 1px solid var(--separator, #333); padding-bottom: 0.3em; }
+.md-rendered h3 { font-size: 1.25em; }
+.md-rendered p { margin: 0.75em 0; }
+.md-rendered a { color: var(--accent, #0e639c); text-decoration: none; }
+.md-rendered a:hover { text-decoration: underline; }
+.md-rendered code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--separator);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+}
+.md-rendered pre {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--separator);
+    padding: 12px 14px;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 0.75em 0;
+}
+.md-rendered pre code {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-size: 0.9em;
+}
+.md-rendered blockquote {
+    border-left: 3px solid var(--separator, #333);
+    margin: 0.75em 0;
+    padding: 0 1em;
+    color: var(--text-secondary, #888);
+}
+.md-rendered ul, .md-rendered ol {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+}
+.md-rendered li { margin: 0.25em 0; }
+.md-rendered table {
+    border-collapse: collapse;
+    margin: 0.75em 0;
+}
+.md-rendered th, .md-rendered td {
+    border: 1px solid var(--separator, #333);
+    padding: 6px 10px;
+}
+.md-rendered th { background: var(--surface, #252526); }
+.md-rendered img { max-width: 100%; height: auto; }
+.md-error {
+    color: #d27676;
+    font-size: 13px;
+    padding: 12px 0;
+}
+
+/* ── Pane header icon (terminal / link / markdown) ── */
+.pane-header-icon {
+    display: inline-flex;
+    align-items: center;
+    margin-right: 5px;
+    opacity: 0.55;
+    flex-shrink: 0;
+}
+
+/* ── Confirm dialog ── */
+.pane-modal.confirm-modal {
+    width: auto;
+    min-width: 300px;
+    max-width: 420px;
+    padding: 18px 20px 20px;
+}
+.pane-modal.confirm-modal .pane-modal-title {
+    font-size: 15px;
+    margin: 0 0 10px;
+}
+.confirm-message {
+    margin: 0 0 16px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-secondary, #c8c8c8);
+}
+.confirm-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+.confirm-btn {
+    appearance: none;
+    border: 1px solid var(--border, #3c3c3c);
+    border-radius: 6px;
+    padding: 7px 18px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+}
+.confirm-cancel {
+    background: var(--surface, #252526);
+    color: var(--text-primary, #d4d4d4);
+}
+.confirm-cancel:hover { background: var(--bg-elevated, #2d2d30); }
+.confirm-ok {
+    background: #c53030;
+    color: #fff;
+    border-color: #c53030;
+}
+.confirm-ok:hover { background: #b52828; }
+.confirm-ok:focus { outline: 2px solid #c53030; outline-offset: 2px; }
+body.appearance-light .confirm-cancel {
+    background: #fff;
+    border-color: rgba(0,0,0,0.18);
+}
+body.appearance-light .confirm-ok {
+    background: #dc3545;
+    border-color: #dc3545;
+}
+
+/* ── Pane type modal ── */
+.pane-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 99998;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.pane-modal {
+    position: relative;
+    background: var(--bg-primary, #1e1e1e);
+    border: 1px solid var(--border, #444);
+    border-radius: 12px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+    padding: 24px 28px 28px;
+    min-width: 420px;
+    max-width: 90vw;
+    width: 800px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    color: var(--text-primary, #d4d4d4);
+}
+.pane-modal-close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    appearance: none;
+    background: none;
+    border: none;
+    color: var(--text-secondary, #999);
+    font-size: 22px;
+    cursor: pointer;
+    padding: 4px 8px;
+    line-height: 1;
+}
+.pane-modal-close:hover { color: var(--text-primary, #d4d4d4); }
+.pane-modal-title {
+    margin: 0 0 16px;
+    font-size: 18px;
+    font-weight: 600;
+}
+.pane-modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* Type picker grid (3 cards) */
+.pane-type-grid {
+    display: flex;
+    gap: 14px;
+    justify-content: center;
+}
+.pane-type-card {
+    appearance: none;
+    background: var(--surface, #252526);
+    border: 1px solid var(--border, #3c3c3c);
+    border-radius: 10px;
+    color: var(--text-primary, #d4d4d4);
+    padding: 24px 20px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    min-width: 120px;
+    transition: background 80ms ease, border-color 80ms ease, transform 80ms ease;
+}
+.pane-type-card:hover {
+    background: var(--bg-elevated, #2d2d30);
+    border-color: var(--accent, #0e639c);
+}
+.pane-type-card:active { transform: translateY(1px); }
+.pane-type-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.pane-type-icon svg { width: 40px; height: 40px; }
+.pane-type-label {
+    font-weight: 500;
+    font-size: 13px;
+    white-space: nowrap;
+}
+body.appearance-light .pane-modal {
+    background: #f5f5f5;
+    border-color: rgba(0, 0, 0, 0.18);
+}
+body.appearance-light .pane-type-card {
+    background: #fff;
+    border-color: rgba(0, 0, 0, 0.15);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+body.appearance-light .pane-type-card:hover {
+    border-color: var(--accent, #0e639c);
+}
+
+/* Back button inside modal */
+.pane-modal-back {
+    appearance: none;
+    background: none;
+    border: none;
+    color: var(--accent, #4fc1ff);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 4px 0;
+    margin-bottom: 12px;
+}
+.pane-modal-back:hover { text-decoration: underline; }
+
+.pane-modal-empty {
+    color: var(--text-secondary, #999);
+    text-align: center;
+    padding: 32px 0;
+    font-size: 14px;
+}
+
+/* Link picker */
+.link-picker-scroll {
+    overflow-y: auto;
+    max-height: 60vh;
+}
+.link-picker-section { margin-bottom: 12px; }
+.link-picker-tab-header {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary, #999);
+    padding: 6px 0;
+    cursor: pointer;
+    user-select: none;
+}
+.link-picker-tab-header:hover { color: var(--text-primary, #d4d4d4); }
+.link-picker-tab-arrow {
+    display: inline-block;
+    font-size: 9px;
+    margin-right: 4px;
+}
+.link-picker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+    padding: 4px 0;
+}
+.link-picker-card {
+    background: var(--surface, #252526);
+    border: 1px solid var(--border, #3c3c3c);
+    border-radius: 8px;
+    cursor: pointer;
+    overflow: hidden;
+    transition: border-color 80ms ease;
+}
+.link-picker-card:hover {
+    border-color: var(--accent, #0e639c);
+}
+.link-picker-card-title {
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-bottom: 1px solid var(--border, #3c3c3c);
+}
+.link-preview-terminal {
+    height: 150px;
+    overflow: hidden;
+    background: var(--bg-primary, #1e1e1e);
+}
+.link-preview-inner {
+    width: 100%;
+    height: 100%;
+}
+.link-preview-inner .xterm {
+    height: 100%;
+}
+.link-preview-inner .xterm-viewport {
+    overflow: hidden !important;
+}
+body.appearance-light .link-picker-card {
+    background: #fff;
+    border-color: rgba(0, 0, 0, 0.15);
+}
+body.appearance-light .link-picker-card:hover {
+    border-color: var(--accent, #0e639c);
+}
+
+/* ===== Git pane ========================================================= */
+
+.git-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+    background: var(--background, #1e1e1e);
+}
+.git-list {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--surface, #252526);
+    border-right: 1px solid var(--separator, #333);
+}
+.git-list-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--separator, #333);
+    color: var(--text-primary, #d4d4d4);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.git-list-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.git-list-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+.git-list-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px 5px 30px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+    transition: background 100ms ease, color 100ms ease;
+}
+.git-list-item:hover {
+    background: var(--separator);
+    color: var(--text-primary);
+}
+.git-list-item.active {
+    background: rgba(244, 184, 105, 0.08);
+    color: var(--termtastic-orange);
+}
+.git-list-item-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.git-list-empty {
+    padding: 16px 12px;
+    color: var(--text-secondary, #888);
+    font-size: 12px;
+    text-align: center;
+}
+.git-list-section-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    user-select: none;
+    transition: background 100ms ease;
+}
+.git-list-section-header:hover {
+    background: var(--separator);
+}
+.git-list-section-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.git-list-section-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    transition: transform 150ms ease;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+.git-list-section-header.collapsed-tree .git-list-section-chevron {
+    transform: rotate(-90deg);
+}
+.git-list-section-children {
+    overflow: hidden;
+    transition: var(--git-section-transition, max-height 200ms ease-in-out);
+}
+.git-list-section-children.collapsed-tree {
+    max-height: 0 !important;
+}
+
+/* Status badges */
+.git-status-badge {
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: bold;
+    line-height: 18px;
+    flex-shrink: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.git-status-M { background: #d4a017; color: white; }
+.git-status-A { background: #2da44e; color: white; }
+.git-status-D { background: #cf222e; color: white; }
+.git-status-U { background: #888; color: white; }
+.git-status-R { background: #0969da; color: white; }
+
+/* Git divider (mirrors .md-divider) */
+.git-divider {
+    width: 9px;
+    margin: 0 -2px;
+    cursor: col-resize;
+    background: transparent;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+}
+.git-divider::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 4px;
+    width: 1px;
+    background: var(--separator, #333);
+}
+.git-divider:hover::after,
+.git-divider.dragging::after {
+    background: var(--accent, #0e639c);
+    width: 2px;
+    left: 3.5px;
+}
+
+/* Diff pane */
+.git-diff-pane {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--surface, #252526);
+}
+.git-mode-btn {
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--separator, #333);
+    cursor: pointer;
+    font-size: 12px;
+    background: transparent;
+    color: var(--text-secondary, #888);
+    font-family: inherit;
+}
+.git-mode-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated, #2d2d30);
+}
+.git-mode-btn.active {
+    background: rgba(244, 184, 105, 0.10);
+    border-color: var(--termtastic-orange, #f4b869);
+    color: var(--termtastic-orange, #f4b869);
+}
+.git-diff-content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+.git-diff-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-secondary, #888);
+    user-select: none;
+    padding: 16px;
+}
+.git-diff-empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.4; }
+.git-diff-empty-title { font-size: 16px; font-weight: 500; margin-bottom: 6px; }
+.git-diff-empty-subtitle { font-size: 13px; opacity: 0.6; }
+.git-error {
+    padding: 16px;
+    color: var(--text-secondary, #888);
+    font-size: 13px;
+}
+
+/* Inline diff */
+.git-diff-inline {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: inherit;
+    line-height: inherit;
+}
+.git-diff-line {
+    display: flex;
+    white-space: pre;
+    line-height: inherit;
+    min-height: 1lh;
+}
+.git-line-no {
+    width: 50px;
+    text-align: right;
+    padding-right: 8px;
+    color: var(--text-secondary, #888);
+    opacity: 0.6;
+    user-select: none;
+    flex-shrink: 0;
+    font-size: 12px;
+}
+.git-line-content {
+    flex: 1;
+    padding: 0 8px;
+    min-width: 0;
+}
+.git-line-add {
+    background: rgba(46, 160, 67, 0.15);
+}
+.git-line-del {
+    background: rgba(248, 81, 73, 0.15);
+}
+
+/* Split diff — single scrollable area, row-based layout */
+.git-diff-split {
+    height: 100%;
+    overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: inherit;
+    line-height: inherit;
+}
+.git-split-row {
+    display: flex;
+}
+.git-split-half {
+    flex: 1;
+    display: flex;
+    white-space: pre;
+    line-height: inherit;
+    min-height: 1lh;
+    min-width: 0;
+    overflow: hidden;
+}
+.git-split-gutter {
+    width: 2px;
+    flex-shrink: 0;
+    background: var(--separator, #333);
+}
+.git-split-placeholder {
+    background: var(--bg-elevated, #2d2d30);
+    opacity: 0.5;
+}
+.git-split-mod {
+    background: rgba(210, 153, 34, 0.15);
+}
+
+/* Graphical diff (P4Merge-style) */
+.git-diff-graphical {
+    display: flex;
+    height: 100%;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: inherit;
+    line-height: inherit;
+}
+.git-graphical-left {
+    flex: 1;
+    /* overflow-y: hidden hides the vertical scrollbar (which would sit
+       next to the SVG connector and look messy); scrollTop still works
+       programmatically, which is how the JS sync drives vertical scroll. */
+    overflow-y: hidden;
+    overflow-x: auto;
+    min-width: 0;
+}
+.git-graphical-right {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: auto;
+    min-width: 0;
+}
+.git-graphical-inner {
+    width: max-content;
+    min-width: 100%;
+    padding-bottom: 14px;
+}
+.git-graphical-connector {
+    width: 80px;
+    flex-shrink: 0;
+    position: relative;
+    overflow: hidden;
+    background: var(--surface, #252526);
+}
+.git-graphical-svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+.git-graphical-line {
+    display: flex;
+    white-space: pre;
+    width: max-content;
+    min-width: 100%;
+}
+.git-graphical-line .git-line-content {
+    flex: 0 0 auto;
+    min-width: 0;
+}
+.git-graphical-line.highlight-del {
+    background: rgba(200, 60, 55, 0.20);
+}
+.git-graphical-line.highlight-add {
+    background: rgba(55, 150, 65, 0.18);
+}
+.git-graphical-line.highlight-mod {
+    background: rgba(180, 130, 40, 0.18);
+}
+
+/* Graphical checkbox toggle */
+.git-graphical-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    user-select: none;
+}
+.git-graphical-toggle input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+/* Font size and search navigation buttons */
+.git-font-btn {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    border: 1px solid var(--separator, #333);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    background: transparent;
+    color: var(--text-secondary, #888);
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    line-height: 1;
+}
+.git-font-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated, #2d2d30);
+}
+.git-font-label {
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    min-width: 32px;
+    text-align: center;
+    user-select: none;
+}
+
+/* Diff search controls */
+.git-search-input {
+    width: 140px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--separator, #333);
+    background: var(--bg-elevated, #2d2d30);
+    color: var(--text-primary, #ccc);
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+}
+.git-search-input:focus {
+    border-color: var(--termtastic-orange, #f4b869);
+}
+.git-search-input::placeholder {
+    color: var(--text-secondary, #888);
+}
+.git-search-counter {
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    min-width: 36px;
+    text-align: center;
+    user-select: none;
+}
+.git-search-nav:disabled {
+    opacity: 0.35;
+    cursor: default;
+    pointer-events: none;
+}
+mark.git-search-hit {
+    background: rgba(244, 184, 105, 0.25);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0;
+}
+mark.git-search-hit.git-search-current {
+    background: rgba(244, 184, 105, 0.6);
+}
+
+/* File-browser text preview: reuses the global .hl-* palette for token colors. */
+.file-source {
+    margin: 0;
+    padding: 12px 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: inherit;
+    line-height: 1.45;
+    white-space: pre;
+    overflow: auto;
+    background: transparent;
+    color: var(--text-primary, #d4d4d4);
+}
+.file-source code {
+    font-family: inherit;
+    white-space: pre;
+}
+
+/* Syntax highlighting */
+.hl-keyword { color: #569cd6; }
+.hl-string { color: #ce9178; }
+.hl-comment { color: #6a9955; font-style: italic; }
+.hl-number { color: #b5cea8; }
+.hl-tag { color: #569cd6; }
+.hl-attr { color: #9cdcfe; }
+.hl-type { color: #4ec9b0; }
+.hl-annotation { color: #dcdcaa; }
+.hl-punctuation { color: #808080; }
+
+/* Light mode overrides */
+body.appearance-light .git-line-add {
+    background: rgba(46, 164, 79, 0.12);
+}
+body.appearance-light .git-line-del {
+    background: rgba(207, 34, 46, 0.10);
+}
+body.appearance-light .git-split-mod {
+    background: rgba(210, 153, 34, 0.12);
+}
+body.appearance-light .git-graphical-line.highlight-del {
+    background: rgba(200, 50, 45, 0.15);
+}
+body.appearance-light .git-graphical-line.highlight-add {
+    background: rgba(40, 150, 60, 0.14);
+}
+body.appearance-light .git-graphical-line.highlight-mod {
+    background: rgba(180, 130, 40, 0.14);
+}
+body.appearance-light .git-graphical-connector {
+    background: var(--surface, #f5f5f5);
+}
+body.appearance-light .hl-keyword { color: #0550ae; }
+body.appearance-light .hl-string { color: #0a3069; }
+body.appearance-light .hl-comment { color: #6e7781; }
+body.appearance-light .hl-number { color: #953800; }
+body.appearance-light .hl-tag { color: #6639ba; }
+body.appearance-light .hl-attr { color: #0550ae; }
+body.appearance-light .hl-type { color: #0e6575; }
+body.appearance-light .hl-annotation { color: #9a6700; }
+body.appearance-light .hl-punctuation { color: #6e7781; }
+
+/* ====================================================================== */
+/*  Settings modal                                                         */
+/* ====================================================================== */
+/* The settings sidebar lives inside .app-body as a flex child, just like
+   the left sidebar. It slides in from the right with a CSS transition. */
+.settings-sidebar {
+    width: 0;
+    min-width: 0;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: var(--surface, #252526);
+    border-left: 1px solid var(--separator, #333);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    color: var(--text-primary, #d4d4d4);
+    font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    transition: width 200ms ease, min-width 200ms ease;
+}
+
+.settings-sidebar.open {
+    width: 340px;
+    min-width: 280px;
+}
+
+body.appearance-light .settings-sidebar {
+    background: #f5f5f5;
+    border-left-color: rgba(0, 0, 0, 0.12);
+}
+
+.settings-sidebar-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 20px 20px;
+}
+
+.settings-sidebar > .pane-modal-title {
+    padding: 20px 20px 0;
+    margin-bottom: 12px;
+}
+
+.settings-sidebar > .pane-modal-close {
+    top: 14px;
+    right: 14px;
+}
+
+.settings-section {
+    margin-bottom: 20px;
+}
+
+.settings-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary, #999);
+    margin-bottom: 8px;
+}
+
+/* Theme grid inside settings modal */
+.settings-theme-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 6px;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 2px;
+}
+
+.settings-theme-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 80ms ease, border-color 80ms ease;
+}
+
+.settings-theme-card:hover {
+    background: var(--separator, #333);
+}
+
+.settings-theme-card.selected {
+    border-color: var(--accent, #4fc1ff);
+    background: var(--separator, #333);
+}
+
+.settings-theme-card .theme-swatch {
+    width: 28px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+.settings-theme-name {
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.appearance-light .settings-theme-card:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+body.appearance-light .settings-theme-card.selected {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+/* Choice buttons (appearance, font size, pane status) */
+.settings-button-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.settings-size-row {
+    gap: 4px;
+}
+
+.settings-choice-btn {
+    appearance: none;
+    background: var(--surface, #252526);
+    border: 1px solid var(--separator, #3c3c3c);
+    color: var(--text-primary, #d4d4d4);
+    font: inherit;
+    font-size: 12px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 80ms ease, border-color 80ms ease;
+}
+
+.settings-choice-btn:hover {
+    background: var(--separator, #333);
+}
+
+.settings-choice-btn.selected {
+    border-color: var(--accent, #4fc1ff);
+    background: var(--separator, #333);
+    color: var(--accent, #4fc1ff);
+    font-weight: 600;
+}
+
+body.appearance-light .settings-choice-btn {
+    background: #fff;
+    border-color: rgba(0, 0, 0, 0.15);
+    color: #333;
+}
+body.appearance-light .settings-choice-btn:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+body.appearance-light .settings-choice-btn.selected {
+    border-color: var(--accent, #0e639c);
+    color: var(--accent, #0e639c);
+    background: rgba(14, 99, 156, 0.06);
+}
+
+.settings-size-row .settings-choice-btn {
+    padding: 5px 10px;
+    min-width: 42px;
+    text-align: center;
+}
+
+/* Server settings button at the bottom of the settings sidebar */
+.settings-server-btn {
+    margin: 8px 20px 20px;
+    appearance: none;
+    background: var(--surface, #252526);
+    border: 1px solid var(--separator, #3c3c3c);
+    color: var(--text-primary, #d4d4d4);
+    font: inherit;
+    font-size: 13px;
+    padding: 8px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 80ms ease, border-color 80ms ease;
+    align-self: flex-start;
+}
+
+.settings-server-btn:hover {
+    background: var(--separator, #333);
+    border-color: var(--text-secondary, #999);
+}
+
+body.appearance-light .settings-server-btn {
+    background: #fff;
+    border-color: rgba(0, 0, 0, 0.15);
+    color: #333;
+}
+body.appearance-light .settings-server-btn:hover {
+    background: rgba(0, 0, 0, 0.04);
+}

@@ -1,0 +1,110 @@
+package se.soderbjorn.termtastic
+
+data class TerminalTheme(
+    val name: String,
+    val darkFg: String,
+    val lightFg: String,
+    // Background pair. Defaults preserve the original behavior of pure
+    // black-on-dark and pure white-on-light so themes that don't care can
+    // omit them. Themes like Solarized override both to get their signature
+    // tinted backgrounds (e.g. Solarized Light's cream `#fdf6e3`).
+    val darkBg: String = "#000000",
+    val lightBg: String = "#ffffff"
+)
+
+// Handpicked themes — synced with tools/neon-green-picker.html "Recommended" tab.
+val recommendedThemes: List<TerminalTheme> = listOf(
+    TerminalTheme("Matrix",        "#33ff66", "#0a7d2c"),
+    TerminalTheme("Mint terminal", "#33ff99", "#0b8a5b"),
+    TerminalTheme("Cyber teal",    "#00e5ff", "#006d80"),
+    TerminalTheme("Tron",          "#00ff9f", "#00795c"),
+    TerminalTheme("Vapor pink",    "#ff77ff", "#a3008c"),
+    TerminalTheme("Amber CRT",     "#ffb000", "#8a4b00"),
+    TerminalTheme("Ember",         "#ff6d3d", "#a23b00"),
+    TerminalTheme("Plasma",        "#ff3df8", "#9b008f"),
+    TerminalTheme("Cobalt",        "#5b9dff", "#0a3d91"),
+    TerminalTheme("Aqua glow",     "#00ffe1", "#007466"),
+    TerminalTheme("Sunset",        "#ffaa33", "#9a4a00"),
+    TerminalTheme("Hot rose",      "#ff5fa2", "#a00050"),
+    TerminalTheme("Cyber lime",    "#ccff00", "#5a7800"),
+    TerminalTheme("Royal violet",  "#b388ff", "#4527a0"),
+    TerminalTheme("Synthwave",     "#ff7edb", "#b33d8f"),
+    TerminalTheme("Forest",        "#7fce6f", "#2d6a1f"),
+    TerminalTheme("Ocean",         "#4fc3f7", "#0277bd"),
+    TerminalTheme("Lava",          "#ff5722", "#b71c1c"),
+    TerminalTheme("Ice",           "#5dd8ff", "#006e93"),
+    TerminalTheme("Coral",         "#ff8a65", "#c1421c"),
+    TerminalTheme("Lavender",      "#b39ddb", "#5e35b1"),
+    TerminalTheme("Pastel Pink",   "#ffb6d9", "#c2185b"),
+    TerminalTheme("Lime Burst",    "#d4ff00", "#6b7c00"),
+    TerminalTheme("Magenta",       "#ff00ff", "#8b008b"),
+    TerminalTheme("Sunflower",     "#ffd700", "#b8860b"),
+    TerminalTheme("Cherry",        "#ff4d6d", "#9d0028"),
+    TerminalTheme("Sky",           "#87ceeb", "#1e6091"),
+    TerminalTheme("Mint Cream",    "#98ff98", "#2e8b57"),
+    TerminalTheme("Peach",         "#ffcc99", "#cc6600"),
+    TerminalTheme("Indigo",        "#6f70ff", "#1a237e"),
+    TerminalTheme("Sand",          "#d2b48c", "#8b6914"),
+    TerminalTheme("Crimson",       "#ff5252", "#8b0000"),
+    TerminalTheme("Sea Foam",      "#71eeb8", "#00695c"),
+    TerminalTheme("Apricot",       "#ffb347", "#c66900"),
+    TerminalTheme("Ultraviolet",   "#9d4edd", "#4a148c"),
+    TerminalTheme("Periwinkle",    "#aab8ff", "#3949ab"),
+    TerminalTheme("Teal Storm",    "#20d6c7", "#00695c"),
+    TerminalTheme("Olive",         "#c5d637", "#5d6e0a"),
+    TerminalTheme("Cyan Pop",      "#00ffff", "#007a7a"),
+    TerminalTheme("Honey",         "#f4c430", "#a47000"),
+    TerminalTheme("Sage",          "#b2c8a4", "#5d7c4f"),
+
+    // Tinted-background themes — designer palettes with their canonical
+    // background colors instead of pure black/white. These give the picker
+    // real variation (cream Solarized Light, deep navy Tokyo Night, etc.).
+    TerminalTheme("Solarized",      darkFg = "#93a1a1", lightFg = "#657b83",
+                                    darkBg = "#002b36", lightBg = "#fdf6e3"),
+    TerminalTheme("Gruvbox",        darkFg = "#ebdbb2", lightFg = "#3c3836",
+                                    darkBg = "#282828", lightBg = "#fbf1c7"),
+    TerminalTheme("Nord",           darkFg = "#d8dee9", lightFg = "#2e3440",
+                                    darkBg = "#2e3440", lightBg = "#eceff4"),
+    TerminalTheme("Dracula",        darkFg = "#f8f8f2", lightFg = "#282a36",
+                                    darkBg = "#282a36", lightBg = "#f8f8f2"),
+    TerminalTheme("Monokai",        darkFg = "#f8f8f2", lightFg = "#272822",
+                                    darkBg = "#272822", lightBg = "#fafafa"),
+    TerminalTheme("Tokyo Night",    darkFg = "#a9b1d6", lightFg = "#343b58",
+                                    darkBg = "#1a1b26", lightBg = "#d5d6db"),
+    TerminalTheme("One Dark",       darkFg = "#abb2bf", lightFg = "#383a42",
+                                    darkBg = "#282c34", lightBg = "#fafafa"),
+    TerminalTheme("GitHub",         darkFg = "#c9d1d9", lightFg = "#24292f",
+                                    darkBg = "#0d1117", lightBg = "#ffffff"),
+    TerminalTheme("Catppuccin",     darkFg = "#cdd6f4", lightFg = "#4c4f69",
+                                    darkBg = "#1e1e2e", lightBg = "#eff1f5"),
+    TerminalTheme("Rose Pine",      darkFg = "#e0def4", lightFg = "#575279",
+                                    darkBg = "#191724", lightBg = "#faf4ed"),
+    TerminalTheme("Ayu",            darkFg = "#b3b1ad", lightFg = "#5c6773",
+                                    darkBg = "#0a0e14", lightBg = "#fafafa"),
+    TerminalTheme("Ayu Mirage",     darkFg = "#cbccc6", lightFg = "#5c6773",
+                                    darkBg = "#1f2430", lightBg = "#fafafa"),
+    TerminalTheme("Night Owl",      darkFg = "#d6deeb", lightFg = "#403f53",
+                                    darkBg = "#011627", lightBg = "#fbfbfb"),
+    TerminalTheme("Material",       darkFg = "#eeffff", lightFg = "#37474f",
+                                    darkBg = "#263238", lightBg = "#fafafa"),
+    TerminalTheme("Cobalt2",        darkFg = "#ffffff", lightFg = "#193549",
+                                    darkBg = "#193549", lightBg = "#e8eef2"),
+    TerminalTheme("Ubuntu",         darkFg = "#eeeeec", lightFg = "#300a24",
+                                    darkBg = "#300a24", lightBg = "#f5e6f0"),
+    TerminalTheme("Sepia",          darkFg = "#e8d9b6", lightFg = "#5b4636",
+                                    darkBg = "#3a2e25", lightBg = "#f4ecd8"),
+    TerminalTheme("Pencil",         darkFg = "#f1f1f1", lightFg = "#424242",
+                                    darkBg = "#212121", lightBg = "#f1f1f1"),
+    TerminalTheme("Hopscotch",      darkFg = "#b9b5b8", lightFg = "#322931",
+                                    darkBg = "#322931", lightBg = "#ffffff"),
+    TerminalTheme("Spacegray",      darkFg = "#c0c5ce",  lightFg = "#2c2e34",
+                                    darkBg = "#2c2e34", lightBg = "#f5f5f5"),
+    TerminalTheme("Paper White",    darkFg = "#222222", lightFg = "#222222",
+                                    darkBg = "#f5f5dc", lightBg = "#fffff8"),
+    TerminalTheme("Mono Black",     darkFg = "#ffffff", lightFg = "#000000",
+                                    darkBg = "#000000", lightBg = "#ffffff"),
+)
+
+const val DEFAULT_THEME_NAME = "Tron"
+
+enum class Appearance { Auto, Dark, Light }
