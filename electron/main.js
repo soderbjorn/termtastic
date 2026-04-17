@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, globalShortcut, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, globalShortcut, ipcMain, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
@@ -511,6 +511,16 @@ function registerGlobalShortcut() {
 }
 
 app.whenReady().then(async () => {
+  // Grant notification permissions to the app's own origin. Without this,
+  // Electron denies Notification.requestPermission() by default and the
+  // renderer never gets the browser permission prompt.
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === "notifications");
+  });
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    return permission === "notifications";
+  });
+
   await ensureServerThenCreateWindow();
   registerGlobalShortcut();
 });

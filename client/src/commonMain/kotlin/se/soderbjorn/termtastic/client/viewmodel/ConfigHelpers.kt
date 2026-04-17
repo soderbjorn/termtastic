@@ -20,6 +20,20 @@ fun findLeafById(config: WindowConfig, paneId: String): LeafNode? {
     return null
 }
 
+fun findLeafBySessionId(config: WindowConfig, sessionId: String): LeafNode? {
+    fun walk(node: PaneNode?): LeafNode? = when (node) {
+        is LeafNode -> if (node.sessionId == sessionId) node else null
+        is SplitNode -> walk(node.first) ?: walk(node.second)
+        null -> null
+    }
+    for (tab in config.tabs) {
+        walk(tab.root)?.let { return it }
+        tab.floating.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
+        tab.poppedOut.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
+    }
+    return null
+}
+
 fun WindowEnvelope.belongsToPane(paneId: String): Boolean = when (this) {
     is WindowEnvelope.FileBrowserDir -> this.paneId == paneId
     is WindowEnvelope.FileBrowserContentMsg -> this.paneId == paneId

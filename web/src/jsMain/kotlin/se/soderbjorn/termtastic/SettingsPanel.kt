@@ -184,6 +184,34 @@ fun openSettingsPanel() {
     statusSection.appendChild(statusRow)
     body.appendChild(statusSection)
 
+    // ─── Desktop notifications ─────────────────────────────────────
+    val notifSection = document.createElement("div") as HTMLElement
+    notifSection.className = "settings-section"
+    val notifLabel = document.createElement("div") as HTMLElement
+    notifLabel.className = "settings-label"
+    notifLabel.textContent = "Desktop notifications"
+    notifSection.appendChild(notifLabel)
+
+    val notifRow = document.createElement("div") as HTMLElement
+    notifRow.className = "settings-button-row"
+    fun renderNotifRow() {
+        notifRow.innerHTML = ""
+        val enabled = appVm.stateFlow.value.desktopNotifications
+        for ((label, value) in listOf("On" to true, "Off" to false)) {
+            val btn = document.createElement("button") as HTMLElement
+            btn.className = "settings-choice-btn" + if (value == enabled) " selected" else ""
+            btn.textContent = label
+            btn.addEventListener("click", {
+                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setDesktopNotifications(value) }
+                renderNotifRow()
+            })
+            notifRow.appendChild(btn)
+        }
+    }
+    renderNotifRow()
+    notifSection.appendChild(notifRow)
+    body.appendChild(notifSection)
+
     // ─── Developer Tools (hidden until activated) ───────────────────
     val devSection = document.createElement("div") as HTMLElement
     devSection.className = "settings-section"

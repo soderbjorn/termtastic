@@ -10,6 +10,7 @@ import se.soderbjorn.termtastic.client.WindowSocket
 import se.soderbjorn.termtastic.client.viewmodel.AppBackingViewModel
 import se.soderbjorn.termtastic.client.viewmodel.FileBrowserBackingViewModel
 import se.soderbjorn.termtastic.client.viewmodel.GitPaneBackingViewModel
+import se.soderbjorn.termtastic.client.viewmodel.findLeafBySessionId
 
 // ── Core references (initialized in start()) ────────────────────────
 internal lateinit var termtasticClient: TermtasticClient
@@ -42,6 +43,7 @@ internal var pendingTabFlip: Map<String, Double>? = null
 internal var firstRender = true
 internal var devToolsEnabled = false
 internal val debugSessionStates = HashMap<String, String?>()
+internal val previousSessionStates = HashMap<String, String?>()
 
 // Settings panel DOM state
 internal var settingsPanel: HTMLElement? = null
@@ -291,8 +293,43 @@ internal fun wireMarkdownAnchorLinks(container: HTMLElement) {
     })
 }
 
+private fun checkStateNotifications(sessionStates: Map<String, String?>) {
+    if (!appVm.stateFlow.value.desktopNotifications) return
+    if (js("typeof Notification === 'undefined'") as Boolean) return
+    if ((js("Notification.permission") as String) != "granted") return
+
+    val effective = HashMap(sessionStates)
+    for ((k, v) in debugSessionStates) effective[k] = v
+
+    for ((sessionId, newState) in effective) {
+        val oldState = previousSessionStates[sessionId]
+        val kind: String? = when {
+            newState == "waiting" && oldState != "waiting" -> "waiting"
+            newState == null && oldState == "working" -> "done"
+            else -> null
+        }
+        if (kind != null) {
+            val config = appVm.stateFlow.value.config
+            val title = if (config != null) findLeafBySessionId(config, sessionId)?.title else null
+            val paneLabel = title ?: sessionId
+            val body = if (kind == "waiting") "$paneLabel needs input" else "$paneLabel finished"
+            val opts: dynamic = js("({})")
+            opts.body = body
+            opts.silent = false
+            val notification = js("new Notification('Termtastic', opts)")
+            notification.onclick = {
+                kotlinx.browser.window.focus()
+                notification.close()
+            }
+        }
+    }
+    previousSessionStates.clear()
+    previousSessionStates.putAll(effective)
+}
+
 internal fun updateStateDots(sessionStates: Map<String, String?>) {
     val document = kotlinx.browser.document
+    checkStateNotifications(sessionStates)
     val effective = HashMap(sessionStates)
     for ((k, v) in debugSessionStates) effective[k] = v
     for ((sessionId, state) in effective) {

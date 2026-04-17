@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -41,6 +42,7 @@ class AppBackingViewModel(
         val paneStatusDisplay: PaneStatusDisplay = PaneStatusDisplay.Glow,
         val paneFontSize: Int? = null,
         val sidebarWidth: Int? = null,
+        val desktopNotifications: Boolean = true,
     )
 
     suspend fun run() {
@@ -99,6 +101,11 @@ class AppBackingViewModel(
     suspend fun setSidebarWidth(width: Int) {
         emit(_stateFlow.value.copy(sidebarWidth = width))
         settingsPersister?.putSetting("sidebarWidth", width.toString())
+    }
+
+    suspend fun setDesktopNotifications(enabled: Boolean) {
+        emit(_stateFlow.value.copy(desktopNotifications = enabled))
+        settingsPersister?.putSetting("desktopNotifications", enabled.toString())
     }
 
     // ── Layout mutations (delegated to server) ──────────────────────
@@ -222,6 +229,7 @@ class AppBackingViewModel(
         val psd = parsePaneStatusDisplay(settings["paneStatusDisplay"]?.jsonPrimitive?.contentOrNull)
         val fontSize = settings["paneFontSize"]?.jsonPrimitive?.intOrNull ?: cur.paneFontSize
         val sidebarW = settings["sidebarWidth"]?.jsonPrimitive?.intOrNull ?: cur.sidebarWidth
+        val desktopNotif = settings["desktopNotifications"]?.jsonPrimitive?.booleanOrNull ?: cur.desktopNotifications
 
         emit(cur.copy(
             theme = theme,
@@ -229,6 +237,7 @@ class AppBackingViewModel(
             paneStatusDisplay = psd,
             paneFontSize = fontSize,
             sidebarWidth = sidebarW,
+            desktopNotifications = desktopNotif,
         ))
     }
 

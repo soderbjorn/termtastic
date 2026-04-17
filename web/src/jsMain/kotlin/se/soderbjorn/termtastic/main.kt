@@ -87,6 +87,13 @@ private fun start() {
 
     applyAll()
 
+    // Request notification permission (Electron grants via setPermissionRequestHandler in main.js).
+    if (js("typeof Notification !== 'undefined'") as Boolean) {
+        if ((js("Notification.permission") as String) != "granted") {
+            js("Notification.requestPermission()")
+        }
+    }
+
     // Reactively apply visual changes when the VM's appearance/theme state changes.
     GlobalScope.launch {
         var prevTheme = appVm.stateFlow.value.theme.name
