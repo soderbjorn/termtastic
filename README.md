@@ -16,6 +16,7 @@ The tool itself has been completely but carefully "vibe-coded", but the code has
 ### Agent Support
 
 * Status detection highlights panes and tabs where agents work or wait for input — a red glow or dot means input is needed, while a blue glow or dot means an agent is working.
+* Notifications when an agent is done or waiting for input.
 * Optionally shows Claude Code usage data. Green color means lots of tokens remain, yellow means we are approching session limit and red means session limit is very near.
 
 ### Multiplexing

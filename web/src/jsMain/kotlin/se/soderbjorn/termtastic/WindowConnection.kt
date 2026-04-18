@@ -1,3 +1,19 @@
+/**
+ * Window WebSocket connection handler for the Termtastic web frontend.
+ *
+ * Manages the main WebSocket connection that carries configuration updates,
+ * session state changes, Claude usage data, and pane content messages (file browser
+ * listings/content, git file lists/diffs). Also handles the full DOM rendering
+ * pipeline via [renderConfig].
+ *
+ * The [connectWindow] function sets up a coroutine that collects typed
+ * [WindowEnvelope] messages from the [WindowSocket] and routes them to the
+ * appropriate rendering functions.
+ *
+ * @see connectWindow
+ * @see renderConfig
+ * @see handlePaneContentMessage
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -7,6 +23,21 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import org.w3c.dom.HTMLElement
 
+/**
+ * Routes pane content messages to the appropriate rendering function.
+ *
+ * Handles the following message types:
+ * - "fileBrowserDir": updates directory listing cache and re-renders the file tree
+ * - "fileBrowserContent": updates file content and re-renders the preview panel
+ * - "fileBrowserError": shows an error message in the preview panel
+ * - "gitList": updates the changed files list and re-renders it
+ * - "gitDiff": renders the diff in the appropriate mode (inline/split/graphical)
+ * - "gitError": shows an error message in the diff panel
+ *
+ * @param type the message type string, or null
+ * @param parsed the dynamic parsed message object
+ * @return true if the message was handled, false if the type was unrecognized
+ */
 fun handlePaneContentMessage(type: String?, parsed: dynamic): Boolean {
     when (type) {
         "fileBrowserDir" -> {
@@ -94,6 +125,24 @@ fun handlePaneContentMessage(type: String?, parsed: dynamic): Boolean {
     return true
 }
 
+/**
+ * Performs a full re-render of the application from a server configuration update.
+ *
+ * This is the main rendering entry point, called whenever a [WindowEnvelope.Config]
+ * envelope is received. It:
+ * 1. Removes terminals for panes that no longer exist in the config
+ * 2. Rebuilds the tab bar with drag-and-drop support
+ * 3. Rebuilds all tab pane content trees via [buildNode]
+ * 4. Constructs floating pane layers
+ * 5. Restores maximized panes, scroll positions, and focus state
+ * 6. Applies entrance animations for new tabs/panes
+ * 7. Re-renders the sidebar and state dots
+ * 8. Triggers terminal refitting
+ *
+ * @param config the dynamic server configuration object
+ * @see connectWindow
+ * @see buildNode
+ */
 fun renderConfig(config: dynamic) {
     currentConfig = config
     val wrap = terminalWrapEl ?: return

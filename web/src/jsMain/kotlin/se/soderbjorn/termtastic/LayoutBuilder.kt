@@ -1,3 +1,19 @@
+/**
+ * Layout builder for the Termtastic web frontend pane tree.
+ *
+ * Responsible for recursively constructing the DOM tree from the server-provided
+ * pane configuration. Handles terminal pane creation (xterm.js instances with
+ * WebSocket PTY connections), file browser panes, git panes, split containers
+ * with draggable dividers, floating panes, pane maximize/restore animations,
+ * and drag-and-drop for files and pane reordering.
+ *
+ * This is the core rendering engine that translates the declarative pane tree
+ * from the server into a live, interactive DOM.
+ *
+ * @see buildNode
+ * @see buildLeafCell
+ * @see renderConfig
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -7,6 +23,16 @@ import org.w3c.dom.HTMLElement
 import org.w3c.dom.events.MouseEvent
 import kotlin.js.json
 
+/**
+ * Attaches drag-and-drop file handling to a terminal container.
+ *
+ * When files are dropped onto the terminal, their paths are shell-quoted and
+ * pasted into the terminal input. Uses Electron's `getPathForFile` API when
+ * available, falling back to the standard File API path property.
+ *
+ * @param container the terminal container DOM element to attach handlers to
+ * @param term the xterm.js [Terminal] instance to paste file paths into
+ */
 fun attachDragDrop(container: HTMLElement, term: Terminal) {
     container.addEventListener("dragenter", { event -> event.preventDefault() })
     container.addEventListener("dragover", { event ->
@@ -30,6 +56,18 @@ fun attachDragDrop(container: HTMLElement, term: Terminal) {
     })
 }
 
+/**
+ * Establishes a WebSocket connection to the server's PTY endpoint for a terminal pane.
+ *
+ * Handles bidirectional data flow: user keystrokes are sent as binary data to the
+ * server, and PTY output (binary) and control messages (JSON) are received and
+ * written to the xterm.js terminal. Automatically reconnects on close (unless the
+ * pane has been removed), and shows a device-rejected overlay on auth failure (code 1008).
+ *
+ * @param entry the [TerminalEntry] containing the terminal, session ID, and connection state
+ * @see ensureTerminal
+ * @see TerminalEntry
+ */
 fun connectPane(entry: TerminalEntry) {
     val url = "$proto://${window.location.host}/pty/${entry.sessionId}?$authQueryParam"
     connectionState[entry.sessionId] = "connecting"
@@ -104,6 +142,19 @@ fun connectPane(entry: TerminalEntry) {
     socket.onerror = { socket.close() }
 }
 
+/**
+ * Returns the existing [TerminalEntry] for a pane, or creates a new xterm.js terminal
+ * instance with a fit addon, connects it to the PTY WebSocket, and registers it
+ * in the [terminals] registry.
+ *
+ * Also sets up a [ResizeObserver] to automatically refit the terminal when its
+ * container dimensions change, and attaches drag-and-drop file handling.
+ *
+ * @param paneId the unique pane identifier
+ * @param sessionId the PTY session identifier for the WebSocket connection
+ * @return the existing or newly created [TerminalEntry]
+ * @see connectPane
+ */
 fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
     terminals[paneId]?.let { return it }
 
@@ -154,6 +205,19 @@ fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
     return entry
 }
 
+/**
+ * Attaches mouse-drag behavior to a split divider element, allowing the user
+ * to resize the two children of a split container by dragging.
+ *
+ * On mouse-up, persists the new ratio to the server via [WindowCommand.SetRatio].
+ *
+ * @param divider the divider DOM element to attach drag listeners to
+ * @param container the parent split container element
+ * @param firstWrap the first child wrapper element
+ * @param secondWrap the second child wrapper element
+ * @param splitId the unique split identifier for persisting the ratio
+ * @param isHorizontal true for horizontal splits (left/right), false for vertical (top/bottom)
+ */
 fun attachDividerDrag(
     divider: HTMLElement, container: HTMLElement,
     firstWrap: HTMLElement, secondWrap: HTMLElement,
@@ -195,6 +259,22 @@ fun attachDividerDrag(
     })
 }
 
+/**
+ * Builds a single leaf pane cell element based on its content kind.
+ *
+ * Dispatches to the appropriate builder:
+ * - "fileBrowser": creates a [buildFileBrowserView] with pane header
+ * - "git": creates a [buildGitView] with pane header
+ * - default (terminal): creates an xterm.js terminal via [ensureTerminal]
+ *
+ * Each cell includes a pane header with appropriate icon and controls.
+ *
+ * @param leaf the dynamic leaf node from the server config
+ * @param popoutMode true if this cell is rendered in a pop-out window
+ * @return the root HTMLElement for the pane cell
+ * @see buildNode
+ * @see buildPaneHeader
+ */
 fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false): HTMLElement {
     val paneId = leaf.id as String
     val title = leaf.title as String
@@ -254,6 +334,15 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false): HTMLElement {
     return cell
 }
 
+/**
+ * Makes a pane cell's header draggable for pane-to-tab drag-and-drop reordering.
+ *
+ * When the header is dragged, the pane ID is set as transfer data so that tab
+ * buttons can accept the drop and move the pane to a different tab.
+ *
+ * @param cell the pane cell element containing the header
+ * @param paneId the unique pane identifier to set as drag data
+ */
 fun attachPaneTabDrag(cell: HTMLElement, paneId: String) {
     val header = cell.querySelector(".terminal-header") as? HTMLElement ?: return
     header.setAttribute("draggable", "true")
@@ -275,6 +364,18 @@ fun attachPaneTabDrag(cell: HTMLElement, paneId: String) {
     })
 }
 
+/**
+ * Recursively builds the DOM tree for a pane tree node.
+ *
+ * For leaf nodes, delegates to [buildLeafCell] and attaches pane drag behavior.
+ * For split nodes, creates a flex container with two children separated by a
+ * draggable divider, with the split ratio applied via CSS flex properties.
+ *
+ * @param node a dynamic object with kind "leaf" or "split", from the server config
+ * @return the root HTMLElement for this node's subtree
+ * @see buildLeafCell
+ * @see attachDividerDrag
+ */
 fun buildNode(node: dynamic): HTMLElement {
     if (node.kind == "leaf") {
         val cell = buildLeafCell(node)
@@ -310,6 +411,14 @@ fun buildNode(node: dynamic): HTMLElement {
     }
 }
 
+/**
+ * Builds a placeholder element shown when a tab has no panes.
+ *
+ * Displays a message and a "New pane" button that opens the [showPaneTypeModal].
+ *
+ * @param tabId the tab identifier to create a new pane in
+ * @return the placeholder HTMLElement
+ */
 fun buildEmptyTabPlaceholder(tabId: String): HTMLElement {
     val wrap = document.createElement("div") as HTMLElement
     wrap.className = "empty-tab"
@@ -328,6 +437,19 @@ fun buildEmptyTabPlaceholder(tabId: String): HTMLElement {
     return wrap
 }
 
+/**
+ * Builds a floating (detached) pane element with absolute positioning within its tab.
+ *
+ * The pane can be moved by dragging its header and resized via a bottom-right grip.
+ * Position and size are expressed as fractions of the tab section dimensions and
+ * persisted to the server via [WindowCommand.SetFloatingGeom].
+ *
+ * @param floater the dynamic floating pane descriptor with leaf, x, y, width, height
+ * @param tabSection the parent tab section element used as the coordinate reference
+ * @return the floating pane HTMLElement
+ * @see WindowCommand.ToggleFloating
+ * @see WindowCommand.RaiseFloating
+ */
 fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
     val leaf = floater.leaf
     val paneId = leaf.id as String
@@ -444,6 +566,16 @@ fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
     return pane
 }
 
+/**
+ * Restores a maximized pane back to its original position within the split layout.
+ *
+ * Optionally animates the transition from full-tab to original size using CSS
+ * transitions. Removes the maximized backdrop and updates the maximize button icon.
+ *
+ * @param tabId the tab containing the maximized pane
+ * @param animate whether to animate the restore transition (default true)
+ * @see maximizePane
+ */
 fun restorePane(tabId: String, animate: Boolean = true) {
     val paneId = maximizedPaneIds.remove(tabId) ?: return
     val cell = document.querySelector(".terminal-cell[data-pane=\"$paneId\"]") as? HTMLElement ?: return
@@ -491,6 +623,17 @@ fun restorePane(tabId: String, animate: Boolean = true) {
     }
 }
 
+/**
+ * Maximizes a pane to fill its entire tab area, overlaying all other panes.
+ *
+ * Optionally animates the transition from original size to full-tab. Adds a
+ * backdrop overlay that can be clicked to restore. Only one pane per tab can
+ * be maximized at a time; maximizing a different pane restores the previous one.
+ *
+ * @param paneId the pane to maximize
+ * @param animate whether to animate the maximize transition (default true)
+ * @see restorePane
+ */
 fun maximizePane(paneId: String, animate: Boolean = true) {
     val cell = document.querySelector(".terminal-cell[data-pane=\"$paneId\"]") as? HTMLElement ?: return
     val tabPane = findTabPane(cell) ?: return

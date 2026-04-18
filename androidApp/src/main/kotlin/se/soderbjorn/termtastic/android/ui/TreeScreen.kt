@@ -1,3 +1,21 @@
+/**
+ * Tree overview screen for the Termtastic Android app.
+ *
+ * Displays the server's window layout as a flat list of tab headers and leaf
+ * pane rows, mirroring the sidebar in the web/Electron client. Each leaf is
+ * annotated with a type icon (terminal, file browser, git, floating, or empty)
+ * and a pulsing state dot reflecting the server-pushed "working"/"waiting"
+ * status. Tapping a leaf navigates to [TerminalScreen], [FileBrowserListScreen],
+ * or [GitListScreen] depending on the pane type.
+ *
+ * Also hosts the "+" button that launches the [CreateKindPickerDialog] flow
+ * from [PaneActions] for creating new tabs and split panes.
+ *
+ * @see TerminalScreen
+ * @see FileBrowserListScreen
+ * @see GitListScreen
+ * @see PaneActions
+ */
 package se.soderbjorn.termtastic.android.ui
 
 import androidx.compose.animation.core.RepeatMode
@@ -75,13 +93,35 @@ import se.soderbjorn.termtastic.client.addTab
 private val DotWorking = SidebarDotWorking
 private val DotWaiting = SidebarDotWaiting
 
+/**
+ * Sealed hierarchy representing the two kinds of rows in the tree list.
+ *
+ * [TabHeader] is a section header for a tab; [Leaf] is a clickable pane row.
+ */
 private sealed class TreeRow {
+    /**
+     * Section header for a tab, showing the tab title and an aggregate state dot.
+     *
+     * @property tabId the server-side tab identifier.
+     * @property title the display title of the tab.
+     * @property aggregateState "working", "waiting", or null -- the worst-case state
+     *   across all leaves in this tab.
+     */
     data class TabHeader(
         val tabId: String,
         val title: String,
         val aggregateState: String?,
     ) : TreeRow()
 
+    /**
+     * A leaf pane row representing a terminal, file browser, git pane, or empty placeholder.
+     *
+     * @property paneId the server-side pane identifier.
+     * @property sessionId the PTY session identifier (used to open [TerminalScreen]).
+     * @property title the display title of the pane.
+     * @property kind the type of content this pane holds.
+     * @property floating true if the pane is in a floating window.
+     */
     data class Leaf(
         val paneId: String,
         val sessionId: String,
@@ -91,8 +131,13 @@ private sealed class TreeRow {
     ) : TreeRow()
 }
 
+/** Discriminator for the type of content a leaf pane holds. */
 private enum class LeafKind { TERMINAL, FILE_BROWSER, GIT, EMPTY }
 
+/**
+ * Intermediate data holder used during tree flattening before being
+ * converted to [TreeRow.Leaf] rows.
+ */
 private data class CollectedLeaf(
     val paneId: String,
     val sessionId: String,
@@ -101,6 +146,18 @@ private data class CollectedLeaf(
     val floating: Boolean,
 )
 
+/**
+ * Flattens the hierarchical [WindowConfig] into a linear list of [TreeRow] items
+ * suitable for a [LazyColumn].
+ *
+ * For each tab, collects all leaves (including floating and popped-out panes),
+ * computes an aggregate state dot (waiting > working > null), and emits a
+ * [TreeRow.TabHeader] followed by [TreeRow.Leaf] rows.
+ *
+ * @param config the current window configuration from the server.
+ * @param states map of session ID to state string ("working", "waiting", or null).
+ * @return ordered list of tree rows.
+ */
 private fun flatten(config: WindowConfig, states: Map<String, String?>): List<TreeRow> {
     val rows = mutableListOf<TreeRow>()
     for (tab in config.tabs) {
@@ -134,6 +191,13 @@ private fun flatten(config: WindowConfig, states: Map<String, String?>): List<Tr
     return rows
 }
 
+/**
+ * Recursively walks a [PaneNode] tree, appending every [LeafNode] to [out].
+ *
+ * @param node the current node in the pane tree.
+ * @param floating whether these leaves are inside a floating window.
+ * @param out accumulator list for collected leaves.
+ */
 private fun collectLeaves(node: PaneNode, floating: Boolean, out: MutableList<CollectedLeaf>) {
     when (node) {
         is LeafNode -> addLeaf(node, floating, out)
@@ -144,6 +208,15 @@ private fun collectLeaves(node: PaneNode, floating: Boolean, out: MutableList<Co
     }
 }
 
+/**
+ * Converts a single [LeafNode] into a [CollectedLeaf] and appends it to [out].
+ *
+ * Determines the [LeafKind] from the leaf's content type.
+ *
+ * @param leaf the leaf node to convert.
+ * @param floating whether this leaf is inside a floating window.
+ * @param out accumulator list for collected leaves.
+ */
 private fun addLeaf(leaf: LeafNode, floating: Boolean, out: MutableList<CollectedLeaf>) {
     val kind = when (leaf.content) {
         is TerminalContent, null -> LeafKind.TERMINAL
@@ -162,6 +235,25 @@ private fun addLeaf(leaf: LeafNode, floating: Boolean, out: MutableList<Collecte
     )
 }
 
+/**
+ * Tree overview screen showing the server's window layout.
+ *
+ * Renders a flat list of tab headers and leaf pane rows, each with a type icon
+ * and optional pulsing state dot. Tapping a leaf navigates to the appropriate
+ * screen based on its [LeafKind]. The "+" button in the top bar launches the
+ * [CreateKindPickerDialog] flow for adding tabs or splitting panes.
+ *
+ * The back/disconnect button tears down the connection via [ConnectionHolder]
+ * and returns to [HostsScreen].
+ *
+ * @param onOpenTerminal callback invoked with a session ID to open a terminal.
+ * @param onOpenFileBrowser callback invoked with a pane ID to open the file browser.
+ * @param onOpenGit callback invoked with a pane ID to open the git view.
+ * @param onDisconnect callback invoked when the user disconnects from the server.
+ * @see TerminalScreen
+ * @see FileBrowserListScreen
+ * @see GitListScreen
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TreeScreen(
@@ -314,6 +406,12 @@ fun TreeScreen(
     }
 }
 
+/**
+ * Renders a tab section header row with the tab title in uppercase and an
+ * aggregate state dot.
+ *
+ * @param row the tab header data to render.
+ */
 @Composable
 private fun TabHeaderRow(row: TreeRow.TabHeader) {
     Row(
@@ -334,6 +432,13 @@ private fun TabHeaderRow(row: TreeRow.TabHeader) {
     }
 }
 
+/**
+ * Renders a clickable leaf pane row with a type icon, state dot, and title.
+ *
+ * @param row the leaf pane data to render.
+ * @param state the current state string ("working", "waiting", or null).
+ * @param onClick callback invoked when the row is tapped to open the pane.
+ */
 @Composable
 private fun LeafRow(
     row: TreeRow.Leaf,

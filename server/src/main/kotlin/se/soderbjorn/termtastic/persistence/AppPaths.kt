@@ -1,3 +1,22 @@
+/**
+ * Application data directory resolution for Termtastic.
+ *
+ * This file contains [AppPaths], which resolves the on-disk locations for the
+ * SQLite database and auxiliary state files (e.g. shell init bootstraps).
+ * It honours override conventions (`-Dtermtastic.dbPath` system property or
+ * `TERMTASTIC_DB_PATH` environment variable) and falls back to per-OS
+ * application-data directories (macOS `~/Library/Application Support`,
+ * Windows `%APPDATA%`, Linux `$XDG_DATA_HOME`).
+ *
+ * Called by:
+ *  - [Application.main] to obtain the database file path for
+ *    [SettingsRepository].
+ *  - [ShellInitFiles] to locate the directory for generated shell
+ *    bootstrap scripts.
+ *
+ * @see SettingsRepository
+ * @see ShellInitFiles
+ */
 package se.soderbjorn.termtastic.persistence
 
 import java.io.File
@@ -14,6 +33,14 @@ object AppPaths {
     private const val APP_DIR_NAME = "Termtastic"
     private const val DB_FILE_NAME = "termtastic.db"
 
+    /**
+     * Resolve the SQLite database file path.
+     *
+     * Checks for a `-Dtermtastic.dbPath` system property or `TERMTASTIC_DB_PATH`
+     * environment variable override, then falls back to a per-OS default.
+     *
+     * @return the [File] pointing to the SQLite database
+     */
     fun databaseFile(): File {
         val override = System.getProperty("termtastic.dbPath")
             ?: System.getenv("TERMTASTIC_DB_PATH")
@@ -33,6 +60,15 @@ object AppPaths {
         return dbFile.parentFile ?: defaultDataDir()
     }
 
+    /**
+     * Determine the default application data directory based on the OS.
+     *
+     * - macOS: `~/Library/Application Support/Termtastic`
+     * - Windows: `%APPDATA%/Termtastic`
+     * - Linux: `$XDG_DATA_HOME/termtastic` (defaults to `~/.local/share/termtastic`)
+     *
+     * @return the platform-appropriate data directory
+     */
     private fun defaultDataDir(): File {
         val os = System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT)
         val home = System.getProperty("user.home")

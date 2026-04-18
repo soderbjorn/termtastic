@@ -1,3 +1,15 @@
+/**
+ * UI settings model and server-side settings fetch logic.
+ *
+ * [UiSettings] is a snapshot of the user's visual preferences (theme and
+ * appearance mode) as stored on the server in a free-form JSON blob at
+ * `ui.settings.v1`. The [fetchUiSettings] extension on [TermtasticClient]
+ * pulls the blob via `GET /api/ui-settings` and maps it into a type-safe
+ * [UiSettings] instance, falling back to safe defaults for unknown values.
+ *
+ * @see se.soderbjorn.termtastic.TerminalTheme
+ * @see se.soderbjorn.termtastic.Appearance
+ */
 package se.soderbjorn.termtastic.client
 
 import io.ktor.client.request.get
@@ -17,6 +29,10 @@ import se.soderbjorn.termtastic.recommendedThemes
  * terminal. The server stores these under `ui.settings.v1` as a free-form
  * JSON blob (see SettingsRepository.mergeUiSettings); we only pick the
  * theme + appearance keys out of it.
+ */
+/**
+ * @property theme      the active terminal colour theme.
+ * @property appearance the user's light/dark mode preference.
  */
 data class UiSettings(
     val theme: TerminalTheme,
@@ -76,6 +92,11 @@ suspend fun TermtasticClient.fetchUiSettings(): UiSettings? {
     return UiSettings(theme = theme, appearance = appearance)
 }
 
+/**
+ * Construct a [UiSettings] with the factory defaults (Tron theme, auto
+ * appearance). Used when the server has no stored settings or the response
+ * is empty/unparseable.
+ */
 private fun defaultUiSettings(): UiSettings =
     UiSettings(
         theme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME },

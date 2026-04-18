@@ -1,3 +1,13 @@
+/**
+ * Reusable confirmation dialog component for the Termtastic web frontend.
+ *
+ * Creates a modal overlay with a title, message, Cancel, and Confirm buttons.
+ * Used throughout the UI to confirm destructive actions such as closing panes,
+ * closing tabs, and closing linked terminal sessions.
+ *
+ * @see PaneHeader
+ * @see TabBar
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -5,6 +15,18 @@ import org.w3c.dom.HTMLElement
 import org.w3c.dom.events.Event
 import org.w3c.dom.events.KeyboardEvent
 
+/**
+ * Displays a modal confirmation dialog with Cancel and Confirm buttons.
+ *
+ * Only one dialog can be visible at a time (guards against duplicates via element ID).
+ * The dialog can be dismissed by clicking Cancel, clicking the overlay backdrop,
+ * or pressing Escape. The confirm callback fires only when the confirm button is clicked.
+ *
+ * @param title the dialog title text
+ * @param message the dialog body message (supports HTML)
+ * @param confirmLabel the label for the confirm button (defaults to "Close")
+ * @param onConfirm callback invoked when the user clicks the confirm button
+ */
 fun showConfirmDialog(
     title: String,
     message: String,

@@ -1,3 +1,15 @@
+/**
+ * Directory listing screen for the Termtastic file browser.
+ *
+ * Displays the contents of a single directory as a scrollable list with
+ * directories shown before files. Tapping a directory pushes another
+ * [FileBrowserListScreen]; tapping a file opens [FileBrowserContentScreen].
+ * Each directory navigation is also reported to the server so the web
+ * client's tree expansion stays in sync.
+ *
+ * @see FileBrowserContentScreen
+ * @see se.soderbjorn.termtastic.android.ui.TreeScreen
+ */
 package se.soderbjorn.termtastic.android.ui
 
 import androidx.activity.compose.BackHandler
@@ -46,6 +58,13 @@ import se.soderbjorn.termtastic.android.net.ConnectionHolder
  * Tapping a directory pushes another [FileBrowserListScreen]; tapping a file
  * pushes [FileBrowserContentScreen]. The server is told about every
  * navigated-into folder so the web client's tree reflects the same expansion.
+ *
+ * @param paneId the server-side pane identifier owning the file browser session.
+ * @param dirRelPath relative path of the directory to list (empty string for root).
+ * @param onOpenDir callback invoked with a child directory's relative path.
+ * @param onOpenFile callback invoked with a file's relative path.
+ * @param onBack callback invoked when the user navigates back.
+ * @see FileBrowserContentScreen
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -145,6 +164,16 @@ fun FileBrowserListScreen(
     }
 }
 
+/**
+ * A single row in the file browser directory listing.
+ *
+ * Displays a folder or file icon followed by the entry name. Tapping the row
+ * invokes [onClick], which the caller uses to navigate into a directory or
+ * open a file.
+ *
+ * @param entry the directory or file entry to render.
+ * @param onClick callback invoked when the row is tapped.
+ */
 @Composable
 private fun FileBrowserRow(entry: FileBrowserEntry, onClick: () -> Unit) {
     Row(

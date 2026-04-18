@@ -1,3 +1,26 @@
+/**
+ * Device authorization flow for Termtastic.
+ *
+ * This file contains [DeviceAuth], which implements a per-device token-based
+ * auth gate. Each client generates a unique token on first launch and sends it
+ * as a cookie, query parameter, or header. Unknown tokens trigger an interactive
+ * Compose Desktop approval dialog on the server; approved token hashes are
+ * persisted in SQLite so subsequent connections are silent.
+ *
+ * Key responsibilities:
+ *  - [DeviceAuth.authorize] -- the main entry point, called from every HTTP
+ *    route and WebSocket handler in Application.kt.
+ *  - [DeviceAuth.checkFastPath] -- non-blocking pre-check for known/denied
+ *    tokens (used by the `/window` WebSocket to send a "pending approval"
+ *    frame before blocking).
+ *  - Trusted and denied device lists with revoke/unban operations, surfaced
+ *    in the [SettingsDialog].
+ *  - Network-scope gate: rejects non-loopback connections unless the user
+ *    has opted in via [SettingsRepository.isAllowRemoteConnections].
+ *
+ * @see SettingsRepository
+ * @see SettingsDialog
+ */
 package se.soderbjorn.termtastic.auth
 
 import androidx.compose.foundation.layout.Arrangement

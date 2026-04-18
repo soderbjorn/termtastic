@@ -1,3 +1,29 @@
+/**
+ * Window, tab, and pane tree state management for Termtastic.
+ *
+ * This file contains the [WindowState] singleton, which is the authoritative
+ * source of truth for the entire window layout: tabs, split panes, floating
+ * panes, popped-out panes, file-browser state, and git-pane state. Every
+ * mutation flows through this object so the resulting [WindowConfig] StateFlow
+ * is the single stream clients subscribe to.
+ *
+ * Also contains helper functions:
+ *  - [prettifyPath] -- collapses `$HOME` to `~` for display titles.
+ *  - [computeLeafTitle] -- resolves the display title for a pane.
+ *  - [WindowConfig.withBlankSessionIds] -- strips live PTY ids before
+ *    persisting to SQLite.
+ *
+ * Mutations are synchronized and emit new [WindowConfig] snapshots that the
+ * `/window` WebSocket pushes to all connected clients. The debounced
+ * persistence writer in [Application.main] picks up changes and writes them
+ * to SQLite.
+ *
+ * @see WindowConfig
+ * @see TabConfig
+ * @see PaneNode
+ * @see TerminalSessions
+ * @see SettingsRepository
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -270,6 +296,10 @@ object WindowState {
         return WindowConfig(listOf(tab1))
     }
 
+    /**
+     * Create a new tab with a single terminal pane and append it to the tab list.
+     * The new pane gets a fresh PTY session.
+     */
     fun addTab() = synchronized(this) {
         val cfg = _config.value
         val sessionId = TerminalSessions.create()
@@ -287,6 +317,13 @@ object WindowState {
         _config.value = cfg.copy(tabs = cfg.tabs + newTab)
     }
 
+    /**
+     * Close the tab with [tabId], destroying any PTY sessions that are no
+     * longer referenced by any remaining pane. No-op if there is only one
+     * tab left (the UI has no way to recover from zero tabs).
+     *
+     * @param tabId the id of the tab to close
+     */
     fun closeTab(tabId: String) = synchronized(this) {
         val cfg = _config.value
         // Never leave the user with zero tabs — the UI has no way to recover.
@@ -369,6 +406,13 @@ object WindowState {
         _config.value = cfg.copy(tabs = without)
     }
 
+    /**
+     * Set the display title of [tabId] to [title] (trimmed, max 80 chars).
+     * No-op if the title is empty or unchanged.
+     *
+     * @param tabId the id of the tab to rename
+     * @param title the new title text
+     */
     fun renameTab(tabId: String, title: String) = synchronized(this) {
         val sanitized = title.trim().take(80)
         if (sanitized.isEmpty()) return@synchronized
@@ -577,9 +621,24 @@ object WindowState {
         }
     }
 
+    /**
+     * Set the currently-selected file in the file-browser pane [paneId].
+     *
+     * @param paneId the leaf pane id
+     * @param relPath relative path of the selected file, or null to clear selection
+     * @return the updated [FileBrowserContent], or null if the pane was not found
+     */
     fun setFileBrowserSelected(paneId: String, relPath: String?): FileBrowserContent? =
         updateFileBrowserContent(paneId) { it.copy(selectedRelPath = relPath) }
 
+    /**
+     * Toggle the expanded state of a directory in the file-browser tree.
+     *
+     * @param paneId the leaf pane id
+     * @param dirRelPath relative path of the directory to expand/collapse
+     * @param expanded true to expand, false to collapse
+     * @return the updated [FileBrowserContent], or null if the pane was not found
+     */
     fun setFileBrowserExpanded(paneId: String, dirRelPath: String, expanded: Boolean): FileBrowserContent? =
         updateFileBrowserContent(paneId) {
             val next = if (expanded) it.expandedDirs + dirRelPath else it.expandedDirs - dirRelPath
@@ -743,6 +802,13 @@ object WindowState {
     }
 
 
+    /**
+     * Set the currently-selected file in the git pane [paneId].
+     *
+     * @param paneId the leaf pane id
+     * @param filePath the selected file path, or null to clear selection
+     * @return the updated [GitContent], or null if the pane was not found
+     */
     fun setGitSelected(paneId: String, filePath: String?): GitContent? =
         updateGitContent(paneId) { it.copy(selectedFilePath = filePath) }
 
@@ -765,6 +831,14 @@ object WindowState {
     fun setGitAutoRefresh(paneId: String, enabled: Boolean): GitContent? =
         updateGitContent(paneId) { it.copy(autoRefresh = enabled) }
 
+    /**
+     * Remove the leaf pane with [paneId] from the tree. Destroys any PTY
+     * session that is no longer referenced by any remaining pane. Tabs are
+     * not removed even if they become empty -- the empty-state placeholder
+     * lets the user create a new pane in-place.
+     *
+     * @param paneId the id of the leaf pane to close
+     */
     fun closePane(paneId: String) = synchronized(this) {
         val cfg = _config.value
         val before = collectSessionIds(cfg)
@@ -834,6 +908,13 @@ object WindowState {
         (before - after).forEach { TerminalSessions.destroy(it) }
     }
 
+    /**
+     * Set or clear the custom display name for [paneId]. An empty [title]
+     * clears the custom name and lets the cwd-based title take over.
+     *
+     * @param paneId the id of the leaf pane to rename
+     * @param title the new custom name, or empty to clear
+     */
     fun renamePane(paneId: String, title: String) = synchronized(this) {
         val sanitized = title.trim().take(80)
         // Empty input clears the custom name and lets the cwd-based title take
@@ -926,6 +1007,13 @@ object WindowState {
         return findParentSplit(node.first, paneId) ?: findParentSplit(node.second, paneId)
     }
 
+    /**
+     * Set the split ratio for split node [splitId]. The ratio is clamped
+     * to [0.05, 0.95] to prevent invisible panes.
+     *
+     * @param splitId the id of the split node
+     * @param ratio the new ratio (0.0 = all space to first child, 1.0 = all to second)
+     */
     fun setSplitRatio(splitId: String, ratio: Double) = synchronized(this) {
         val clamped = ratio.coerceIn(0.05, 0.95)
         val cfg = _config.value
@@ -1287,7 +1375,12 @@ object WindowState {
         }
     }
 
-    /** True iff [sessionId] is referenced by some leaf in the current config. */
+    /**
+     * Check whether [sessionId] is referenced by any leaf in the current config.
+     *
+     * @param sessionId the terminal session id to look for
+     * @return true if at least one leaf references this session
+     */
     fun hasSession(sessionId: String): Boolean =
         collectSessionIds(_config.value).contains(sessionId)
 

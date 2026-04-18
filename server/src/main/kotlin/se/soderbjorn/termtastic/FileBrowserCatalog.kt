@@ -1,3 +1,20 @@
+/**
+ * Filesystem listing and content serving for the file-browser pane.
+ *
+ * This file contains [FileBrowserCatalog], which provides one-level directory
+ * listings, recursive "expand all" walks, file content reading with binary
+ * detection, and glob/substring filtering. All path operations are sandboxed
+ * to the pane's working-directory root to prevent path-traversal attacks.
+ *
+ * Called by:
+ *  - [handleWindowCommand] in Application.kt for `FileBrowserListDir`,
+ *    `FileBrowserOpenFile`, `FileBrowserExpandAll`, and filter/sort commands.
+ *  - [buildFileBrowserDirEnvelope] to construct directory listing envelopes
+ *    pushed over the `/window` WebSocket.
+ *
+ * @see FileBrowserContent
+ * @see WindowState
+ */
 package se.soderbjorn.termtastic
 
 import org.slf4j.LoggerFactory
@@ -50,6 +67,13 @@ object FileBrowserCatalog {
         return { name -> regex.matches(name) }
     }
 
+    /**
+     * Convert a simple glob pattern (with `*`, `?`, and `[` metacharacters)
+     * to a case-insensitive [Regex].
+     *
+     * @param glob the glob pattern string
+     * @return a compiled regex that matches filenames against the glob
+     */
     private fun globToRegex(glob: String): Regex {
         val sb = StringBuilder("(?i)^")
         var i = 0
@@ -151,6 +175,16 @@ object FileBrowserCatalog {
         return dirs + files
     }
 
+    /**
+     * Recursively check whether [dirAbs] (or any subdirectory up to [maxDepth]
+     * levels deep) contains at least one file whose name satisfies [nameMatches].
+     * Used to prune empty directories from the tree when a filter is active.
+     *
+     * @param dirAbs absolute path to the directory to search
+     * @param nameMatches predicate compiled from the user's filter input
+     * @param maxDepth maximum recursion depth (default 8)
+     * @return true if at least one matching file exists in the subtree
+     */
     private fun dirHasMatch(
         dirAbs: Path,
         nameMatches: (String) -> Boolean,

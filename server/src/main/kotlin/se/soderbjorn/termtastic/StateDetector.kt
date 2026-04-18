@@ -1,3 +1,23 @@
+/**
+ * AI coding assistant state detection from terminal screen text.
+ *
+ * This file contains [StateDetector] and the [SessionState] data class.
+ * The detector scans rendered terminal text (provided by [ScreenEmulator])
+ * for distinctive UI patterns of Claude Code, OpenAI Codex CLI, and
+ * Gemini CLI to determine whether an AI assistant is actively working,
+ * waiting for user confirmation, or idle.
+ *
+ * Called by:
+ *  - [TerminalSession.detectState] on each session-state polling cycle
+ *    (every 3 seconds, driven from [TerminalSessions.resolveStates] in
+ *    Application.kt).
+ *  - The detected states are broadcast to connected clients via
+ *    [WindowEnvelope.State] messages over the `/window` WebSocket.
+ *
+ * @see ScreenEmulator
+ * @see TerminalSession
+ * @see SessionState
+ */
 package se.soderbjorn.termtastic
 
 /**

@@ -1,3 +1,21 @@
+/**
+ * Server-side git status and diff operations for the git pane.
+ *
+ * This file contains [GitCatalog], which shells out to the local `git` CLI
+ * to list uncommitted working-tree changes and produce structured diffs.
+ * It deliberately avoids a JGit dependency so it uses the exact same git
+ * binary the user has installed.
+ *
+ * Called by:
+ *  - [handleWindowCommand] in Application.kt for `GitList` and `GitDiff`
+ *    commands received over the `/window` WebSocket.
+ *  - [buildGitListEnvelope] to construct the file-change list envelope.
+ *  - [GitWatcher] callbacks to refresh the git pane on filesystem changes.
+ *
+ * @see DiffParser
+ * @see GitWatcher
+ * @see SyntaxHighlighter
+ */
 package se.soderbjorn.termtastic
 
 import org.slf4j.LoggerFactory
@@ -105,6 +123,12 @@ object GitCatalog {
      */
     fun detectLanguage(filePath: String): String? = LanguageDetector.detect(filePath)
 
+    /**
+     * Map a two-character git porcelain v1 status code to a [GitFileStatus].
+     *
+     * @param xy the two-character XY status code from `git status --porcelain=v1`
+     * @return the parsed status, or null if both characters indicate a clean file
+     */
     private fun parseStatus(xy: String): GitFileStatus? {
         val x = xy[0]
         val y = xy[1]
@@ -119,6 +143,15 @@ object GitCatalog {
         }
     }
 
+    /**
+     * Execute a `git` command in [cwd] with the given [args] and return
+     * its stdout as a string. Returns null on non-zero exit, timeout, or
+     * any exception.
+     *
+     * @param cwd the working directory to run `git` in
+     * @param args the git subcommand and arguments (e.g. `"status"`, `"--porcelain=v1"`)
+     * @return the command's stdout, or null on failure
+     */
     private fun runGit(cwd: Path, vararg args: String): String? {
         return try {
             val cmd = listOf("git") + args.toList()

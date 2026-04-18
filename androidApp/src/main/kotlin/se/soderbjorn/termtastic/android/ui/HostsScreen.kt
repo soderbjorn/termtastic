@@ -1,3 +1,16 @@
+/**
+ * Hosts/servers list screen for the Termtastic Android app.
+ *
+ * This is the app's landing screen. It displays the user's saved server
+ * entries from [se.soderbjorn.termtastic.android.data.HostsRepository] and
+ * provides add/edit/delete dialogs. Tapping a host initiates a WebSocket
+ * connection via [se.soderbjorn.termtastic.android.net.ConnectionHolder] and,
+ * on success, navigates to the [TreeScreen] overview.
+ *
+ * @see se.soderbjorn.termtastic.android.data.HostsRepository
+ * @see se.soderbjorn.termtastic.android.net.ConnectionHolder
+ * @see TreeScreen
+ */
 package se.soderbjorn.termtastic.android.ui
 
 import android.content.Context
@@ -74,11 +87,37 @@ import se.soderbjorn.termtastic.android.net.ConnectionHolder
 import se.soderbjorn.termtastic.client.ServerUrl
 import se.soderbjorn.termtastic.client.getOrCreateToken
 
+/**
+ * Sealed type representing the target of the host edit dialog.
+ *
+ * [Add] opens a blank form; [Edit] opens a pre-filled form for an existing entry.
+ */
 private sealed interface EditTarget {
+    /** Indicates the dialog should create a new host entry. */
     data object Add : EditTarget
+    /**
+     * Indicates the dialog should edit an existing host entry.
+     *
+     * @property entry the host entry to edit.
+     */
     data class Edit(val entry: HostEntry) : EditTarget
 }
 
+/**
+ * Landing screen showing the user's saved server hosts.
+ *
+ * Provides add, edit, and delete functionality for host entries. Tapping a
+ * host initiates a WebSocket connection to the Termtastic server; on success
+ * the [onConnected] callback navigates to the tree overview.
+ *
+ * Shows a "Waiting for approval..." label when the server has a pending
+ * device-approval dialog for this client.
+ *
+ * @param applicationContext Android application context for repository instantiation.
+ * @param onConnected callback invoked after a successful connection to a host.
+ * @see se.soderbjorn.termtastic.android.data.HostsRepository
+ * @see se.soderbjorn.termtastic.android.net.ConnectionHolder
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HostsScreen(
@@ -212,6 +251,13 @@ fun HostsScreen(
     }
 }
 
+/**
+ * Placeholder UI shown when no hosts have been saved yet.
+ *
+ * Displays a friendly message and a button to add the first host.
+ *
+ * @param onAdd callback invoked when the "Add host" button is tapped.
+ */
 @Composable
 private fun EmptyState(onAdd: () -> Unit) {
     Column(
@@ -244,6 +290,21 @@ private fun EmptyState(onAdd: () -> Unit) {
     }
 }
 
+/**
+ * A single row in the hosts list showing the label, host:port, and an
+ * overflow menu for edit/delete actions.
+ *
+ * When a connection attempt is in progress, the overflow menu is replaced
+ * by a progress spinner and optional "Waiting for approval" text.
+ *
+ * @param entry the host entry to render.
+ * @param connecting true while a connection attempt is in progress for this entry.
+ * @param pendingApproval true when the server is showing a device-approval dialog.
+ * @param enabled false to disable tap interactions (while another host is connecting).
+ * @param onConnect callback invoked when the row is tapped to connect.
+ * @param onEdit callback invoked from the overflow menu to edit this entry.
+ * @param onDelete callback invoked from the overflow menu to delete this entry.
+ */
 @Composable
 private fun HostRow(
     entry: HostEntry,
@@ -337,6 +398,16 @@ private fun HostRow(
     }
 }
 
+/**
+ * Dialog for adding or editing a host entry.
+ *
+ * Presents text fields for label, host, and port. The Save button is
+ * disabled until all fields contain valid input.
+ *
+ * @param initial the existing entry to edit, or null when adding a new one.
+ * @param onDismiss callback to close the dialog without saving.
+ * @param onSave callback with the validated label, host, and port values.
+ */
 @Composable
 private fun HostEditDialog(
     initial: HostEntry?,
@@ -398,6 +469,13 @@ private fun HostEditDialog(
     )
 }
 
+/**
+ * Confirmation dialog shown before deleting a host entry.
+ *
+ * @param entry the host entry about to be deleted.
+ * @param onDismiss callback to close the dialog without deleting.
+ * @param onConfirm callback to proceed with deletion.
+ */
 @Composable
 private fun DeleteHostDialog(
     entry: HostEntry,

@@ -1,3 +1,19 @@
+/**
+ * File browser pane UI component for the Termtastic web frontend.
+ *
+ * Renders a split-panel file browser with a navigable directory tree on the left
+ * and a rendered file preview (Markdown, source code, or binary placeholder) on the
+ * right. Supports filtering by glob pattern, sorting by name or modification time,
+ * expand/collapse all, and a draggable column divider for resizing.
+ *
+ * Directory listings and file contents are fetched from the server via
+ * [WindowCommand.FileBrowserListDir] and [WindowCommand.FileBrowserOpenFile].
+ * Incoming data is routed through [handlePaneContentMessage] in [WindowConnection].
+ *
+ * @see FileBrowserPaneState
+ * @see FileBrowserPaneView
+ * @see buildFileBrowserView
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -6,6 +22,16 @@ import org.w3c.dom.HTMLElement
 import org.w3c.dom.HTMLInputElement
 import org.w3c.dom.events.MouseEvent
 
+/**
+ * Mutable client-side state for a single file browser pane.
+ *
+ * Holds cached directory listings, the set of expanded directories, the currently
+ * selected file, and filter/sort preferences. This state persists across re-renders
+ * within the same session via the [fileBrowserPaneStates] registry in [WebState].
+ *
+ * @see FileBrowserPaneView
+ * @see renderFileBrowserTree
+ */
 class FileBrowserPaneState {
     val dirListings = HashMap<String, Array<dynamic>>()
     val expandedDirs = HashSet<String>()
@@ -16,11 +42,31 @@ class FileBrowserPaneState {
     var sortBy: String = "name"
 }
 
+/**
+ * Holds references to the live DOM elements of a file browser pane's two panels.
+ *
+ * @property listBody the scrollable container for the directory tree on the left
+ * @property rendered the container for the rendered file content on the right
+ */
 class FileBrowserPaneView(
     val listBody: HTMLElement,
     val rendered: HTMLElement,
 )
 
+/**
+ * Re-renders the directory tree in the left panel of a file browser pane.
+ *
+ * Builds a hierarchical list of file/directory rows from [state]'s cached
+ * directory listings, respecting expanded/collapsed state. Clicking a directory
+ * toggles its expansion and requests its listing from the server if not yet cached.
+ * Clicking a file sends [WindowCommand.FileBrowserOpenFile] to load its content.
+ *
+ * @param paneId the unique identifier of this file browser pane
+ * @param view the live DOM handles for the pane's list body and rendered area
+ * @param state the current client-side state (directory cache, selection, etc.)
+ * @see renderFileBrowserContent
+ * @see handlePaneContentMessage
+ */
 fun renderFileBrowserTree(paneId: String, view: FileBrowserPaneView, state: FileBrowserPaneState) {
     val savedScroll = view.listBody.scrollTop
     view.listBody.innerHTML = ""
@@ -111,6 +157,20 @@ fun renderFileBrowserTree(paneId: String, view: FileBrowserPaneView, state: File
     view.listBody.scrollTop = savedScroll
 }
 
+/**
+ * Renders file content in the right panel of a file browser pane.
+ *
+ * Displays different presentations depending on the file kind:
+ * - "Markdown": renders server-provided HTML directly
+ * - "Text": wraps syntax-highlighted HTML in a pre/code block
+ * - "Binary": shows a "Preview unavailable" placeholder
+ * - null/other: shows a "No document selected" empty state
+ *
+ * @param view the live DOM handles for the pane
+ * @param kind the content type returned by the server ("Markdown", "Text", "Binary", or null)
+ * @param html the server-rendered HTML content, or null
+ * @see renderFileBrowserTree
+ */
 fun renderFileBrowserContent(view: FileBrowserPaneView, kind: String?, html: String?) {
     view.rendered.innerHTML = ""
     if (kind == "Markdown") view.rendered.classList.remove("is-source")
@@ -148,6 +208,22 @@ fun renderFileBrowserContent(view: FileBrowserPaneView, kind: String?, html: Str
     }
 }
 
+/**
+ * Constructs the complete DOM subtree for a file browser pane, including
+ * the directory tree, content panel, column divider, and header toolbar controls
+ * (filter, sort, expand/collapse all, refresh).
+ *
+ * Called by [buildLeafCell] when a pane's content kind is "fileBrowser".
+ * Restores persisted state (expanded dirs, selected file, filter, sort, column width)
+ * from the leaf's content payload and triggers initial directory listing requests.
+ *
+ * @param paneId the unique pane identifier
+ * @param leaf the dynamic leaf node from the server config containing content state
+ * @param headerEl optional pane header element to inject toolbar buttons into
+ * @return the root HTMLElement for the file browser view
+ * @see buildLeafCell
+ * @see FileBrowserPaneState
+ */
 fun buildFileBrowserView(paneId: String, leaf: dynamic, headerEl: HTMLElement? = null): HTMLElement {
     val content = leaf.content
     val initialWidth = (content?.leftColumnWidthPx as? Number)?.toInt() ?: 240

@@ -1,3 +1,25 @@
+/**
+ * SQLite-backed persistent settings storage for Termtastic.
+ *
+ * This file contains [SettingsRepository], which wraps a SQLDelight-managed
+ * SQLite database behind a generic key/value API. It persists the window
+ * layout ([WindowConfig]), per-pane scrollback ring buffers, UI preferences
+ * (theme, sidebar width, etc. as a JSON blob), device-auth trusted/denied
+ * lists, and server feature flags (allow remote connections, Claude usage
+ * polling).
+ *
+ * The repository is created once in [Application.main] and threaded through
+ * to all consumers: [WindowState], [DeviceAuth], [SettingsDialog],
+ * [ClaudeUsageMonitor], and the `/api/ui-settings` REST endpoints.
+ *
+ * UI settings are also exposed as a [StateFlow] so the `/window` WebSocket
+ * can push live updates to all connected renderers when the user toggles
+ * dark/light mode.
+ *
+ * @see AppPaths
+ * @see WindowState
+ * @see DeviceAuth
+ */
 package se.soderbjorn.termtastic.persistence
 
 import app.cash.sqldelight.db.QueryResult
@@ -63,6 +85,17 @@ class SettingsRepository(dbFile: File) {
         )
     }
 
+    /**
+     * Load the persisted window layout configuration.
+     *
+     * Prefers the v2 key (post file-browser migration); falls back to v1
+     * once, migrating `MarkdownContent` discriminators to `FileBrowserContent`,
+     * and re-persists under the v2 key. Returns null if no config has been
+     * saved yet. Corrupt blobs are quarantined under a timestamped key.
+     *
+     * @return the deserialised [WindowConfig], or null if none exists
+     * @see saveWindowConfig
+     */
     fun loadWindowConfig(): WindowConfig? {
         // Prefer v2 (post file-browser migration). Fall back to v1 once, rewrite
         // any legacy MarkdownContent leaves as FileBrowserContent, and persist
@@ -108,32 +141,80 @@ class SettingsRepository(dbFile: File) {
         }
     }
 
+    /**
+     * Persist the window layout configuration to SQLite.
+     *
+     * Serialises [config] to JSON and upserts it under the current version key.
+     * Runs on [Dispatchers.IO] to avoid blocking the caller.
+     *
+     * @param config the window configuration to persist
+     * @see loadWindowConfig
+     */
     suspend fun saveWindowConfig(config: WindowConfig) = withContext(Dispatchers.IO) {
         val json = windowJson.encodeToString(WindowConfig.serializer(), config)
         database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V2, json)
     }
 
+    /**
+     * Load the persisted scrollback ring buffer for a pane.
+     *
+     * @param leafId the leaf node id whose scrollback to load
+     * @return the raw scrollback bytes, or null if none have been saved
+     */
     fun loadScrollback(leafId: String): ByteArray? =
         database.settingsQueries.selectScrollback(leafId).executeAsOneOrNull()
 
+    /**
+     * Persist the scrollback ring buffer for a pane.
+     *
+     * @param leafId the leaf node id to save scrollback for
+     * @param bytes the raw ring buffer bytes to persist
+     */
     suspend fun saveScrollback(leafId: String, bytes: ByteArray) = withContext(Dispatchers.IO) {
         database.settingsQueries.upsertScrollback(leafId, bytes, System.currentTimeMillis())
     }
 
+    /**
+     * Delete the persisted scrollback for a pane (used during GC of stale leaves).
+     *
+     * @param leafId the leaf node id whose scrollback to delete
+     */
     fun deleteScrollback(leafId: String) {
         database.settingsQueries.deleteScrollback(leafId)
     }
 
+    /**
+     * Return the set of all leaf ids that have persisted scrollback data.
+     * Used by the GC pass in [WindowState.initialize] to identify stale entries.
+     *
+     * @return set of leaf id strings
+     */
     fun allScrollbackLeafIds(): Set<String> =
         database.settingsQueries.selectAllScrollbackLeafIds().executeAsList().toSet()
 
+    /**
+     * Read a raw string value from the settings key/value store.
+     *
+     * @param key the settings key
+     * @return the stored value, or null if the key does not exist
+     */
     fun getString(key: String): String? =
         database.settingsQueries.selectByKey(key).executeAsOneOrNull()
 
+    /**
+     * Write a raw string value to the settings key/value store (upsert).
+     *
+     * @param key the settings key
+     * @param value the string value to store
+     */
     fun putString(key: String, value: String) {
         database.settingsQueries.upsert(key, value)
     }
 
+    /**
+     * Close the underlying SQLite JDBC driver. Called from the shutdown hook
+     * in [Application.main].
+     */
     fun close() {
         driver.close()
     }
@@ -163,8 +244,21 @@ class SettingsRepository(dbFile: File) {
             .getOrElse { JsonObject(emptyMap()) }
     }
 
+    /**
+     * Return the current UI settings JSON object (in-memory snapshot).
+     *
+     * @return the merged UI settings as a [JsonObject]
+     */
     fun getUiSettings(): JsonObject = _uiSettings.value
 
+    /**
+     * Merge [incoming] keys into the existing UI settings, persist the result,
+     * and update the in-memory [uiSettings] flow.
+     *
+     * @param incoming JSON object with the keys to merge (new keys are added,
+     *                 existing keys are overwritten)
+     * @return the merged [JsonObject] after persistence
+     */
     fun mergeUiSettings(incoming: JsonObject): JsonObject {
         val existing = _uiSettings.value
         val merged = JsonObject(existing + incoming)
@@ -182,13 +276,28 @@ class SettingsRepository(dbFile: File) {
     fun isAllowRemoteConnections(): Boolean =
         getString(ALLOW_REMOTE_KEY)?.equals("true", ignoreCase = true) == true
 
+    /**
+     * Toggle whether the server accepts connections from non-loopback addresses.
+     *
+     * @param value true to allow remote connections, false for localhost only
+     */
     fun setAllowRemoteConnections(value: Boolean) {
         putString(ALLOW_REMOTE_KEY, value.toString())
     }
 
+    /**
+     * Whether the Claude Code usage polling monitor is enabled.
+     *
+     * @return true if the user has opted in to usage data collection
+     */
     fun isClaudeUsagePollEnabled(): Boolean =
         getString(CLAUDE_USAGE_POLL_KEY)?.equals("true", ignoreCase = true) == true
 
+    /**
+     * Toggle the Claude Code usage polling monitor.
+     *
+     * @param value true to enable polling, false to disable
+     */
     fun setClaudeUsagePollEnabled(value: Boolean) {
         putString(CLAUDE_USAGE_POLL_KEY, value.toString())
     }

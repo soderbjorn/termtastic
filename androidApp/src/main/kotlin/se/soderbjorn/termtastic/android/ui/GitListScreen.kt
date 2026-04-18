@@ -1,3 +1,14 @@
+/**
+ * Git changed-files list screen for the Termtastic Android app.
+ *
+ * Queries the server for the current `git status` of the connected project
+ * and displays changed files grouped by directory, each with a coloured
+ * single-letter status badge (M/A/D/R/U). Tapping a file navigates to
+ * [GitDiffScreen] to show the unified diff.
+ *
+ * @see GitDiffScreen
+ * @see se.soderbjorn.termtastic.android.ui.TreeScreen
+ */
 package se.soderbjorn.termtastic.android.ui
 
 import androidx.activity.compose.BackHandler
@@ -48,6 +59,17 @@ import se.soderbjorn.termtastic.android.net.ConnectionHolder
 
 // Palette tokens live in SidebarPalette.kt — shared with TreeScreen.
 
+/**
+ * Displays the list of changed files from `git status`, grouped by directory.
+ *
+ * Each file row shows a coloured status badge (M/A/D/R/U) and the file name.
+ * Tapping a file navigates to [GitDiffScreen] to view its unified diff.
+ *
+ * @param paneId the server-side pane identifier owning the git session.
+ * @param onOpenFile callback invoked with the file path when the user taps a file.
+ * @param onBack callback invoked when the user navigates back.
+ * @see GitDiffScreen
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GitListScreen(
@@ -139,6 +161,13 @@ fun GitListScreen(
     }
 }
 
+/**
+ * Section header row that displays a directory name in uppercase.
+ *
+ * Used to group changed files by their parent directory in [GitListScreen].
+ *
+ * @param directory the directory path to display; empty string becomes "(ROOT)".
+ */
 @Composable
 private fun GitSectionHeader(directory: String) {
     Text(
@@ -155,6 +184,12 @@ private fun GitSectionHeader(directory: String) {
     )
 }
 
+/**
+ * A single row in the git changed-files list showing the file name, status badge, and path.
+ *
+ * @param entry the git file entry to render.
+ * @param onClick callback invoked when the row is tapped to view the diff.
+ */
 @Composable
 private fun GitFileRow(entry: GitFileEntry, onClick: () -> Unit) {
     val fileName = entry.filePath.substringAfterLast('/')

@@ -1,3 +1,16 @@
+/**
+ * Main application ViewModel that combines window layout, per-session state,
+ * and UI settings into a single observable [AppBackingViewModel.State].
+ *
+ * Platform UI layers (Compose on Android, SwiftUI on iOS, xterm.js on web)
+ * collect [AppBackingViewModel.stateFlow] to drive their rendering. Layout
+ * mutation methods (tab/pane CRUD, split, float, pop-out) delegate to the
+ * server via [WindowSocket]; settings mutations are persisted through
+ * [SettingsPersister].
+ *
+ * @see se.soderbjorn.termtastic.client.WindowSocket
+ * @see SettingsPersister
+ */
 package se.soderbjorn.termtastic.client.viewmodel
 
 import kotlinx.coroutines.coroutineScope
@@ -24,6 +37,15 @@ import se.soderbjorn.termtastic.client.WindowStateRepository
 import se.soderbjorn.termtastic.client.parsePaneStatusDisplay
 import se.soderbjorn.termtastic.recommendedThemes
 
+/**
+ * Backing ViewModel for the top-level application screen. Merges server-pushed
+ * window config, session states, and UI settings into a single [State] flow.
+ *
+ * @param windowSocket     the live `/window` WebSocket for sending commands.
+ * @param windowState      the shared [WindowStateRepository] cache.
+ * @param settingsPersister optional callback to persist UI setting changes to
+ *   the server; `null` in unit tests.
+ */
 class AppBackingViewModel(
     private val windowSocket: WindowSocket,
     private val windowState: WindowStateRepository,
@@ -32,6 +54,22 @@ class AppBackingViewModel(
     private val _stateFlow = MutableStateFlow(State())
     val stateFlow: StateFlow<State> = _stateFlow.asStateFlow()
 
+    /**
+     * Immutable snapshot of the entire application UI state. Emitted via
+     * [stateFlow] whenever any constituent value changes.
+     *
+     * @property config             the current window layout, or `null` before
+     *   the first server push.
+     * @property sessionStates      per-session state labels keyed by session ID.
+     * @property pendingApproval    `true` if the device is awaiting approval.
+     * @property claudeUsage        latest AI token usage data, if available.
+     * @property theme              the active terminal colour theme.
+     * @property appearance         the user's light/dark mode preference.
+     * @property paneStatusDisplay  how pane activity is indicated in the sidebar.
+     * @property paneFontSize       per-pane font size override, or `null` for default.
+     * @property sidebarWidth       persisted sidebar width in pixels, or `null`.
+     * @property desktopNotifications whether desktop notifications are enabled.
+     */
     data class State(
         val config: WindowConfig? = null,
         val sessionStates: Map<String, String?> = emptyMap(),
@@ -45,6 +83,11 @@ class AppBackingViewModel(
         val desktopNotifications: Boolean = true,
     )
 
+    /**
+     * Start collecting window state and envelope streams. This is a long-running
+     * suspend function -- call it from a lifecycle-scoped coroutine. It returns
+     * only when the enclosing scope is cancelled.
+     */
     suspend fun run() {
         coroutineScope {
             launch {
@@ -78,31 +121,61 @@ class AppBackingViewModel(
 
     // ── UI settings mutations ───────────────────────────────────────
 
+    /**
+     * Update the terminal colour theme and persist the choice to the server.
+     *
+     * @param theme the new theme to apply.
+     */
     suspend fun setTheme(theme: TerminalTheme) {
         emit(_stateFlow.value.copy(theme = theme))
         settingsPersister?.putSetting("theme", theme.name)
     }
 
+    /**
+     * Update the light/dark appearance mode and persist it to the server.
+     *
+     * @param appearance the new appearance preference.
+     */
     suspend fun setAppearance(appearance: Appearance) {
         emit(_stateFlow.value.copy(appearance = appearance))
         settingsPersister?.putSetting("appearance", appearance.name)
     }
 
+    /**
+     * Update the pane activity indicator style and persist it to the server.
+     *
+     * @param display the new display mode.
+     */
     suspend fun setPaneStatusDisplay(display: PaneStatusDisplay) {
         emit(_stateFlow.value.copy(paneStatusDisplay = display))
         settingsPersister?.putSetting("paneStatusDisplay", display.name)
     }
 
+    /**
+     * Update the per-pane font size and persist it to the server.
+     *
+     * @param size the new font size in points.
+     */
     suspend fun setPaneFontSize(size: Int) {
         emit(_stateFlow.value.copy(paneFontSize = size))
         settingsPersister?.putSetting("paneFontSize", size.toString())
     }
 
+    /**
+     * Update the sidebar width and persist it to the server.
+     *
+     * @param width the new width in pixels.
+     */
     suspend fun setSidebarWidth(width: Int) {
         emit(_stateFlow.value.copy(sidebarWidth = width))
         settingsPersister?.putSetting("sidebarWidth", width.toString())
     }
 
+    /**
+     * Enable or disable desktop notifications and persist the preference.
+     *
+     * @param enabled `true` to enable notifications.
+     */
     suspend fun setDesktopNotifications(enabled: Boolean) {
         emit(_stateFlow.value.copy(desktopNotifications = enabled))
         settingsPersister?.putSetting("desktopNotifications", enabled.toString())
@@ -110,112 +183,147 @@ class AppBackingViewModel(
 
     // ── Layout mutations (delegated to server) ──────────────────────
 
+    /** Tell the server to switch to tab [tabId]. */
     suspend fun setActiveTab(tabId: String) {
         windowSocket.send(WindowCommand.SetActiveTab(tabId = tabId))
     }
 
+    /** Focus [paneId] within [tabId]. */
     suspend fun setFocusedPane(tabId: String, paneId: String) {
         windowSocket.send(WindowCommand.SetFocusedPane(tabId = tabId, paneId = paneId))
     }
 
+    /** Create a new tab with a default terminal pane. */
     suspend fun addTab() {
         windowSocket.send(WindowCommand.AddTab)
     }
 
+    /** Close tab [tabId] and all panes within it. */
     suspend fun closeTab(tabId: String) {
         windowSocket.send(WindowCommand.CloseTab(tabId = tabId))
     }
 
+    /** Rename tab [tabId] to [title]. */
     suspend fun renameTab(tabId: String, title: String) {
         windowSocket.send(WindowCommand.RenameTab(tabId = tabId, title = title))
     }
 
+    /** Reorder [tabId] relative to [targetTabId]. */
     suspend fun moveTab(tabId: String, targetTabId: String, before: Boolean) {
         windowSocket.send(WindowCommand.MoveTab(tabId = tabId, targetTabId = targetTabId, before = before))
     }
 
+    /** Close pane [paneId] (terminal, file-browser, or git). */
     suspend fun closePane(paneId: String) {
         windowSocket.send(WindowCommand.Close(paneId = paneId))
     }
 
+    /** Close all panes that share [sessionId] and terminate the PTY. */
     suspend fun closeSession(sessionId: String) {
         windowSocket.send(WindowCommand.CloseSession(sessionId = sessionId))
     }
 
+    /** Set a custom title for [paneId]. */
     suspend fun renamePane(paneId: String, title: String) {
         windowSocket.send(WindowCommand.Rename(paneId = paneId, title = title))
     }
 
+    /** Split [paneId] and create a new terminal in [direction]. */
     suspend fun splitTerminal(paneId: String, direction: SplitDirection) {
         windowSocket.send(WindowCommand.SplitTerminal(paneId = paneId, direction = direction))
     }
 
+    /** Split [paneId] and create a file browser in [direction]. */
     suspend fun splitFileBrowser(paneId: String, direction: SplitDirection) {
         windowSocket.send(WindowCommand.SplitFileBrowser(paneId = paneId, direction = direction))
     }
 
+    /** Split [paneId] and create a git pane in [direction]. */
     suspend fun splitGit(paneId: String, direction: SplitDirection) {
         windowSocket.send(WindowCommand.SplitGit(paneId = paneId, direction = direction))
     }
 
+    /** Split [paneId] and link a new pane to [targetSessionId]. */
     suspend fun splitLink(paneId: String, direction: SplitDirection, targetSessionId: String) {
         windowSocket.send(WindowCommand.SplitLink(paneId = paneId, direction = direction, targetSessionId = targetSessionId))
     }
 
+    /** Add a new terminal pane to [tabId]. */
     suspend fun addPaneToTab(tabId: String) {
         windowSocket.send(WindowCommand.AddPaneToTab(tabId = tabId))
     }
 
+    /** Add a file-browser pane to [tabId]. */
     suspend fun addFileBrowserToTab(tabId: String) {
         windowSocket.send(WindowCommand.AddFileBrowserToTab(tabId = tabId))
     }
 
+    /** Add a git pane to [tabId]. */
     suspend fun addGitToTab(tabId: String) {
         windowSocket.send(WindowCommand.AddGitToTab(tabId = tabId))
     }
 
+    /** Add a linked pane to [tabId] sharing [targetSessionId]. */
     suspend fun addLinkToTab(tabId: String, targetSessionId: String) {
         windowSocket.send(WindowCommand.AddLinkToTab(tabId = tabId, targetSessionId = targetSessionId))
     }
 
+    /** Toggle [paneId] between docked and floating state. */
     suspend fun toggleFloating(paneId: String) {
         windowSocket.send(WindowCommand.ToggleFloating(paneId = paneId))
     }
 
+    /** Update the floating geometry (position and size) for [paneId]. */
     suspend fun setFloatingGeom(paneId: String, x: Double, y: Double, width: Double, height: Double) {
         windowSocket.send(WindowCommand.SetFloatingGeom(paneId = paneId, x = x, y = y, width = width, height = height))
     }
 
+    /** Bring floating [paneId] to the front of the z-order. */
     suspend fun raiseFloating(paneId: String) {
         windowSocket.send(WindowCommand.RaiseFloating(paneId = paneId))
     }
 
+    /** Adjust the split ratio for [splitId] (0.0 -- 1.0). */
     suspend fun setRatio(splitId: String, ratio: Double) {
         windowSocket.send(WindowCommand.SetRatio(splitId = splitId, ratio = ratio))
     }
 
+    /** Move [paneId] from its current tab to [targetTabId]. */
     suspend fun movePaneToTab(paneId: String, targetTabId: String) {
         windowSocket.send(WindowCommand.MovePaneToTab(paneId = paneId, targetTabId = targetTabId))
     }
 
+    /** Pop [paneId] out into its own OS-level window. */
     suspend fun popOut(paneId: String) {
         windowSocket.send(WindowCommand.PopOut(paneId = paneId))
     }
 
+    /** Dock a previously popped-out [paneId] back into the main window. */
     suspend fun dockPoppedOut(paneId: String) {
         windowSocket.send(WindowCommand.DockPoppedOut(paneId = paneId))
     }
 
+    /** Ask the server to re-send Claude AI usage data. */
     suspend fun refreshUsage() {
         windowSocket.send(WindowCommand.RefreshUsage)
     }
 
+    /** Request the server to open the settings panel. */
     suspend fun openSettings() {
         windowSocket.send(WindowCommand.OpenSettings)
     }
 
     // ── Internal ────────────────────────────────────────────────────
 
+    /**
+     * Apply a server-pushed UI settings JSON object to the local state.
+     * Called when a [WindowEnvelope.UiSettings] envelope arrives.
+     *
+     * Unknown keys are silently ignored; unknown enum values fall back to the
+     * current state so a bad server blob never crashes the client.
+     *
+     * @param settings the raw JSON object from the server.
+     */
     fun applyServerUiSettings(settings: kotlinx.serialization.json.JsonObject) {
         val cur = _stateFlow.value
         val themeName = settings["theme"]?.jsonPrimitive?.contentOrNull

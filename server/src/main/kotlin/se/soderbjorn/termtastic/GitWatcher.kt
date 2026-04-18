@@ -1,3 +1,19 @@
+/**
+ * Filesystem watcher for git working-tree changes.
+ *
+ * This file contains [GitWatcher] and [GitWatchHandle], which together provide
+ * per-pane recursive filesystem watching for the git pane's "auto-refresh"
+ * toggle. When enabled, changes to tracked files, `.git/index`, and
+ * `.git/refs/` trigger a debounced callback that refreshes the git file list
+ * and the currently-selected diff.
+ *
+ * Lifecycle is managed by [WindowConnectionContext]: each `/window` WebSocket
+ * connection owns its watcher handles, and they are closed when the connection
+ * drops or the pane is closed.
+ *
+ * @see GitCatalog
+ * @see WindowConnectionContext
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.coroutines.CoroutineScope
@@ -29,10 +45,25 @@ import java.util.concurrent.TimeUnit
  * The debounce is slightly longer than the markdown watcher (500 ms vs
  * 300 ms) because git operations are heavier.
  */
+/**
+ * Handle to a running git filesystem watcher. Holds the background coroutine
+ * [Job] and the [WatchService] so both can be torn down when the pane is
+ * closed or the WebSocket disconnects.
+ *
+ * @property job the coroutine running the watch loop
+ * @property service the Java NIO [WatchService] being polled
+ *
+ * @see GitWatcher.register
+ * @see WindowConnectionContext
+ */
 class GitWatchHandle internal constructor(
     private val job: Job,
     private val service: WatchService,
 ) {
+    /**
+     * Cancel the watch coroutine and close the underlying [WatchService],
+     * releasing file descriptors.
+     */
     fun close() {
         job.cancel()
         runCatching { service.close() }
@@ -49,6 +80,20 @@ object GitWatcher {
         ".git", "node_modules", "build", "target", "dist", "out", ".gradle", ".idea",
     )
 
+    /**
+     * Start watching [root] for filesystem changes and invoke [onChange]
+     * (debounced at 500 ms) when something changes in the working tree
+     * or `.git/` metadata.
+     *
+     * Returns a [GitWatchHandle] that the caller must [close][GitWatchHandle.close]
+     * when watching is no longer needed, or null if [root] is not a valid
+     * directory.
+     *
+     * @param scope the coroutine scope owning the watch loop's lifecycle
+     * @param root the git repository root directory to watch
+     * @param onChange suspend callback invoked on each debounced change event
+     * @return a handle for cancelling the watcher, or null on failure
+     */
     fun register(
         scope: CoroutineScope,
         root: Path,

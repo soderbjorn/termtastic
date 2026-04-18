@@ -1,3 +1,20 @@
+/**
+ * Monitors Claude CLI subscription usage by running a hidden PTY session.
+ *
+ * This file contains [ClaudeUsageMonitor], which spawns a background `claude`
+ * process, periodically types the `/usage` slash command, scrapes the rendered
+ * screen output via [ScreenEmulator], and parses the result into a
+ * [ClaudeUsageData] object. The parsed data is emitted on a [SharedFlow] that
+ * the `/window` WebSocket pushes to connected clients as a
+ * [WindowEnvelope.ClaudeUsage] message.
+ *
+ * Lifecycle is controlled from [Application.main]: the monitor is started on
+ * boot if the user has opted in via [SettingsRepository.isClaudeUsagePollEnabled],
+ * and can be toggled at runtime from the [SettingsDialog].
+ *
+ * @see ClaudeUsageData
+ * @see SettingsDialog.ClaudeUsageSection
+ */
 package se.soderbjorn.termtastic
 
 import com.pty4j.PtyProcessBuilder
@@ -28,6 +45,11 @@ class ClaudeUsageMonitor {
         refreshRequested.trySend(Unit)
     }
 
+    /**
+     * Start the background monitoring loop. Spawns a `claude` process in a
+     * hidden PTY and begins periodically issuing `/usage` commands.
+     * No-op if already running.
+     */
     fun start() {
         if (scope != null) return
         log.info("ClaudeUsageMonitor: starting")
@@ -36,6 +58,11 @@ class ClaudeUsageMonitor {
         s.launch { runLoop() }
     }
 
+    /**
+     * Stop the monitoring loop, destroy the hidden PTY process, and emit
+     * a null value on [usageData] to signal that usage data is no longer
+     * available.
+     */
     fun stop() {
         log.info("ClaudeUsageMonitor: stopping")
         scope?.cancel()
@@ -47,6 +74,10 @@ class ClaudeUsageMonitor {
         _usageData.tryEmit(null)
     }
 
+    /**
+     * Top-level loop that keeps retrying [runSession] on failure with a
+     * 30-second back-off. Runs until the coroutine scope is cancelled.
+     */
     private suspend fun runLoop() {
         while (coroutineContext.isActive) {
             try {
@@ -60,6 +91,11 @@ class ClaudeUsageMonitor {
         }
     }
 
+    /**
+     * Run a single Claude CLI session: find the `claude` binary, spawn it
+     * in a hidden PTY, wait for the prompt, then loop issuing `/usage`
+     * commands every 10 minutes (or sooner on [requestRefresh]).
+     */
     private suspend fun runSession() {
         val claudePath = findClaude() ?: run {
             log.warn("ClaudeUsageMonitor: 'claude' not found on PATH")
@@ -152,6 +188,15 @@ class ClaudeUsageMonitor {
         }
     }
 
+    /**
+     * Wait for the Claude CLI's input prompt to appear on [screen].
+     * If a "Quick safety check" trust prompt is detected, auto-confirms it
+     * by sending a carriage return.
+     *
+     * @param screen the headless emulator tracking the CLI's output
+     * @param pty the Claude CLI process (used to write confirmation input)
+     * @param timeoutMs maximum time to wait for the prompt, in milliseconds
+     */
     private suspend fun waitForPrompt(screen: ScreenEmulator, pty: Process, timeoutMs: Long) {
         var deadline = System.currentTimeMillis() + timeoutMs
         var trustConfirmed = false
@@ -187,6 +232,18 @@ class ClaudeUsageMonitor {
         private val PERCENT_REGEX = Regex("""(\d+)%\s*used""")
         private val RESETS_REGEX = Regex("""[Rr]esets\s+(.+)""")
 
+        /**
+         * Parse the rendered `/usage` screen text into a [ClaudeUsageData].
+         *
+         * Extracts session percentage, weekly (all models) percentage, weekly
+         * Sonnet percentage, reset times, and extra-usage status from the
+         * screen output.
+         *
+         * @param text the full visible text from the [ScreenEmulator] after
+         *             the `/usage` command has rendered
+         * @return parsed usage data, or null if the "Current session" section
+         *         was not found in the text
+         */
         fun parseUsageScreen(text: String): ClaudeUsageData? {
             val lines = text.lines()
 
@@ -237,6 +294,14 @@ class ClaudeUsageMonitor {
             )
         }
 
+        /**
+         * Search for a `"N% used"` pattern in [lines] starting at [startIdx],
+         * checking up to 4 lines ahead.
+         *
+         * @param lines all screen lines
+         * @param startIdx the line index of the section header
+         * @return the extracted percentage, or null if not found
+         */
         private fun findPercent(lines: List<String>, startIdx: Int): Int? {
             for (i in startIdx until minOf(startIdx + 4, lines.size)) {
                 val match = PERCENT_REGEX.find(lines[i])
@@ -245,6 +310,15 @@ class ClaudeUsageMonitor {
             return null
         }
 
+        /**
+         * Search for a `"Resets ..."` line in [lines] between [startIdx] and
+         * [endIdx] (or up to 4 lines ahead if [endIdx] is null).
+         *
+         * @param lines all screen lines
+         * @param startIdx the line index of the section header
+         * @param endIdx optional upper bound (exclusive) for the search window
+         * @return the reset time text, or an empty string if not found
+         */
         private fun findReset(lines: List<String>, startIdx: Int, endIdx: Int?): String {
             val end = endIdx ?: minOf(startIdx + 4, lines.size)
             for (i in startIdx until minOf(end, lines.size)) {
@@ -254,6 +328,14 @@ class ClaudeUsageMonitor {
             return ""
         }
 
+        /**
+         * Locate the `claude` CLI binary on the system.
+         *
+         * Checks well-known install locations first (standalone binaries, then
+         * npm-installed versions), and falls back to `which claude` on the PATH.
+         *
+         * @return absolute path to the `claude` binary, or null if not found
+         */
         private fun findClaude(): String? {
             // Prefer standalone (compiled) binaries first — they don't need
             // Node on the PATH, which is often absent in GUI-launched

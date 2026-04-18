@@ -1,3 +1,20 @@
+/**
+ * Core Termtastic client facade and networking entry point.
+ *
+ * [TermtasticClient] is the top-level object every platform creates at startup.
+ * It owns the Ktor [HttpClient] (with WebSockets and timeout configuration),
+ * the device auth token, client identity metadata, and the process-lifetime
+ * [WindowStateRepository]. Factory methods [TermtasticClient.openWindowSocket]
+ * and [TermtasticClient.openPtySocket] return hot socket wrappers for the two
+ * live server endpoints.
+ *
+ * Ktor engine selection is automatic via Gradle per-target dependencies (OkHttp
+ * on Android, CIO on JVM, JS fetch in the browser, Darwin on iOS).
+ *
+ * @see WindowSocket
+ * @see PtySocket
+ * @see ServerUrl
+ */
 package se.soderbjorn.termtastic.client
 
 import io.ktor.client.HttpClient
@@ -36,6 +53,21 @@ data class ClientIdentity(
     val selfReportedIp: String? = null,
 )
 
+/**
+ * Central client facade for communicating with a Termtastic server.
+ *
+ * Holds the [serverUrl], [authToken], and [identity] needed to authenticate
+ * every HTTP and WebSocket request. Use [openWindowSocket] to subscribe to
+ * window layout changes and [openPtySocket] to stream terminal I/O.
+ *
+ * @param serverUrl the server endpoint descriptor.
+ * @param authToken the base64url device-auth token (see [getOrCreateToken]).
+ * @param identity  self-reported client metadata sent to the server.
+ * @param scope     coroutine scope for socket reader loops; defaults to a
+ *   [SupervisorJob] on [Dispatchers.Default].
+ *
+ * @see createTermtasticClient
+ */
 class TermtasticClient(
     val serverUrl: ServerUrl,
     val authToken: String,
@@ -128,6 +160,11 @@ class TermtasticClient(
         return out
     }
 
+    /**
+     * Shut down the underlying Ktor [HttpClient], releasing connection pools
+     * and any associated resources. After this call the client is no longer
+     * usable.
+     */
     fun close() {
         httpClient.close()
     }

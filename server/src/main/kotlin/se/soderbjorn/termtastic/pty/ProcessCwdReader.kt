@@ -1,3 +1,24 @@
+/**
+ * OS-level process working directory reader (polling fallback).
+ *
+ * This file contains [ProcessCwdReader], which reads a process's current
+ * working directory directly from the operating system. It serves as a
+ * fallback for shells that do not emit OSC 7 escape sequences (or when the
+ * shell init bootstrap from [ShellInitFiles] did not take effect).
+ *
+ * Used by [TerminalSession]'s polling coroutine, which calls [ProcessCwdReader.read]
+ * every 3 seconds with the PTY's PID and updates [TerminalSession.cwd] if the
+ * directory has changed.
+ *
+ * Platform support:
+ *  - Linux: reads the `/proc/<pid>/cwd` symlink.
+ *  - macOS: runs `lsof -a -p <pid> -d cwd -Fn`.
+ *  - Windows: not supported (returns null); ConPTY shells typically handle OSC 7.
+ *
+ * @see Osc7Scanner
+ * @see ShellInitFiles
+ * @see TerminalSession
+ */
 package se.soderbjorn.termtastic.pty
 
 import java.nio.file.Files
@@ -22,6 +43,13 @@ internal object ProcessCwdReader {
     private val isMac = os.contains("mac") || os.contains("darwin")
     private val isLinux = !isMac && os.contains("linux")
 
+    /**
+     * Read the current working directory of process [pid].
+     *
+     * @param pid the OS process id to query
+     * @return the absolute path of the process's cwd, or null on failure
+     *         or unsupported platform
+     */
     fun read(pid: Long): String? = try {
         when {
             isLinux -> Files.readSymbolicLink(Path.of("/proc/$pid/cwd")).toString()
@@ -32,6 +60,12 @@ internal object ProcessCwdReader {
         null
     }
 
+    /**
+     * Read the cwd of [pid] on macOS by running `lsof -a -p <pid> -d cwd -Fn`.
+     *
+     * @param pid the process id to query
+     * @return the cwd path, or null if `lsof` fails or times out
+     */
     private fun readMacViaLsof(pid: Long): String? {
         val proc = ProcessBuilder("lsof", "-a", "-p", pid.toString(), "-d", "cwd", "-Fn")
             .redirectErrorStream(true)

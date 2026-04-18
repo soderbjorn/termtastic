@@ -1,3 +1,12 @@
+/**
+ * Android activity entry point for the Termtastic app.
+ *
+ * Defines the Material 3 dark and light color schemes used throughout the app and
+ * hosts the single [MainActivity] that bootstraps Jetpack Compose rendering with
+ * edge-to-edge display support. The activity delegates all UI to [TermtasticApp].
+ *
+ * @see se.soderbjorn.termtastic.android.ui.TermtasticApp
+ */
 package se.soderbjorn.termtastic.android
 
 import android.os.Bundle
@@ -17,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import se.soderbjorn.termtastic.android.ui.TermtasticApp
 
+/** Dark Material 3 colour scheme using amber as the primary accent and green as secondary. */
 private val TermtasticDarkColorScheme = darkColorScheme(
     primary = Color(0xFFF4B869),        // Amber accent
     onPrimary = Color(0xFF1C1C1E),
@@ -36,6 +46,7 @@ private val TermtasticDarkColorScheme = darkColorScheme(
     onError = Color(0xFF1C1C1E),
 )
 
+/** Light Material 3 colour scheme, mirroring the dark variant with adjusted contrast. */
 private val TermtasticLightColorScheme = lightColorScheme(
     primary = Color(0xFFD4943D),        // Darker amber for light
     onPrimary = Color(0xFFFFFFFF),
@@ -55,7 +66,15 @@ private val TermtasticLightColorScheme = lightColorScheme(
     onError = Color(0xFFFFFFFF),
 )
 
+/**
+ * Single-activity entry point for the Termtastic Android app.
+ *
+ * Enables edge-to-edge rendering, applies the adaptive dark/light Material 3
+ * theme, and sets [TermtasticApp] as the root composable inside a full-screen
+ * [Surface].
+ */
 class MainActivity : ComponentActivity() {
+    /** @param savedInstanceState standard Android saved-state bundle (unused). */
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)

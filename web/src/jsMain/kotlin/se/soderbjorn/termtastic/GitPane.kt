@@ -1,3 +1,19 @@
+/**
+ * Git diff/status pane UI component for the Termtastic web frontend.
+ *
+ * Renders a split-panel view with a list of uncommitted changed files on the left
+ * and a diff viewer on the right. Supports inline, split, and graphical (side-by-side
+ * with SVG connector lines) diff modes, text search within diffs, auto-refresh,
+ * and a draggable column divider.
+ *
+ * File lists and diffs are fetched from the server via [WindowCommand.GitList] and
+ * [WindowCommand.GitDiff]. Incoming data is routed through [handlePaneContentMessage]
+ * in [WindowConnection].
+ *
+ * @see GitPaneState
+ * @see GitPaneView
+ * @see buildGitView
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -7,6 +23,16 @@ import org.w3c.dom.HTMLInputElement
 import org.w3c.dom.events.MouseEvent
 import kotlin.js.json
 
+/**
+ * Mutable client-side state for a single git pane.
+ *
+ * Tracks the list of changed file entries, the currently selected file,
+ * cached diff HTML, diff mode preferences, and search state. Persists
+ * across re-renders via the [gitPaneStates] registry in [WebState].
+ *
+ * @see GitPaneView
+ * @see renderGitList
+ */
 class GitPaneState {
     var entries: dynamic = null
     var selectedFilePath: String? = null
@@ -18,6 +44,14 @@ class GitPaneState {
     var searchMatchIndex: Int = 0
 }
 
+/**
+ * Holds references to the live DOM elements of a git pane's panels and search controls.
+ *
+ * @property listBody the scrollable container for the changed files list
+ * @property diffPane the container for the rendered diff content
+ * @property searchCounter the element displaying "N/M" search match counter
+ * @property searchNavButtons navigation buttons for stepping through search matches
+ */
 class GitPaneView(
     val listBody: HTMLElement,
     val diffPane: HTMLElement,
@@ -25,6 +59,12 @@ class GitPaneView(
     var searchNavButtons: List<HTMLElement> = emptyList(),
 )
 
+/**
+ * Updates the "active" CSS class on file list items to highlight the currently selected file.
+ *
+ * @param view the git pane's live DOM handles
+ * @param filePath the path of the currently selected file, or null to deselect all
+ */
 fun updateGitListActiveFile(view: GitPaneView, filePath: String?) {
     val items = view.listBody.querySelectorAll(".git-list-item")
     for (i in 0 until items.length) {
@@ -34,6 +74,17 @@ fun updateGitListActiveFile(view: GitPaneView, filePath: String?) {
     }
 }
 
+/**
+ * Re-renders the changed files list in the left panel, grouped by parent directory.
+ *
+ * Each file entry shows a status badge (A/M/D/R/U) and basename. Clicking a file
+ * sends [WindowCommand.GitDiff] to fetch its diff. Directory sections are collapsible
+ * with smooth CSS transitions.
+ *
+ * @param paneId the unique pane identifier
+ * @param view the git pane's live DOM handles
+ * @param state the current client-side git pane state
+ */
 fun renderGitList(paneId: String, view: GitPaneView, state: GitPaneState) {
     val savedScroll = view.listBody.scrollTop
     view.listBody.style.setProperty("--git-section-transition", "none")
@@ -135,6 +186,12 @@ fun renderGitList(paneId: String, view: GitPaneView, state: GitPaneState) {
     kotlinx.browser.window.requestAnimationFrame { el.style.removeProperty("--git-section-transition") }
 }
 
+/**
+ * Removes all search highlight marks from the diff content, restoring the original text.
+ *
+ * @param diffContent the diff container element to clear search highlights from
+ * @see performDiffSearch
+ */
 fun clearDiffSearch(diffContent: HTMLElement) {
     val marks = diffContent.querySelectorAll("mark.git-search-hit")
     for (i in 0 until marks.length) {
@@ -146,6 +203,18 @@ fun clearDiffSearch(diffContent: HTMLElement) {
     }
 }
 
+/**
+ * Performs a case-insensitive text search within the diff content, wrapping matches
+ * in `<mark>` elements and scrolling the current match into view.
+ *
+ * @param diffContent the diff container element to search within
+ * @param query the search string (case-insensitive); empty string clears highlights
+ * @param state the git pane state holding the current match index
+ * @param counterLabel the DOM element to update with "N/M" match count text
+ * @param navButtons the search navigation buttons to enable/disable
+ * @see navigateDiffSearch
+ * @see clearDiffSearch
+ */
 fun performDiffSearch(
     diffContent: HTMLElement, query: String, state: GitPaneState,
     counterLabel: HTMLElement, navButtons: List<HTMLElement>,
@@ -195,6 +264,16 @@ fun performDiffSearch(
     counterLabel.textContent = "${state.searchMatchIndex + 1}/$total"
 }
 
+/**
+ * Navigates to the next, previous, first, or last search match within the diff.
+ *
+ * @param diffContent the diff container element containing highlighted matches
+ * @param state the git pane state holding the current match index
+ * @param counterLabel the DOM element to update with the new "N/M" position
+ * @param delta the navigation direction: 1 for next, -1 for previous,
+ *              [Int.MIN_VALUE] for first, [Int.MAX_VALUE] for last
+ * @see performDiffSearch
+ */
 fun navigateDiffSearch(diffContent: HTMLElement, state: GitPaneState, counterLabel: HTMLElement, delta: Int) {
     val marks = diffContent.querySelectorAll("mark.git-search-hit")
     val total = marks.length
@@ -214,6 +293,14 @@ fun navigateDiffSearch(diffContent: HTMLElement, state: GitPaneState, counterLab
     counterLabel.textContent = "${state.searchMatchIndex + 1}/$total"
 }
 
+/**
+ * Renders a unified/inline diff view with old and new line numbers side by side.
+ *
+ * Addition lines are highlighted green, deletion lines red, and context lines are plain.
+ *
+ * @param diffPane the container element to render the diff into
+ * @param parsed the dynamic diff data from the server containing hunks and lines
+ */
 fun renderGitDiffInline(diffPane: HTMLElement, parsed: dynamic) {
     diffPane.innerHTML = ""
     val hunks = parsed.hunks as Array<dynamic>
@@ -247,6 +334,14 @@ fun renderGitDiffInline(diffPane: HTMLElement, parsed: dynamic) {
     diffPane.appendChild(container)
 }
 
+/**
+ * Renders a side-by-side (split) diff view with the old file on the left and
+ * the new file on the right. Paired additions/deletions appear on the same row;
+ * unpaired changes show a placeholder on the opposite side.
+ *
+ * @param diffPane the container element to render the diff into
+ * @param parsed the dynamic diff data from the server containing hunks and lines
+ */
 fun renderGitDiffSplit(diffPane: HTMLElement, parsed: dynamic) {
     diffPane.innerHTML = ""
     val hunks = parsed.hunks as Array<dynamic>
@@ -320,6 +415,20 @@ fun renderGitDiffSplit(diffPane: HTMLElement, parsed: dynamic) {
     diffPane.appendChild(container)
 }
 
+/**
+ * Renders a graphical side-by-side diff with SVG connector curves linking
+ * corresponding change regions between the old and new file panels.
+ *
+ * Both panels show full file content with changed lines highlighted. The connector
+ * SVG is updated on scroll/resize using a piecewise-linear scroll mapping so that
+ * corresponding regions stay aligned. Scrolling is synchronized from the right panel
+ * to the left.
+ *
+ * @param diffPane the container element to render the diff into
+ * @param parsed the dynamic diff data containing hunks, oldContent, and newContent
+ * @param state the git pane state (used for font size configuration)
+ * @see renderGitDiffSplit
+ */
 fun renderGitDiffGraphical(diffPane: HTMLElement, parsed: dynamic, state: GitPaneState) {
     diffPane.innerHTML = ""
     val oldContent = parsed.oldContent as? String
@@ -527,6 +636,22 @@ fun renderGitDiffGraphical(diffPane: HTMLElement, parsed: dynamic, state: GitPan
     window.addEventListener("resize", { _ -> syncLeftFromRight(); scheduleUpdate() })
 }
 
+/**
+ * Constructs the complete DOM subtree for a git pane, including the changed files
+ * list, diff viewer, column divider, and header toolbar controls (diff mode, search,
+ * auto-refresh, refresh).
+ *
+ * Called by [buildLeafCell] when a pane's content kind is "git". Restores persisted
+ * state (selected file, diff mode, graphical toggle, column width) from the leaf's
+ * content payload and triggers initial file list and diff requests.
+ *
+ * @param paneId the unique pane identifier
+ * @param leaf the dynamic leaf node from the server config containing content state
+ * @param headerEl optional pane header element to inject toolbar buttons into
+ * @return the root HTMLElement for the git pane view
+ * @see buildLeafCell
+ * @see GitPaneState
+ */
 fun buildGitView(paneId: String, leaf: dynamic, headerEl: HTMLElement? = null): HTMLElement {
     val content = leaf.content
     val initialWidth = (content?.leftColumnWidthPx as? Number)?.toInt() ?: 280

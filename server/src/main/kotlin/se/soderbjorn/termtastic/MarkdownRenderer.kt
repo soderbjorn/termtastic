@@ -1,3 +1,18 @@
+/**
+ * Server-side Markdown-to-HTML rendering pipeline.
+ *
+ * This file contains [MarkdownRenderer], which parses Markdown text using
+ * flexmark-java (with GFM extensions for tables, strikethrough, task lists,
+ * and autolinks), renders it to HTML, and sanitises the output with jsoup to
+ * prevent script injection. The resulting HTML string is sent verbatim to
+ * the client for display in the file-browser pane when a `.md` file is opened.
+ *
+ * Called by [handleWindowCommand] in Application.kt when processing a
+ * `FileBrowserOpenFile` command for a Markdown file.
+ *
+ * @see FileBrowserCatalog
+ * @see SyntaxHighlighter
+ */
 package se.soderbjorn.termtastic
 
 import com.vladsch.flexmark.ext.autolink.AutolinkExtension

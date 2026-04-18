@@ -1,3 +1,17 @@
+/**
+ * Device-authentication token generation, encoding, and storage for Termtastic.
+ *
+ * Every Termtastic client (web, Android, iOS, desktop) identifies itself to the
+ * server with a 32-byte random token encoded as base64url. This file declares
+ * the common [AuthTokenStore] interface, the [expect] function for platform-
+ * specific secure random bytes, the base64url encoder, and the
+ * [getOrCreateToken] helper that ties them together.
+ *
+ * Platform `actual` implementations live in `androidMain`, `iosMain`, `jsMain`,
+ * and `jvmMain`.
+ *
+ * @see TermtasticClient
+ */
 package se.soderbjorn.termtastic.client
 
 /**
@@ -11,7 +25,18 @@ package se.soderbjorn.termtastic.client
  * attaches it.
  */
 interface AuthTokenStore {
+    /**
+     * Load the previously persisted auth token.
+     *
+     * @return the stored token string, or `null` if none has been saved yet.
+     */
     fun load(): String?
+
+    /**
+     * Persist [token] so that subsequent calls to [load] return it.
+     *
+     * @param token the base64url-encoded device-auth token to store.
+     */
     fun save(token: String)
 }
 

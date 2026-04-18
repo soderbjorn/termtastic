@@ -1,3 +1,19 @@
+/**
+ * @file Termtastic — Electron main process entry point.
+ *
+ * Responsibilities:
+ * - Bootstraps the embedded Ktor server jar (or connects to an already-running
+ *   instance) and creates the main BrowserWindow once the server is reachable.
+ * - Enforces single-instance: a second launch refocuses the existing window.
+ * - Registers a global hotkey (Ctrl+Alt+Cmd+Space) to summon the app from any
+ *   context (other app, other Space).
+ * - Manages popout pane windows: each popped-out terminal/pane gets its own
+ *   OS-level BrowserWindow; closing it docks the pane back in the main window.
+ * - Builds the application menu (including a "Launch at Login" toggle on macOS).
+ * - Handles macOS app-lifecycle conventions (keep alive on last window close,
+ *   recreate window on dock click).
+ */
+
 const { app, BrowserWindow, Menu, globalShortcut, ipcMain, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -47,6 +63,19 @@ let mainWindow = null;
 // TERMTASTIC_URL overrides everything: it's the dev escape hatch (`:electron:run`
 // sets it to the dev server on 8083) and skips all of this logic.
 
+/**
+ * Checks whether a TCP port is currently accepting connections.
+ *
+ * Used by the server bootstrap logic to detect if the Ktor backend is already
+ * running before attempting to spawn a new instance.
+ *
+ * @param {number} port - TCP port number to probe.
+ * @param {string} [host="127.0.0.1"] - Host address to connect to.
+ * @param {number} [timeoutMs=250] - Socket timeout in milliseconds before
+ *   giving up on a single probe.
+ * @returns {Promise<boolean>} Resolves to `true` if a connection was
+ *   established, `false` on timeout or error.
+ */
 function isPortListening(port, host = "127.0.0.1", timeoutMs = 250) {
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -65,6 +94,18 @@ function isPortListening(port, host = "127.0.0.1", timeoutMs = 250) {
   });
 }
 
+/**
+ * Polls a TCP port until it starts accepting connections or a deadline expires.
+ *
+ * Called by {@link ensureServerThenCreateWindow} after spawning the embedded
+ * server jar, to block window creation until the backend is ready to serve
+ * HTTP requests.
+ *
+ * @param {number} port - TCP port number to poll.
+ * @param {number} [timeoutMs=30000] - Maximum time to wait in milliseconds.
+ * @returns {Promise<boolean>} Resolves to `true` if the port became reachable
+ *   within the deadline, `false` otherwise.
+ */
 async function waitForPort(port, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -74,6 +115,19 @@ async function waitForPort(port, timeoutMs = 30000) {
   return false;
 }
 
+/**
+ * Locates the bundled Ktor server fat-jar on disk.
+ *
+ * In packaged (electron-builder) builds the jar is placed in
+ * `Contents/Resources/server.jar` via `extraResources`. In dev mode
+ * (`:electron:run`) it lives at `./resources/server.jar` relative to this
+ * script.
+ *
+ * Called by {@link ensureServerThenCreateWindow} when no server is already
+ * listening on {@link PROD_PORT}.
+ *
+ * @returns {string|null} Absolute path to the jar, or `null` if not found.
+ */
 function findServerJar() {
   // In packaged builds the jar is shipped via electron-builder `extraResources`,
   // which lands it at Contents/Resources/server.jar (i.e. process.resourcesPath)
@@ -88,6 +142,22 @@ function findServerJar() {
   return null;
 }
 
+/**
+ * Resolves the absolute path to a usable `java` binary.
+ *
+ * GUI-launched apps on macOS do not inherit the user's shell PATH, so Java
+ * installed via Homebrew, SDKMAN, or asdf would be invisible to a bare
+ * `spawn("java")`. This function probes, in order:
+ *   1. `$JAVA_HOME/bin/java`
+ *   2. `/usr/libexec/java_home` (macOS only)
+ *   3. Well-known install locations (Homebrew, Temurin, system packages)
+ *   4. Falls back to the bare binary name, relying on PATH as a last resort.
+ *
+ * Called by {@link spawnEmbeddedServer}.
+ *
+ * @returns {string} Absolute path to the `java` binary, or the bare name
+ *   `"java"` / `"java.exe"` if no candidate was found on disk.
+ */
 function resolveJavaBinary() {
   // GUI launches on macOS (Finder, dock) don't inherit shell PATH, so a Java
   // installed via Homebrew / asdf / SDKMAN is invisible to a naked spawn("java").
@@ -141,21 +211,44 @@ function resolveJavaBinary() {
   return binName; // last-ditch: rely on PATH
 }
 
-// Returns the path to the server log file. The log directory is created lazily
-// on first call. Electron's `app.getPath("logs")` resolves to:
-//   macOS:   ~/Library/Logs/Termtastic/
-//   Linux:   ~/.config/Termtastic/logs/
-//   Windows: %APPDATA%/Termtastic/logs/
+/**
+ * Returns the absolute path to the server log file, creating the log
+ * directory if it does not already exist.
+ *
+ * The log directory is resolved via Electron's `app.getPath("logs")`:
+ * - macOS:   `~/Library/Logs/Termtastic/`
+ * - Linux:   `~/.config/Termtastic/logs/`
+ * - Windows: `%APPDATA%/Termtastic/logs/`
+ *
+ * Called by {@link spawnEmbeddedServer} to set up stdout/stderr redirection
+ * for the spawned JVM process.
+ *
+ * @returns {string} Absolute path to `server.log`.
+ */
 function serverLogPath() {
   const logsDir = app.getPath("logs");
   fs.mkdirSync(logsDir, { recursive: true });
   return path.join(logsDir, "server.log");
 }
 
-// Returns { spawnError, logPath } — a promise that resolves to an Error if the
-// child fails to launch (e.g. java not found), or stays pending forever on
-// success. We race this against waitForPort to surface a friendly error fast
-// instead of hanging on the 30 s timeout.
+/**
+ * Spawns the embedded Ktor server as a detached child process.
+ *
+ * The child is deliberately detached and unref'd so it outlives the Electron
+ * process -- this lets PTY sessions survive a window close. Server
+ * stdout/stderr is redirected to a log file (see {@link serverLogPath}).
+ *
+ * Called by {@link ensureServerThenCreateWindow} when no server is already
+ * listening. The caller races the returned `spawnError` promise against
+ * {@link waitForPort} to surface a friendly error quickly instead of hanging
+ * for the full 30-second timeout.
+ *
+ * @param {string} jarPath - Absolute path to the server fat-jar.
+ * @returns {{ java: string, spawnError: Promise<Error>, logPath: string }}
+ *   `java` is the resolved binary path (useful for error messages),
+ *   `spawnError` resolves if/when the child emits an error or exits non-zero
+ *   (stays pending on success), and `logPath` is the server log location.
+ */
 function spawnEmbeddedServer(jarPath) {
   const java = resolveJavaBinary();
   // On macOS, the embedded JVM would normally pop a dock icon the first time
@@ -199,6 +292,14 @@ function spawnEmbeddedServer(jarPath) {
 
 // ----------------------------------------------------------------------------
 
+/**
+ * Checks whether the app is configured to launch at OS login.
+ *
+ * Used by {@link buildAppMenu} to set the "Launch at Login" checkbox state,
+ * and by {@link toggleLoginItem} to determine the next toggle value.
+ *
+ * @returns {boolean} `true` if the app is registered as a login item.
+ */
 function isLoginItemEnabled() {
   try {
     return app.getLoginItemSettings().openAtLogin === true;
@@ -207,6 +308,14 @@ function isLoginItemEnabled() {
   }
 }
 
+/**
+ * Toggles the "Launch at Login" OS setting and rebuilds the app menu to
+ * reflect the new state.
+ *
+ * Triggered by the user clicking the "Launch at Login" checkbox in the
+ * application menu. When enabled, the app starts hidden (`openAsHidden`)
+ * so it waits silently for the global hotkey.
+ */
 function toggleLoginItem() {
   const next = !isLoginItemEnabled();
   // openAsHidden keeps the window from popping up at login — the app sits
@@ -215,6 +324,16 @@ function toggleLoginItem() {
   buildAppMenu(); // refresh checkbox
 }
 
+/**
+ * Constructs and installs the application menu bar.
+ *
+ * On macOS the first submenu is the app menu, containing About, the "Launch
+ * at Login" toggle, hide/unhide, and quit. All platforms get Edit, View, and
+ * Window menus with standard roles.
+ *
+ * Called once at startup by {@link ensureServerThenCreateWindow} and again by
+ * {@link toggleLoginItem} whenever the login-item checkbox changes.
+ */
 function buildAppMenu() {
   const isMac = process.platform === "darwin";
   const template = [
@@ -333,6 +452,18 @@ ipcMain.handle("close-popout", (_event, paneId) => {
 
 // ----------------------------------------------------------------------------
 
+/**
+ * Creates the main application BrowserWindow and loads the web app.
+ *
+ * The window is configured with context isolation and no Node integration
+ * for security; renderer-side Electron APIs are exposed exclusively through
+ * the preload script. A `did-fail-load` listener is attached to show a
+ * user-friendly "server unreachable" page if the backend cannot be reached.
+ *
+ * Called by {@link ensureServerThenCreateWindow} once the server is confirmed
+ * reachable (or on error, to display a diagnostic page), and by
+ * {@link showAndFocus} when the window was previously closed on macOS.
+ */
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -356,13 +487,26 @@ function createWindow() {
   });
 }
 
+/**
+ * Navigates the main window to the Termtastic web app URL.
+ *
+ * Separated from {@link createWindow} so the load can be retried independently
+ * (e.g. after a server-unreachable error is resolved by the user).
+ */
 function loadApp() {
   mainWindow.loadURL(TARGET_URL);
 }
 
-// Bring Termtastic to the foreground from any context: global hotkey,
-// second-instance launch, dock click. Handles the "window was closed but app
-// is still alive" case (macOS) by recreating it.
+/**
+ * Brings Termtastic to the foreground from any context.
+ *
+ * Handles multiple scenarios: the window may be minimized, hidden behind
+ * other apps, on another macOS Space, or already closed (macOS keeps the
+ * process alive). In the latter case the window is recreated.
+ *
+ * Invoked by the global hotkey handler, the `second-instance` event (when
+ * the user relaunches the app), and the macOS `activate` event (dock click).
+ */
 function showAndFocus() {
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow();
@@ -377,6 +521,23 @@ function showAndFocus() {
   if (process.platform === "darwin") app.focus({ steal: true });
 }
 
+/**
+ * Replaces the main window's content with a styled "server unreachable"
+ * error page.
+ *
+ * The page includes the target URL, an optional hint (e.g. how to install
+ * Java), a retry button, and the raw error description. Rendered as an
+ * inline `data:` URL so no server connectivity is required.
+ *
+ * Called by {@link createWindow}'s `did-fail-load` handler and by
+ * {@link ensureServerThenCreateWindow} when the embedded server fails to
+ * start or times out.
+ *
+ * @param {string} [errorDescription] - Technical error string shown in
+ *   small grey text at the bottom of the card.
+ * @param {string} [hint] - HTML string with a user-facing suggestion.
+ *   Defaults to a "Start the server with `./gradlew :server:run`" message.
+ */
 function showUnreachable(errorDescription, hint) {
   const hintHtml = hint
     ? `<p>${hint}</p>`
@@ -440,6 +601,23 @@ function showUnreachable(errorDescription, hint) {
   mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
 }
 
+/**
+ * Orchestrates the full startup sequence: menu setup, server bootstrap, and
+ * window creation.
+ *
+ * The logic follows this decision tree:
+ * 1. If `TERMTASTIC_URL` is set (dev mode), skip server management entirely
+ *    and load that URL.
+ * 2. If `PROD_PORT` is already listening, reuse the existing server (supports
+ *    app restarts without killing PTY sessions).
+ * 3. Otherwise, locate and spawn the bundled server jar, then race
+ *    {@link waitForPort} against a spawn-error promise so a missing JDK
+ *    surfaces immediately rather than hanging for 30 seconds.
+ *
+ * Called once from the `app.whenReady()` handler.
+ *
+ * @returns {Promise<void>}
+ */
 async function ensureServerThenCreateWindow() {
   buildAppMenu();
 
@@ -503,6 +681,17 @@ async function ensureServerThenCreateWindow() {
   }
 }
 
+/**
+ * Registers the global keyboard shortcut that summons the app from any
+ * context (even when another app is focused).
+ *
+ * The accelerator is {@link SUMMON_ACCELERATOR} (`Ctrl+Alt+Cmd+Space`).
+ * If registration fails (e.g. another app already owns the combo), a
+ * warning is logged to stderr.
+ *
+ * Called once from the `app.whenReady()` handler. The shortcut is
+ * automatically unregistered in the `will-quit` handler.
+ */
 function registerGlobalShortcut() {
   const ok = globalShortcut.register(SUMMON_ACCELERATOR, showAndFocus);
   if (!ok) {

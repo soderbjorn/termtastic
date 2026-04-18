@@ -1,3 +1,21 @@
+/**
+ * Server-side syntax highlighting for the file-browser and git-diff panes.
+ *
+ * This file contains [SyntaxHighlighter], a lightweight regex-based tokeniser
+ * that produces HTML with `<span class="hl-...">` wrappers for CSS-driven
+ * colouring. It supports JavaScript, TypeScript, Kotlin, HTML, and CSS.
+ *
+ * Called by:
+ *  - [handleWindowCommand] (in Application.kt) when rendering file content
+ *    for `FileBrowserOpenFile` and git diff lines for `GitDiff`.
+ *  - [SyntaxHighlighter.highlightFile] which auto-detects the language via
+ *    [LanguageDetector] and returns the highlighted HTML together with the
+ *    detected language name.
+ *
+ * @see LanguageDetector
+ * @see FileBrowserCatalog
+ * @see GitCatalog
+ */
 package se.soderbjorn.termtastic
 
 /**
@@ -22,12 +40,31 @@ object SyntaxHighlighter {
         return highlight(content, lang) to lang
     }
 
+    /**
+     * Highlight [code] using the tokeniser for [language].
+     *
+     * If [language] is null or no tokeniser exists, the code is returned
+     * as HTML-escaped plain text.
+     *
+     * @param code the source code to highlight
+     * @param language the language identifier (as returned by [LanguageDetector.detect]),
+     *                 or null for plain text
+     * @return HTML string with `<span class="hl-...">` highlight tokens
+     */
     fun highlight(code: String, language: String?): String {
         if (language == null) return escapeHtml(code)
         val tokenizer = TOKENIZERS[language] ?: return escapeHtml(code)
         return tokenize(code, tokenizer)
     }
 
+    /**
+     * Apply a list of [TokenPattern]s to [code], wrapping each match in a
+     * `<span>` with the pattern's CSS class. Unmatched text is HTML-escaped.
+     *
+     * @param code the source code to tokenise
+     * @param patterns ordered list of regex patterns with associated CSS classes
+     * @return fully tokenised HTML string
+     */
     private fun tokenize(code: String, patterns: List<TokenPattern>): String {
         // Build a combined regex from all patterns. Each alternative is
         // wrapped in a named group so we can tell which one matched.
@@ -161,6 +198,13 @@ object SyntaxHighlighter {
         "css" to CSS_PATTERNS,
     )
 
+    /**
+     * Escape HTML special characters (`&`, `<`, `>`, `"`) so [text] can be
+     * safely embedded in an HTML document.
+     *
+     * @param text raw text to escape
+     * @return HTML-safe string
+     */
     private fun escapeHtml(text: String): String {
         val sb = StringBuilder(text.length)
         for (ch in text) {

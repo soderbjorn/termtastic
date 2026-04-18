@@ -1,3 +1,21 @@
+/**
+ * Settings panel UI component for the Termtastic web frontend.
+ *
+ * Builds and manages a slide-in sidebar panel with controls for:
+ * - Theme selection (grid of theme swatches)
+ * - Appearance mode (Light / Dark / Auto)
+ * - Text size (font size presets from 10px to 24px)
+ * - Pane status indicator display mode (dots, glow, both, none)
+ * - Desktop notifications toggle
+ * - Hidden developer tools (activated by 5 rapid clicks on "Settings" title)
+ * - A link to server-side settings
+ *
+ * All settings are persisted to the server via the [AppBackingViewModel] and
+ * the [SettingsPersister] REST endpoint.
+ *
+ * @see openSettingsPanel
+ * @see closeSettingsPanel
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -10,8 +28,16 @@ import org.w3c.dom.events.Event
 import org.w3c.dom.events.KeyboardEvent
 import se.soderbjorn.termtastic.client.PaneStatusDisplay
 
+/** Available font size presets for the text size setting. */
 private val fontSizePresets = listOf(10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
 
+/**
+ * Closes the settings sidebar panel with a slide-out transition.
+ *
+ * Removes the Escape key handler and cleans up the [settingsPanel] reference.
+ *
+ * @see openSettingsPanel
+ */
 fun closeSettingsPanel() {
     val panel = settingsPanel ?: return
     panel.classList.remove("open")
@@ -23,6 +49,14 @@ fun closeSettingsPanel() {
     settingsPanel = null
 }
 
+/**
+ * Opens the settings sidebar panel, building all control sections and appending
+ * it to the app body. If the panel is already open, closes it instead (toggle behavior).
+ *
+ * Called when the settings button in the app header is clicked.
+ *
+ * @see closeSettingsPanel
+ */
 fun openSettingsPanel() {
     if (settingsPanel != null) { closeSettingsPanel(); return }
 

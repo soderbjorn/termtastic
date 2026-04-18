@@ -1,3 +1,17 @@
+/**
+ * Pane header bar component for the Termtastic web frontend.
+ *
+ * Builds the header bar that appears at the top of each pane, containing:
+ * - A renameable title (hover + click or double-click to rename)
+ * - A connection status dot (for terminal panes)
+ * - Action buttons: split/float/dock, maximize/restore, copy path, reformat, close
+ * - A split flyout with compass-style directional split buttons
+ *
+ * The header also supports drag-and-drop for pane reordering (via [attachPaneTabDrag]).
+ *
+ * @see buildPaneHeader
+ * @see buildLeafCell
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -5,8 +19,9 @@ import kotlinx.browser.window
 import kotlinx.serialization.encodeToString
 import org.w3c.dom.HTMLElement
 
-// SVG icon constants shared with LayoutBuilder (maximize/restore)
+/** SVG icon for the maximize button. Shared with [LayoutBuilder] for the restore animation. */
 val ICON_MAXIMIZE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1.5"/></svg>"""
+/** SVG icon for the restore button, shown when a pane is maximized. */
 val ICON_RESTORE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="15" height="15" rx="1.5"/><path d="M6 7H4.5A1.5 1.5 0 0 0 3 8.5V21a1.5 1.5 0 0 0 1.5 1.5H17A1.5 1.5 0 0 0 18.5 21v-1.5"/></svg>"""
 
 private val ICON_SPLIT = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><line x1="12" y1="4" x2="12" y2="20"/></svg>"""
@@ -17,6 +32,15 @@ private val ICON_COPY = """<svg viewBox="0 0 24 24" width="16" height="16" fill=
 private val ICON_REFORMAT = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="1.5"/><polyline points="7 10 4 12 7 14"/><polyline points="17 10 20 12 17 14"/></svg>"""
 private val ICON_CLOSE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>"""
 
+/**
+ * Creates a small icon button element for use in pane headers and flyout menus.
+ *
+ * @param titleText the tooltip text for the button
+ * @param svg the SVG markup for the icon
+ * @param onClick click handler, receives the click event
+ * @param extraClass optional additional CSS class(es) to add
+ * @return the button HTMLElement
+ */
 private fun makeIconBtn(titleText: String, svg: String, onClick: (dynamic) -> Unit, extraClass: String = ""): HTMLElement {
     val btn = document.createElement("button") as HTMLElement
     btn.className = "pane-action-btn" + (if (extraClass.isNotEmpty()) " $extraClass" else "")
@@ -30,6 +54,23 @@ private fun makeIconBtn(titleText: String, svg: String, onClick: (dynamic) -> Un
     return btn
 }
 
+/**
+ * Builds the complete pane header bar element with title, status dot, and action buttons.
+ *
+ * The title supports inline renaming: hover for 1 second to arm, then click to edit,
+ * or double-click at any time. The header includes a split/float flyout menu,
+ * maximize/restore button, and close button (with confirmation dialog for linked sessions).
+ *
+ * @param paneId the unique pane identifier
+ * @param title the display title for the pane
+ * @param sessionId the PTY session ID (null for non-terminal panes); used for the status dot
+ * @param popoutMode true if rendering in a pop-out window (shows "Dock" instead of split options)
+ * @param isLink true if this pane is a linked view of another terminal session
+ * @param extraControls additional control elements to insert before the action buttons
+ * @return the header HTMLElement
+ * @see buildLeafCell
+ * @see startRename
+ */
 fun buildPaneHeader(
     paneId: String,
     title: String,

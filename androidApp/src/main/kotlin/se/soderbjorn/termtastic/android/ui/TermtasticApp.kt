@@ -1,3 +1,17 @@
+/**
+ * Main app composable and navigation graph for the Termtastic Android app.
+ *
+ * Defines the [TermtasticApp] composable which sets up a Jetpack Navigation
+ * [NavHost] with horizontal-slide transitions. Routes include hosts selection,
+ * tree overview, terminal sessions, file browser (list and content), and git
+ * (list and diff). All destinations are driven by URI-style route parameters
+ * for pane IDs, session IDs, and file paths.
+ *
+ * Called from [se.soderbjorn.termtastic.android.MainActivity] as the root
+ * composable inside the Material theme.
+ *
+ * @see se.soderbjorn.termtastic.android.MainActivity
+ */
 package se.soderbjorn.termtastic.android.ui
 
 import android.content.Context
@@ -14,10 +28,21 @@ import androidx.navigation.NavType
 import androidx.navigation.navArgument
 
 /**
- * Top-level navigation host. Four destinations, all using horizontal-slide
- * enter/exit transitions so forward navigation slides right-to-left and
- * back pops left-to-right, matching the iOS/Android "push" feel the user
- * asked for.
+ * Top-level navigation host for the Termtastic Android app.
+ *
+ * Sets up a Jetpack Navigation [NavHost] with horizontal-slide enter/exit
+ * transitions so forward navigation slides right-to-left and back pops
+ * left-to-right, matching the native "push" feel. Routes include:
+ * - `hosts` -- [HostsScreen] (start destination)
+ * - `tree` -- [TreeScreen]
+ * - `terminal/{sessionId}` -- [TerminalScreen]
+ * - `files/{paneId}[/{dirRelPath}]` -- [FileBrowserListScreen]
+ * - `file/{paneId}/{relPath}` -- [FileBrowserContentScreen]
+ * - `git/{paneId}[/{filePath}]` -- [GitListScreen] / [GitDiffScreen]
+ *
+ * @param applicationContext the Android application context, forwarded to
+ *   [HostsScreen] for repository instantiation.
+ * @see se.soderbjorn.termtastic.android.MainActivity
  */
 @Composable
 fun TermtasticApp(applicationContext: Context) {

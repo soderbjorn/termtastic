@@ -1,3 +1,18 @@
+/**
+ * Modal dialog for selecting the type of a new pane in Termtastic.
+ *
+ * Presents a grid of pane type cards (Terminal, Terminal Link, File Browser, Git)
+ * and dispatches the appropriate [WindowCommand] to create the new pane. When
+ * "Terminal link" is selected, transitions to a link picker view showing live
+ * xterm.js previews of existing terminal sessions.
+ *
+ * The modal can be triggered from:
+ * - The split flyout in [buildPaneHeader] (splits an existing pane)
+ * - The "New pane" button in [buildEmptyTabPlaceholder] (adds to an empty tab)
+ *
+ * @see showPaneTypeModal
+ * @see closePaneTypeModal
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -19,6 +34,12 @@ private val MODAL_GIT_SVG =
 private val MODAL_LINK_SVG =
     """<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="40" height="40"><path d="M13 19a5 5 0 0 0 7.07 0l4-4a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M19 13a5 5 0 0 0-7.07 0l-4 4a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>"""
 
+/**
+ * Closes all live terminal preview WebSockets and disposes their xterm.js instances.
+ *
+ * Called when the pane type modal is closed or when navigating away from the
+ * link picker view, to clean up resources created for the preview thumbnails.
+ */
 fun disposeAllPreviews() {
     for (entry in previewEntries) {
         try { (entry.socket as WebSocket).close() } catch (_: Throwable) {}
@@ -27,6 +48,11 @@ fun disposeAllPreviews() {
     previewEntries.clear()
 }
 
+/**
+ * Closes the pane type modal, disposing previews and cleaning up the Escape key handler.
+ *
+ * @see showPaneTypeModal
+ */
 fun closePaneTypeModal() {
     disposeAllPreviews()
     modalEscHandler?.let { document.removeEventListener("keydown", it) }
@@ -34,6 +60,19 @@ fun closePaneTypeModal() {
     document.getElementById("pane-type-modal")?.remove()
 }
 
+/**
+ * Opens the pane type selection modal.
+ *
+ * Shows a card grid with options: Terminal, Terminal Link, File Browser, and Git.
+ * Selecting "Terminal link" transitions to a picker showing live previews of
+ * existing terminal sessions. Only one modal can be open at a time.
+ *
+ * @param anchorPaneId the pane to split (required when splitting, null for empty tab)
+ * @param direction the direction to split in (required when splitting, null for empty tab)
+ * @param emptyTabId the empty tab to add a pane to (null when splitting an existing pane)
+ * @see closePaneTypeModal
+ * @see buildPaneHeader
+ */
 fun showPaneTypeModal(
     anchorPaneId: String? = null,
     direction: SplitDirection? = null,

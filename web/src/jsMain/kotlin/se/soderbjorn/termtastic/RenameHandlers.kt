@@ -1,3 +1,13 @@
+/**
+ * Inline rename handlers for pane titles and tab labels in the Termtastic web frontend.
+ *
+ * Provides the UI interaction for renaming: replaces the title/label element with
+ * a text input, handles commit (Enter/blur) and cancel (Escape), and sends the
+ * appropriate [WindowCommand] to persist the new name on the server.
+ *
+ * @see startRename
+ * @see startTabRename
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -5,6 +15,17 @@ import org.w3c.dom.HTMLElement
 import org.w3c.dom.HTMLInputElement
 import org.w3c.dom.events.KeyboardEvent
 
+/**
+ * Starts an inline rename interaction for a pane title.
+ *
+ * Replaces the title element with a focused, pre-selected text input. On commit
+ * (Enter or blur), sends [WindowCommand.Rename] to the server with the new title.
+ * On cancel (Escape), restores the original title element without changes.
+ *
+ * @param titleEl the DOM element displaying the current pane title
+ * @param paneId the unique pane identifier for the rename command
+ * @see buildPaneHeader
+ */
 fun startRename(titleEl: HTMLElement, paneId: String) {
     val current = titleEl.textContent ?: ""
     val parent = titleEl.parentElement ?: return
@@ -48,6 +69,17 @@ fun startRename(titleEl: HTMLElement, paneId: String) {
     input.addEventListener("click", { ev -> ev.stopPropagation() })
 }
 
+/**
+ * Starts an inline rename interaction for a tab label.
+ *
+ * Similar to [startRename] but operates on tab labels in the tab bar. Closes
+ * any open tab menus, adds a "renaming" CSS class during editing, and sends
+ * [WindowCommand.RenameTab] to the server on commit.
+ *
+ * @param labelEl the DOM element displaying the current tab label
+ * @param tabId the unique tab identifier for the rename command
+ * @see renderConfig
+ */
 fun startTabRename(labelEl: HTMLElement, tabId: String) {
     val current = labelEl.textContent ?: ""
     val parent = labelEl.parentElement ?: return

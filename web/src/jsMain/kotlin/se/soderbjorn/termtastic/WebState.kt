@@ -1,3 +1,23 @@
+/**
+ * Web application state management for the Termtastic web frontend.
+ *
+ * Contains all global mutable state for the web client, organized into categories:
+ * - Core references: the [TermtasticClient], [WindowSocket], and [AppBackingViewModel]
+ * - DOM references: cached references to key layout elements
+ * - Terminal registry: xterm.js instances indexed by pane ID
+ * - Per-pane VM registries: backing view models for file browser and git panes
+ * - Rendering state: active tab, maximized panes, animation state, etc.
+ * - Settings panel and modal DOM state
+ * - Popout/Electron detection flags
+ *
+ * Also provides utility functions used across the rendering layer: command dispatch,
+ * aggregate connection status, pane focus management, terminal fitting, theme
+ * application, session state notification checking, and state dot updates.
+ *
+ * @see main
+ * @see connectWindow
+ * @see renderConfig
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.coroutines.GlobalScope
@@ -70,19 +90,38 @@ internal var proto = "ws"
 internal var authQueryParam = ""
 internal var clientTypeAtStart = "Web"
 
-// ── Convenience: fire-and-forget command via the WindowSocket ────────
+/**
+ * Sends a [WindowCommand] to the server via the [WindowSocket] in a fire-and-forget coroutine.
+ *
+ * This is the primary mechanism for all client-to-server communication in the
+ * web frontend. Called from UI event handlers throughout the codebase.
+ *
+ * @param cmd the command to send
+ */
 internal fun launchCmd(cmd: WindowCommand) {
     GlobalScope.launch { windowSocket.send(cmd) }
 }
 
-// ── Helpers that were on App ────────────────────────────────────────
-
+/**
+ * Checks all PTY connection states and shows/hides the disconnected modal accordingly.
+ *
+ * Shows the disconnected overlay if any connection is in "disconnected" state.
+ *
+ * @see showDisconnectedModal
+ * @see hideDisconnectedModal
+ */
 internal fun updateAggregateStatus() {
     val states = connectionState.values
     if (states.isNotEmpty() && states.any { it == "disconnected" }) showDisconnectedModal()
     else hideDisconnectedModal()
 }
 
+/**
+ * Checks whether a pane is currently in floating mode (detached from the split tree).
+ *
+ * @param paneId the pane identifier to check
+ * @return true if the pane is in any tab's floating list
+ */
 internal fun isPaneFloating(paneId: String): Boolean {
     val cfg = appVm.stateFlow.value.config ?: return false
     for (tab in cfg.tabs) {
@@ -93,6 +132,13 @@ internal fun isPaneFloating(paneId: String): Boolean {
     return false
 }
 
+/**
+ * Walks up the DOM tree from the given element to find the nearest ancestor
+ * with the "tab-pane" CSS class.
+ *
+ * @param el the starting element
+ * @return the tab pane element, or null if not found
+ */
 internal fun findTabPane(el: HTMLElement): HTMLElement? {
     var cur: HTMLElement? = el
     while (cur != null) {
@@ -102,6 +148,14 @@ internal fun findTabPane(el: HTMLElement): HTMLElement? {
     return null
 }
 
+/**
+ * Counts how many panes (including linked views and pop-outs) share the given session ID.
+ *
+ * Used by the close confirmation dialog to warn when closing a session with linked panes.
+ *
+ * @param sessionId the PTY session identifier to count panes for
+ * @return the number of panes sharing this session, or 0 if sessionId is null/empty
+ */
 internal fun countPanesForSession(sessionId: String?): Int {
     if (sessionId.isNullOrEmpty()) return 0
     val cfg = appVm.stateFlow.value.config ?: return 0
@@ -119,13 +173,33 @@ internal fun countPanesForSession(sessionId: String?): Int {
     return count
 }
 
+/**
+ * Shell-quotes a file path for safe pasting into a terminal.
+ *
+ * Wraps the path in single quotes and escapes any embedded single quotes.
+ *
+ * @param p the file path to quote
+ * @return the shell-safe quoted string
+ */
 internal fun shellQuote(p: String): String = "'" + p.replace("'", "'\\''") + "'"
 
+/**
+ * Recursively collects all pane IDs from a pane tree node into a set.
+ *
+ * @param node a dynamic pane tree node (leaf or split)
+ * @param into the mutable set to add pane IDs to
+ */
 internal fun collectPaneIds(node: dynamic, into: HashSet<String>) {
     if (node.kind == "leaf") into.add(node.id as String)
     else { collectPaneIds(node.first, into); collectPaneIds(node.second, into) }
 }
 
+/**
+ * Looks up the server-persisted focused pane ID for a given tab.
+ *
+ * @param tabId the tab identifier
+ * @return the focused pane ID, or null if not set or tab not found
+ */
 internal fun savedFocusedPaneId(tabId: String): String? {
     val cfg = appVm.stateFlow.value.config ?: return null
     for (tab in cfg.tabs) {
@@ -134,6 +208,14 @@ internal fun savedFocusedPaneId(tabId: String): String? {
     return null
 }
 
+/**
+ * Marks a pane cell as focused, removing the "focused" class from all other cells.
+ *
+ * Also updates the sidebar active-pane highlight and sends a [WindowCommand.SetFocusedPane]
+ * to persist the focus on the server.
+ *
+ * @param cell the pane cell DOM element to mark as focused
+ */
 internal fun markPaneFocused(cell: HTMLElement) {
     val all = kotlinx.browser.document.querySelectorAll(".terminal-cell.focused")
     for (i in 0 until all.length) {
@@ -161,6 +243,12 @@ internal fun markPaneFocused(cell: HTMLElement) {
     }
 }
 
+/**
+ * Focuses the first terminal pane in the active tab, preferring the server-remembered
+ * focused pane if available.
+ *
+ * @return true if a pane was successfully focused
+ */
 internal fun focusFirstPaneInActiveTab(): Boolean {
     val wrap = terminalWrapEl ?: return false
     val activePane = wrap.querySelector(".tab-pane.active") as? HTMLElement ?: return false
@@ -183,6 +271,12 @@ internal fun focusFirstPaneInActiveTab(): Boolean {
     return false
 }
 
+/**
+ * Refits all visible terminal instances to their current container sizes.
+ *
+ * Iterates all registered terminals and calls [fitPreservingScroll] on those
+ * whose DOM element has a non-null offsetParent (i.e., is visible).
+ */
 internal fun fitVisible() {
     for (entry in terminals.values) {
         val parent = (entry.term.asDynamic().element as? HTMLElement)?.offsetParent
@@ -192,6 +286,15 @@ internal fun fitVisible() {
     }
 }
 
+/**
+ * Builds a dynamic xterm.js theme options object from the current app theme and appearance.
+ *
+ * Sets background, foreground, cursor, and selection colors. For light backgrounds,
+ * overrides several ANSI colors to ensure readability. For dark backgrounds, adjusts
+ * black/brightBlack.
+ *
+ * @return a dynamic object suitable for `term.options.theme`
+ */
 internal fun buildXtermTheme(): dynamic {
     val state = appVm.stateFlow.value
     val bg = themeBackgroundForCurrent(state.theme, state.appearance)
@@ -215,6 +318,11 @@ internal fun buildXtermTheme(): dynamic {
     return base
 }
 
+/**
+ * Updates the CSS appearance classes on `<body>` based on the current theme/appearance state.
+ *
+ * Sets "appearance-light" or "appearance-dark" and the `--terminal-bg` CSS custom property.
+ */
 internal fun applyAppearanceClass() {
     val state = appVm.stateFlow.value
     kotlinx.browser.document.body?.classList?.remove("appearance-light", "appearance-dark", "dark-spiced")
@@ -225,16 +333,22 @@ internal fun applyAppearanceClass() {
     kotlinx.browser.document.body?.style?.setProperty("--terminal-bg", bg)
 }
 
+/** Applies the current xterm theme to all registered terminal instances. */
 internal fun applyThemeToTerminals() {
     val xtermTheme = buildXtermTheme()
     for (entry in terminals.values) entry.term.options.theme = xtermTheme
 }
 
+/** Applies all visual changes: appearance CSS classes and xterm themes. */
 internal fun applyAll() {
     applyAppearanceClass()
     applyThemeToTerminals()
 }
 
+/**
+ * Updates CSS classes on `<body>` to control pane status indicator visibility
+ * (dots, glow, both, or none) based on the user's preference.
+ */
 internal fun applyPaneStatusClasses() {
     val psd = appVm.stateFlow.value.paneStatusDisplay
     kotlinx.browser.document.body?.classList?.remove("show-pane-dots", "show-pane-glow")
@@ -249,12 +363,26 @@ internal fun applyPaneStatusClasses() {
     }
 }
 
+/**
+ * Renders an HTML snippet for a theme swatch preview, showing light and dark halves.
+ *
+ * @param t the terminal theme to render
+ * @return an HTML string with two colored half-swatches
+ */
 internal fun renderThemeSwatch(t: TerminalTheme): String =
     """<span class="theme-swatch">
         <span class="half light" style="color:${t.lightFg};background:${t.lightBg}">A</span>
         <span class="half dark" style="color:${t.darkFg};background:${t.darkBg}">A</span>
     </span>"""
 
+/**
+ * Applies a new font size to all terminals, file browser rendered areas, and git diff panes.
+ *
+ * Updates the xterm.js fontSize option, refits terminals, sets CSS font-size on
+ * markdown and diff containers, and re-requests git diffs at the new size.
+ *
+ * @param size the new font size in pixels
+ */
 internal fun applyGlobalFontSize(size: Int) {
     for ((_, entry) in terminals) {
         entry.term.options.fontSize = size
@@ -275,6 +403,14 @@ internal fun applyGlobalFontSize(size: Int) {
     }
 }
 
+/**
+ * Wires up click handlers for anchor links within rendered Markdown content.
+ *
+ * Intercepts clicks on `#`-prefixed href links and smoothly scrolls to the
+ * corresponding heading element within the same container, preventing navigation.
+ *
+ * @param container the Markdown content container element
+ */
 internal fun wireMarkdownAnchorLinks(container: HTMLElement) {
     container.addEventListener("click", { ev ->
         var node = ev.target as? HTMLElement
@@ -293,6 +429,15 @@ internal fun wireMarkdownAnchorLinks(container: HTMLElement) {
     })
 }
 
+/**
+ * Checks for session state transitions that warrant desktop notifications.
+ *
+ * Sends a notification when a session transitions to "waiting" (needs input) or
+ * finishes "working" (returns to idle). Respects the user's desktop notification
+ * preference and browser permission state.
+ *
+ * @param sessionStates the current session ID to state map
+ */
 private fun checkStateNotifications(sessionStates: Map<String, String?>) {
     if (!appVm.stateFlow.value.desktopNotifications) return
     if (js("typeof Notification === 'undefined'") as Boolean) return
@@ -327,6 +472,16 @@ private fun checkStateNotifications(sessionStates: Map<String, String?>) {
     previousSessionStates.putAll(effective)
 }
 
+/**
+ * Updates all session state indicator dots, tab state indicators, and the global
+ * connection status indicator based on the current session states.
+ *
+ * Also triggers desktop notification checks and adjusts the tab bar active
+ * indicator position.
+ *
+ * @param sessionStates the current session ID to state map from the server
+ * @see checkStateNotifications
+ */
 internal fun updateStateDots(sessionStates: Map<String, String?>) {
     val document = kotlinx.browser.document
     checkStateNotifications(sessionStates)

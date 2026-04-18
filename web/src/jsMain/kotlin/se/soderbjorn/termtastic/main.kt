@@ -1,3 +1,20 @@
+/**
+ * Entry point for the Termtastic Kotlin/JS web frontend.
+ *
+ * Bootstraps the application by initializing authentication, creating the
+ * [TermtasticClient] and [WindowSocket], setting up the [AppBackingViewModel],
+ * hydrating UI settings from the server, and connecting the WebSocket-driven
+ * rendering pipeline.
+ *
+ * The application supports two modes:
+ * - **Normal mode**: full multi-tab, multi-pane terminal layout with sidebar,
+ *   tab bar, settings panel, and all pane types
+ * - **Popout mode**: single-pane window for Electron pop-out, delegated to [initPopoutMode]
+ *
+ * @see start
+ * @see connectWindow
+ * @see initPopoutMode
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -13,12 +30,30 @@ import se.soderbjorn.termtastic.client.viewmodel.AppBackingViewModel
 import se.soderbjorn.termtastic.client.viewmodel.SettingsPersister
 import kotlin.js.json
 
+/**
+ * Kotlin/JS main entry point. Imports the xterm.js CSS and schedules [start]
+ * to run on `window.onload`.
+ */
 fun main() {
     @Suppress("UNUSED_VARIABLE")
     val css = xtermCss
     window.onload = { start() }
 }
 
+/**
+ * Initializes the Termtastic web application.
+ *
+ * Performs the following steps:
+ * 1. Ensures an auth token exists and is stored in a cookie
+ * 2. Detects client type (Electron vs. Web) and popout mode
+ * 3. Creates the [TermtasticClient], [WindowSocket], and [AppBackingViewModel]
+ * 4. Hydrates UI settings from the server via REST
+ * 5. Sets up reactive state observers for theme/appearance/pane-status changes
+ * 6. Registers global event listeners (click, drag, resize)
+ * 7. For popout mode: delegates to [initPopoutMode]
+ * 8. For normal mode: sets up DOM references, sidebar resize, tab bar scrolling,
+ *    and calls [connectWindow] to start the rendering pipeline
+ */
 private fun start() {
     ensureAuthToken()
 

@@ -1,19 +1,42 @@
+/**
+ * Browser localStorage-backed implementation of [AuthTokenStore].
+ *
+ * Persists the device-auth token under `localStorage["termtastic.authToken"]`
+ * and mirrors it into a `termtastic_auth` cookie so same-origin HTTP requests
+ * carry the token automatically.
+ *
+ * @see AuthTokenStore
+ * @see getOrCreateToken
+ */
 package se.soderbjorn.termtastic.client
 
 import kotlinx.browser.window
 
 /**
- * Browser localStorage-backed auth token store. Mirrors the pre-refactor web
- * client's `localStorage["termtastic.authToken"]` key exactly so a token
- * previously minted by the legacy JS code survives the migration — the
- * server-side trust store looks up by SHA-256 of the token, so reusing the
- * same string means the approval dialog doesn't re-appear.
+ * [AuthTokenStore] backed by the browser's `localStorage` API.
+ *
+ * Uses the same `"termtastic.authToken"` key as the pre-refactor vanilla-JS
+ * client, so tokens minted by the legacy code survive the migration without
+ * triggering a new device-approval flow.
  */
 class LocalStorageAuthTokenStore : AuthTokenStore {
+    /** The localStorage key used to persist the token. */
     private val key = "termtastic.authToken"
 
+    /**
+     * Load the token from `localStorage`.
+     *
+     * @return the stored token, or `null` if none exists.
+     */
     override fun load(): String? = window.localStorage.getItem(key)
 
+    /**
+     * Save [token] to `localStorage` and mirror it into a `termtastic_auth`
+     * cookie (SameSite=Strict, one-year Max-Age) so same-origin fetches carry
+     * it automatically.
+     *
+     * @param token the base64url-encoded device-auth token.
+     */
     override fun save(token: String) {
         window.localStorage.setItem(key, token)
         // Mirror into a cookie so same-origin fetches attach it automatically.

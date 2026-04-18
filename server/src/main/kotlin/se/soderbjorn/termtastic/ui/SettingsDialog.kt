@@ -1,3 +1,26 @@
+/**
+ * Server-side settings UI rendered via Compose Desktop.
+ *
+ * This file contains [SettingsDialog], a process-wide singleton Compose
+ * Desktop window that provides the Termtastic settings interface. It exposes
+ * controls for:
+ *  - Network settings (allow remote connections, display listening port/IPs).
+ *  - Claude Code usage polling toggle.
+ *  - Trusted device management (list, revoke).
+ *  - Denied device management (list, unban).
+ *
+ * The dialog is opened by the `OpenSettings` command from the `/window`
+ * WebSocket (triggered by the client's settings button). Settings take
+ * effect immediately -- there is no "Apply" button; the user dismisses
+ * the dialog via the window close control.
+ *
+ * Silently no-ops in headless JVM environments (e.g. when running without
+ * a display server).
+ *
+ * @see DeviceAuth
+ * @see SettingsRepository
+ * @see ClaudeUsageMonitor
+ */
 package se.soderbjorn.termtastic.ui
 
 import androidx.compose.foundation.clickable
@@ -83,6 +106,12 @@ object SettingsDialog {
     private val showing = mutableStateOf(false)
     private var repo: SettingsRepository? = null
 
+    /**
+     * Record the Ktor server's listening port so the Network section can
+     * display it. Called once from [Application.main] after the port is resolved.
+     *
+     * @param port the TCP port the server is listening on
+     */
     fun setListeningPort(port: Int) {
         listeningPort = port
     }
@@ -461,6 +490,12 @@ object SettingsDialog {
         }
     }
 
+    /**
+     * Enumerate all non-loopback IPv4 addresses on the machine's network
+     * interfaces. Used by the Network section to show available LAN addresses.
+     *
+     * @return distinct list of IPv4 address strings
+     */
     private fun localIpv4Addresses(): List<String> {
         val result = mutableListOf<String>()
         runCatching {

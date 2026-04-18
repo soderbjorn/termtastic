@@ -1,11 +1,41 @@
+/**
+ * Sidebar navigation component for the Termtastic web frontend.
+ *
+ * Renders a collapsible tree of all tabs and their panes in a left sidebar.
+ * Each pane item shows an icon indicating its type (terminal, file browser,
+ * git, link, floating) and a status dot for session state. Clicking a pane
+ * item switches to its tab and focuses it.
+ *
+ * The sidebar is re-rendered on every config update via [renderSidebar],
+ * called from [renderConfig].
+ *
+ * @see renderSidebar
+ * @see collectLeaves
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
 import kotlinx.browser.window
 import org.w3c.dom.HTMLElement
 
+/**
+ * Flattened information about a single leaf pane, extracted from the config tree
+ * for sidebar rendering.
+ *
+ * @property paneId the unique pane identifier
+ * @property title the display title
+ * @property sessionId the PTY session identifier
+ * @property contentKind the pane content type ("terminal", "fileBrowser", "git")
+ * @property isLink whether this pane is a linked view of another session
+ */
 data class LeafInfo(val paneId: String, val title: String, val sessionId: String, val contentKind: String, val isLink: Boolean)
 
+/**
+ * Recursively walks a pane tree node and collects all leaf nodes into a flat list.
+ *
+ * @param node a dynamic pane tree node (leaf or split)
+ * @param into the mutable list to append [LeafInfo] entries to
+ */
 fun collectLeaves(node: dynamic, into: MutableList<LeafInfo>) {
     if (node.kind == "leaf") {
         val kind = (node.content?.kind as? String) ?: "terminal"
@@ -17,6 +47,16 @@ fun collectLeaves(node: dynamic, into: MutableList<LeafInfo>) {
     }
 }
 
+/**
+ * Re-renders the entire sidebar tree from the current server configuration.
+ *
+ * Builds a collapsible tree with tab headers and pane items. Tab sections can
+ * be collapsed/expanded independently. Clicking a pane item switches to its
+ * tab and focuses the pane. Active tab and focused pane are highlighted.
+ *
+ * @param config the dynamic server configuration object containing tabs and pane trees
+ * @see renderConfig
+ */
 fun renderSidebar(config: dynamic) {
     val sidebar = sidebarEl ?: return
     sidebar.innerHTML = ""

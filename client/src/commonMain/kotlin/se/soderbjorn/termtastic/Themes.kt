@@ -1,18 +1,46 @@
+/**
+ * Terminal colour theme definitions for the Termtastic terminal emulator.
+ *
+ * Each [TerminalTheme] carries a dark-mode and light-mode foreground/background
+ * colour pair. The [recommendedThemes] list is the canonical palette surfaced in
+ * every platform's theme picker; it is kept in sync with the HTML colour-picker
+ * tool at `tools/neon-green-picker.html`.
+ *
+ * @see se.soderbjorn.termtastic.client.UiSettings
+ * @see se.soderbjorn.termtastic.client.effectiveColors
+ */
 package se.soderbjorn.termtastic
 
+/**
+ * A terminal colour theme with separate foreground and background colours for
+ * dark and light appearance modes.
+ *
+ * @property name   Human-readable theme name shown in the picker UI.
+ * @property darkFg Hex foreground colour used in dark mode (e.g. `"#33ff66"`).
+ * @property lightFg Hex foreground colour used in light mode.
+ * @property darkBg Hex background colour used in dark mode. Defaults to pure
+ *   black; designer themes like Solarized override this with a tinted colour.
+ * @property lightBg Hex background colour used in light mode. Defaults to pure
+ *   white; designer themes override this with their canonical light background.
+ */
 data class TerminalTheme(
     val name: String,
     val darkFg: String,
     val lightFg: String,
-    // Background pair. Defaults preserve the original behavior of pure
-    // black-on-dark and pure white-on-light so themes that don't care can
-    // omit them. Themes like Solarized override both to get their signature
-    // tinted backgrounds (e.g. Solarized Light's cream `#fdf6e3`).
     val darkBg: String = "#000000",
     val lightBg: String = "#ffffff"
 )
 
-// Handpicked themes — synced with tools/neon-green-picker.html "Recommended" tab.
+/**
+ * Curated list of terminal themes available in the theme picker.
+ *
+ * The first group uses the default pure-black/white backgrounds; the second
+ * group ("tinted-background themes") specifies custom background colours for
+ * both modes, giving the picker visual variety (cream Solarized Light, deep
+ * navy Tokyo Night, etc.).
+ *
+ * Kept in sync with the "Recommended" tab in `tools/neon-green-picker.html`.
+ */
 val recommendedThemes: List<TerminalTheme> = listOf(
     TerminalTheme("Matrix",        "#33ff66", "#0a7d2c"),
     TerminalTheme("Mint terminal", "#33ff99", "#0b8a5b"),
@@ -105,6 +133,11 @@ val recommendedThemes: List<TerminalTheme> = listOf(
                                     darkBg = "#000000", lightBg = "#ffffff"),
 )
 
+/** Name of the theme applied when the server has no stored preference. */
 const val DEFAULT_THEME_NAME = "Tron"
 
+/**
+ * User preference for light/dark appearance. [Auto] defers to the host
+ * platform's system setting.
+ */
 enum class Appearance { Auto, Dark, Light }

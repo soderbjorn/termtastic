@@ -1,3 +1,20 @@
+/**
+ * Headless terminal emulator wrapper for server-side screen state.
+ *
+ * This file contains [ScreenEmulator], which wraps the JediTerm terminal
+ * emulation library to maintain a virtual screen grid that mirrors what
+ * xterm.js renders in the browser. It processes raw PTY byte output into
+ * rendered screen lines so that [StateDetector] and [ClaudeUsageMonitor] can
+ * scan the actual visible text rather than the raw byte history.
+ *
+ * Each [TerminalSession] owns one instance (fed from the PTY read loop),
+ * and [ClaudeUsageMonitor] creates a separate instance for its hidden
+ * Claude CLI session.
+ *
+ * @see TerminalSession
+ * @see StateDetector
+ * @see ClaudeUsageMonitor
+ */
 package se.soderbjorn.termtastic
 
 import com.jediterm.core.util.TermSize

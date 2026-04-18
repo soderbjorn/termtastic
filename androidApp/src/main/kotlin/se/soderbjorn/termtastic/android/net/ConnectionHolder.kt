@@ -24,8 +24,18 @@ object ConnectionHolder {
     @Volatile
     private var currentWindowSocket: WindowSocket? = null
 
+    /**
+     * Returns the currently connected [TermtasticClient], or null if disconnected.
+     *
+     * @return the active client instance, or null.
+     */
     fun client(): TermtasticClient? = currentClient
 
+    /**
+     * Returns the open [WindowSocket] for the current connection, or null if disconnected.
+     *
+     * @return the active window socket, or null.
+     */
     fun windowSocket(): WindowSocket? = currentWindowSocket
 
     /**
@@ -37,8 +47,17 @@ object ConnectionHolder {
         get() = currentClient?.windowState?.pendingApproval
 
     /**
-     * Tear down any existing client and create a fresh one for [serverUrl].
-     * Called from ConnectScreen's "Connect" button.
+     * Tears down any existing client and creates a fresh one for [serverUrl].
+     *
+     * Called from [se.soderbjorn.termtastic.android.ui.HostsScreen] when the
+     * user taps a host to connect. Performs a two-phase handshake: first the
+     * WebSocket session (15 s timeout), then waits for the server's initial
+     * Config envelope (up to 5 min to allow for device-approval dialogs).
+     *
+     * @param serverUrl the server URL containing host and port.
+     * @param authToken the authentication token for this client.
+     * @return the connected [TermtasticClient] instance.
+     * @throws Throwable if the connection or handshake fails.
      */
     suspend fun connect(serverUrl: ServerUrl, authToken: String): TermtasticClient {
         disconnect()
@@ -81,6 +100,12 @@ object ConnectionHolder {
         return fresh
     }
 
+    /**
+     * Scans all network interfaces for the first non-loopback, non-link-local
+     * IPv4 address to use as the advisory self-reported IP in the client identity.
+     *
+     * @return the IP address string, or null if none found.
+     */
     private fun firstNonLoopbackIpv4(): String? {
         val nics = NetworkInterface.getNetworkInterfaces() ?: return null
         for (nic in nics) {
@@ -94,6 +119,10 @@ object ConnectionHolder {
         return null
     }
 
+    /**
+     * Closes the current window socket and client, resetting both to null.
+     * Safe to call even when already disconnected.
+     */
     suspend fun disconnect() {
         currentWindowSocket?.close()
         currentWindowSocket = null

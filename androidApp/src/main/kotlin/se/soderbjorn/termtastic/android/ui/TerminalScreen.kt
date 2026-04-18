@@ -1,3 +1,19 @@
+/**
+ * Terminal emulator screen for the Termtastic Android app.
+ *
+ * Hosts a full xterm-compatible terminal session rendered by a Termux
+ * [com.termux.view.TerminalView]. User keystrokes are forwarded to the
+ * server over a [se.soderbjorn.termtastic.client.PtySocket] WebSocket, and
+ * incoming PTY output is fed into a local [com.termux.terminal.TerminalEmulator]
+ * for rendering. Also provides an IME helper toolbar for keys missing from
+ * phone keyboards (Esc, Ctrl, Tab, arrows), a swipe-to-type input bar, and
+ * pinch-to-zoom font resizing.
+ *
+ * Navigated to from [TreeScreen] when the user taps a terminal leaf pane.
+ *
+ * @see TreeScreen
+ * @see se.soderbjorn.termtastic.android.net.ConnectionHolder
+ */
 package se.soderbjorn.termtastic.android.ui
 
 import android.graphics.Typeface
@@ -96,6 +112,7 @@ import se.soderbjorn.termtastic.client.fetchUiSettings
 // Mirrors `.terminal-cell.focused .terminal-title` in styles.css so the
 // Android top bar picks up the same warm accent the electron app uses for
 // the focused pane header.
+/** Warm amber accent colour used for the terminal screen top bar, matching the electron focused pane header. */
 private val HeaderAccent = Color(0xBFF4B869)
 
 /**
@@ -108,6 +125,17 @@ private data class AndroidGridDims(
     val rows: Int,
 )
 
+/**
+ * Searches the [WindowConfig] pane tree for a leaf whose session ID matches
+ * [sessionId] and returns its display title.
+ *
+ * Used by [TerminalScreen] to show the server-computed pane title (e.g. a
+ * prettified working directory) in the top bar instead of the raw session ID.
+ *
+ * @param config the current window configuration, or null if not yet received.
+ * @param sessionId the PTY session identifier to search for.
+ * @return the leaf title if found, or null.
+ */
 private fun findLeafTitle(config: WindowConfig?, sessionId: String): String? {
     if (config == null) return null
     fun walk(node: PaneNode?): String? = when (node) {
@@ -127,6 +155,11 @@ private fun findLeafTitle(config: WindowConfig?, sessionId: String): String? {
  * A single-session terminal screen. Owns a [TerminalEmulator] fed from the
  * [PtySocket]'s byte flow, a [TerminalView] rendering the emulator, and
  * a sticky IME helper toolbar above the soft keyboard for Esc/Ctrl/Tab/arrows.
+ *
+ * @param sessionId the PTY session identifier to connect to on the server.
+ * @param onBack callback invoked when the user navigates back to [TreeScreen].
+ * @see TreeScreen
+ * @see se.soderbjorn.termtastic.android.net.ConnectionHolder
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -734,6 +767,17 @@ private fun PaneStateDot(state: String) {
     )
 }
 
+/**
+ * A single key button in the [ImeHelperToolbar].
+ *
+ * Renders as a rounded-rectangle pill with haptic feedback on tap. Sticky
+ * keys (Ctrl, Shift) toggle between armed (blue) and unarmed states.
+ *
+ * @param label the text displayed on the key.
+ * @param sticky true for modifier keys that toggle on/off.
+ * @param active true when a sticky modifier is currently armed.
+ * @param onClick callback invoked when the key is tapped.
+ */
 @Composable
 private fun ToolbarKey(
     label: String,

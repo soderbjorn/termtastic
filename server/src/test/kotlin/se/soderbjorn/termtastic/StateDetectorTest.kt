@@ -1,9 +1,25 @@
+/**
+ * Unit tests for [StateDetector].
+ *
+ * This file verifies that [StateDetector.detectState] correctly identifies
+ * AI coding assistant states (working, waiting, idle) from rendered terminal
+ * text. Tests cover Claude Code approval prompts (plan-mode, tool-approval,
+ * boxed menus), the "esc to interrupt" / "esc to cancel" markers, idle-prompt
+ * detection, and Gemini CLI's "esc to cancel," variant.
+ *
+ * @see StateDetector
+ * @see SessionState
+ */
 package se.soderbjorn.termtastic
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
+/**
+ * Tests for [StateDetector.detectState] covering Claude Code, Codex CLI,
+ * and Gemini CLI state patterns.
+ */
 class StateDetectorTest {
 
     @Test

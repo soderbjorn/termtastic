@@ -1,3 +1,16 @@
+/**
+ * Pop-out window mode handling for the Termtastic web frontend.
+ *
+ * When a pane is popped out into a separate Electron window, this module
+ * initializes a minimal single-pane UI that shares the same [WindowSocket]
+ * as the main window. It listens for config updates to find its pane in the
+ * server state, renders it, and automatically closes when the pane is docked
+ * back into the main window.
+ *
+ * @see initPopoutMode
+ * @see WindowCommand.PopOut
+ * @see WindowCommand.DockPoppedOut
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -7,6 +20,19 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import org.w3c.dom.HTMLElement
 
+/**
+ * Initializes the pop-out window mode for a single pane.
+ *
+ * Sets up a coroutine that collects envelopes from the shared [WindowSocket]
+ * and renders the target pane (identified by [popoutPaneIdParam]) in isolation.
+ * Handles config updates (to render the pane and track title changes), UI settings
+ * changes, session state updates, and pane content messages.
+ *
+ * Automatically closes the window when the pane is docked back into the main window
+ * (i.e., it disappears from the poppedOut array in the config).
+ *
+ * Called by [start] when a `popout` URL parameter is present.
+ */
 fun initPopoutMode() {
     val paneId = popoutPaneIdParam ?: return
 

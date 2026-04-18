@@ -1,3 +1,12 @@
+/**
+ * Server-to-client WebSocket message types for the Termtastic terminal emulator.
+ * Defines the [WindowEnvelope] sealed hierarchy (pushed over `/window`) and all
+ * supporting data types for file browser listings, git diffs, usage data, and
+ * UI settings.
+ *
+ * @see WindowCommand for the client-to-server direction
+ * @see windowJson for the shared serialization configuration
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.serialization.ExperimentalSerializationApi
@@ -23,14 +32,34 @@ import kotlinx.serialization.json.JsonObject
 @Serializable
 @JsonClassDiscriminator("type")
 sealed class WindowEnvelope {
+    /**
+     * Pushes the full window layout to the client. Sent on initial connection
+     * and after every mutation command that changes the layout.
+     *
+     * @param config the complete window/tab/pane configuration
+     * @see WindowConfig
+     */
     @Serializable
     @SerialName("config")
     data class Config(val config: WindowConfig) : WindowEnvelope()
 
+    /**
+     * Broadcasts terminal session state changes (e.g. shell mode indicators).
+     * The map keys are session ids; values are the current state string or `null`.
+     *
+     * @param states map of session id to its current state (or `null` if cleared)
+     */
     @Serializable
     @SerialName("state")
     data class State(val states: Map<String, String?>) : WindowEnvelope()
 
+    /**
+     * Response to [WindowCommand.FileBrowserListDir]: a one-level directory listing.
+     *
+     * @param paneId the file browser pane that requested the listing
+     * @param dirRelPath relative path of the listed directory
+     * @param entries files and subdirectories found in the directory
+     */
     @Serializable
     @SerialName("fileBrowserDir")
     data class FileBrowserDir(
@@ -39,6 +68,10 @@ sealed class WindowEnvelope {
         val entries: List<FileBrowserEntry>,
     ) : WindowEnvelope()
 
+    /**
+     * Response to [WindowCommand.FileBrowserOpenFile]: the rendered content of
+     * a selected file (markdown, syntax-highlighted text, or a binary placeholder).
+     */
     @Serializable
     @SerialName("fileBrowserContent")
     data class FileBrowserContentMsg(
@@ -50,6 +83,12 @@ sealed class WindowEnvelope {
         val language: String? = null,
     ) : WindowEnvelope()
 
+    /**
+     * Error response for a file browser operation (e.g. permission denied, path not found).
+     *
+     * @param paneId the file browser pane that triggered the error
+     * @param message human-readable error description
+     */
     @Serializable
     @SerialName("fileBrowserError")
     data class FileBrowserError(
@@ -57,18 +96,42 @@ sealed class WindowEnvelope {
         val message: String,
     ) : WindowEnvelope()
 
+    /**
+     * Notification that an action requires user approval before proceeding.
+     *
+     * @param message description of the pending approval request
+     */
     @Serializable
     @SerialName("pendingApproval")
     data class PendingApproval(val message: String) : WindowEnvelope()
 
+    /**
+     * Pushes the current UI settings to the client as a generic JSON blob.
+     * Sent in response to [WindowCommand.OpenSettings] and on initial connection.
+     *
+     * @param settings the complete UI settings object
+     */
     @Serializable
     @SerialName("uiSettings")
     data class UiSettings(val settings: JsonObject) : WindowEnvelope()
 
+    /**
+     * Pushes Claude API usage statistics to the client.
+     * Sent in response to [WindowCommand.RefreshUsage].
+     *
+     * @param usage the usage data, or `null` if unavailable
+     */
     @Serializable
     @SerialName("claudeUsage")
     data class ClaudeUsage(val usage: ClaudeUsageData?) : WindowEnvelope()
 
+    /**
+     * Response to [WindowCommand.GitList]: the list of uncommitted changes in
+     * the git working directory.
+     *
+     * @param paneId the git pane that requested the list
+     * @param entries files with uncommitted changes
+     */
     @Serializable
     @SerialName("gitList")
     data class GitList(
@@ -76,6 +139,10 @@ sealed class WindowEnvelope {
         val entries: List<GitFileEntry>,
     ) : WindowEnvelope()
 
+    /**
+     * Response to [WindowCommand.GitDiff]: parsed diff hunks for a single file,
+     * plus optional full file contents for split-mode rendering.
+     */
     @Serializable
     @SerialName("gitDiff")
     data class GitDiffResult(
@@ -90,6 +157,12 @@ sealed class WindowEnvelope {
         val newContent: String? = null,
     ) : WindowEnvelope()
 
+    /**
+     * Error response for a git operation (e.g. not a git repository, git not installed).
+     *
+     * @param paneId the git pane that triggered the error
+     * @param message human-readable error description
+     */
     @Serializable
     @SerialName("gitError")
     data class GitError(
@@ -98,6 +171,10 @@ sealed class WindowEnvelope {
     ) : WindowEnvelope()
 }
 
+/**
+ * Snapshot of Claude API usage data retrieved from the Claude CLI.
+ * Contains session-level and weekly usage percentages plus reset times.
+ */
 @Serializable
 data class ClaudeUsageData(
     val sessionPercent: Int,
@@ -111,6 +188,11 @@ data class ClaudeUsageData(
     val fetchedAt: String = "",
 )
 
+/**
+ * A single entry (file or directory) in a file browser directory listing.
+ *
+ * @see WindowEnvelope.FileBrowserDir
+ */
 @Serializable
 data class FileBrowserEntry(
     val name: String,
@@ -121,9 +203,24 @@ data class FileBrowserEntry(
     val mtimeEpochMs: Long,
 )
 
+/**
+ * The rendering treatment applied to a file's content in the file browser preview.
+ */
 @Serializable
-enum class FileContentKind { Markdown, Text, Binary }
+enum class FileContentKind {
+    /** Rendered as HTML from Markdown source. */
+    Markdown,
+    /** Syntax-highlighted plain text. */
+    Text,
+    /** Binary file; no content preview available. */
+    Binary
+}
 
+/**
+ * A file with uncommitted changes in the git working directory.
+ *
+ * @see WindowEnvelope.GitList
+ */
 @Serializable
 data class GitFileEntry(
     val filePath: String,
@@ -131,9 +228,20 @@ data class GitFileEntry(
     val directory: String,
 )
 
+/** The git status of a changed file in the working directory. */
 @Serializable
 enum class GitFileStatus { Added, Modified, Deleted, Renamed, Untracked }
 
+/**
+ * A single hunk from a unified diff, representing a contiguous region of changes.
+ *
+ * @param oldStart starting line number in the old file
+ * @param oldCount number of lines from the old file in this hunk
+ * @param newStart starting line number in the new file
+ * @param newCount number of lines from the new file in this hunk
+ * @param lines the individual diff lines within this hunk
+ * @see WindowEnvelope.GitDiffResult
+ */
 @Serializable
 data class DiffHunk(
     val oldStart: Int,
@@ -143,6 +251,10 @@ data class DiffHunk(
     val lines: List<DiffLine>,
 )
 
+/**
+ * A single line within a [DiffHunk], carrying its type (context, addition, or
+ * deletion), optional line numbers in the old and new files, and the text content.
+ */
 @Serializable
 data class DiffLine(
     val type: DiffLineType,
@@ -151,5 +263,13 @@ data class DiffLine(
     val content: String,
 )
 
+/** Classification of a [DiffLine] within a hunk. */
 @Serializable
-enum class DiffLineType { Context, Addition, Deletion }
+enum class DiffLineType {
+    /** Unchanged context line present in both old and new files. */
+    Context,
+    /** Line added in the new file. */
+    Addition,
+    /** Line removed from the old file. */
+    Deletion
+}

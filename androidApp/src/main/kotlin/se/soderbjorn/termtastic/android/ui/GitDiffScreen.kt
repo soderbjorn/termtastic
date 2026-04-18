@@ -1,3 +1,14 @@
+/**
+ * Git diff viewer screen for the Termtastic Android app.
+ *
+ * Fetches the unified diff for a single changed file from the server and
+ * renders it inside a [android.webkit.WebView] as a styled HTML table with
+ * line numbers, addition/deletion colour coding, and syntax-highlight CSS
+ * classes. Navigated to from [GitListScreen] when the user taps a file entry.
+ *
+ * @see GitListScreen
+ * @see se.soderbjorn.termtastic.android.net.ConnectionHolder
+ */
 package se.soderbjorn.termtastic.android.ui
 
 import android.webkit.WebView
@@ -35,6 +46,18 @@ import se.soderbjorn.termtastic.DiffLineType
 import se.soderbjorn.termtastic.WindowEnvelope
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 
+/**
+ * Displays a unified diff for a single changed file.
+ *
+ * Fetches diff hunks from the server via [ConnectionHolder.windowSocket] and
+ * renders them as colour-coded HTML inside a [WebView]. Additions, deletions,
+ * and context lines each get distinct background colours and line number columns.
+ *
+ * @param paneId the server-side pane identifier owning the git session.
+ * @param filePath path of the changed file relative to the repository root.
+ * @param onBack callback invoked when the user navigates back.
+ * @see GitListScreen
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GitDiffScreen(

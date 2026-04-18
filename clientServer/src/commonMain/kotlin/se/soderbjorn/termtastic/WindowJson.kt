@@ -1,3 +1,8 @@
+/**
+ * Shared kotlinx.serialization [Json] instance for encoding and decoding
+ * [WindowConfig] and related types. Imported by both the Ktor server
+ * (websocket routes, persistence) and the client-side deserializer.
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.serialization.json.Json

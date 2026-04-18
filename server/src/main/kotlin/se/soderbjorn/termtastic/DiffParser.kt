@@ -1,3 +1,19 @@
+/**
+ * Unified diff parser for the git-diff pane.
+ *
+ * This file contains [DiffParser], which converts raw unified diff text
+ * (as produced by `git diff`) into a list of [DiffHunk] / [DiffLine] objects
+ * that the client renders as a side-by-side or inline diff view. It also
+ * provides [syntheticAdd] and [syntheticDelete] helpers for files that have
+ * no previous revision (untracked/added) or have been removed.
+ *
+ * Called exclusively by [GitCatalog.readDiff] when building the diff payload
+ * for a `WindowCommand.GitDiff` request.
+ *
+ * @see GitCatalog
+ * @see DiffHunk
+ * @see DiffLine
+ */
 package se.soderbjorn.termtastic
 
 /**

@@ -1,3 +1,17 @@
+/**
+ * Data model for the window/tab/pane layout tree in Termtastic. Defines the
+ * complete structure that the server persists and pushes to clients: tabs
+ * containing binary split trees of leaf panes (terminals, file browsers, git
+ * views), plus floating and popped-out pane overlays.
+ *
+ * The server is the single source of truth. Clients render this model and
+ * send [WindowCommand] mutations; the server applies them and broadcasts
+ * the updated [WindowConfig] via [WindowEnvelope.Config].
+ *
+ * @see WindowCommand for client-to-server mutations
+ * @see WindowEnvelope.Config for the server-to-client push
+ * @see windowJson for the shared serialization configuration
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.serialization.SerialName
@@ -24,6 +38,13 @@ data class WindowConfig(
     val activeTabId: String? = null,
 )
 
+/**
+ * Configuration for a single tab in the window layout. Each tab contains an
+ * optional binary split tree of docked panes, plus independent lists of
+ * floating and popped-out panes.
+ *
+ * @see WindowConfig.tabs
+ */
 @Serializable
 data class TabConfig(
     val id: String,
@@ -95,11 +116,28 @@ data class FloatingPane(
     val z: Long,
 )
 
+/**
+ * A node in the binary split tree that defines the pane layout within a tab.
+ * Either a [LeafNode] (a single pane displaying content) or a [SplitNode]
+ * (a container that divides space between two children).
+ *
+ * @see LeafNode
+ * @see SplitNode
+ */
 @Serializable
 sealed class PaneNode {
+    /** Unique identifier for this node, used in [WindowCommand] messages to target it. */
     abstract val id: String
 }
 
+/**
+ * A terminal leaf in the pane tree representing a single visible pane. The
+ * [content] field determines what the pane displays (terminal, file browser,
+ * or git overview).
+ *
+ * @see LeafContent
+ * @see SplitNode
+ */
 @Serializable
 @SerialName("leaf")
 data class LeafNode(
@@ -149,6 +187,11 @@ data class LeafNode(
 @Serializable
 sealed class LeafContent
 
+/**
+ * Content descriptor for a pane displaying a live terminal (PTY session).
+ *
+ * @see LeafContent
+ */
 @Serializable
 @SerialName("terminal")
 data class TerminalContent(
@@ -218,9 +261,25 @@ data class GitContent(
     val autoRefresh: Boolean = false,
 ) : LeafContent()
 
+/**
+ * Display mode for the git diff viewer.
+ */
 @Serializable
-enum class GitDiffMode { Inline, Split }
+enum class GitDiffMode {
+    /** Unified diff with additions and deletions interleaved. */
+    Inline,
+    /** Side-by-side diff with old content on the left and new on the right. */
+    Split
+}
 
+/**
+ * An interior node in the pane tree that divides its space between two children.
+ * The [orientation] determines whether children are laid out horizontally or
+ * vertically, and [ratio] controls the relative size of the first child.
+ *
+ * @see PaneNode
+ * @see SplitOrientation
+ */
 @Serializable
 @SerialName("split")
 data class SplitNode(
@@ -232,6 +291,9 @@ data class SplitNode(
     val second: PaneNode
 ) : PaneNode()
 
+/**
+ * Orientation of a [SplitNode], determining how its two children are arranged.
+ */
 @Serializable
 enum class SplitOrientation {
     /** Children laid out side-by-side (CSS `flex-direction: row`). */
@@ -240,4 +302,9 @@ enum class SplitOrientation {
     Vertical
 }
 
+/**
+ * Direction in which a pane is split when creating a new sibling pane.
+ * Used by split commands (e.g. [WindowCommand.SplitTerminal]) to specify
+ * where the new pane appears relative to the existing one.
+ */
 enum class SplitDirection { Left, Right, Up, Down }

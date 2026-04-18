@@ -1,3 +1,29 @@
+/**
+ * Ktor server entry point and route configuration for Termtastic.
+ *
+ * This file bootstraps the entire backend: it initialises the SQLite persistence
+ * layer, restores the persisted window layout, starts periodic scrollback and
+ * AI-state polling coroutines, launches the Claude Code usage monitor, and
+ * configures the Netty HTTP/WebSocket server.
+ *
+ * Key responsibilities:
+ *  - [main] wires up persistence, scrollback saving, session-state polling,
+ *    the [ClaudeUsageMonitor], and the Compose Desktop UI loop.
+ *  - [Application.module] installs Ktor plugins (ContentNegotiation, WebSockets)
+ *    and defines all HTTP routes and WebSocket endpoints.
+ *  - `/pty/{id}` WebSocket: bidirectional terminal I/O for a single PTY session.
+ *  - `/window` WebSocket: pushes the live [WindowConfig] tree and handles all
+ *    UI commands (split, close, rename, file-browser, git, settings, etc.).
+ *  - `/api/ui-settings` REST: get/merge the client-side UI preferences blob.
+ *
+ * Also contains [TerminalSessions] (the process-wide PTY registry) and
+ * [TerminalSession] (a single PTY-backed session with ring-buffer replay,
+ * headless screen emulation, and multi-client size negotiation).
+ *
+ * @see WindowState
+ * @see SettingsRepository
+ * @see DeviceAuth
+ */
 package se.soderbjorn.termtastic
 
 import com.pty4j.PtyProcess
@@ -63,6 +89,16 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 import kotlin.time.Duration.Companion.milliseconds
 
+/**
+ * Application entry point. Initialises the persistence layer, restores the
+ * window layout, starts background coroutines for scrollback saving and
+ * session-state polling, launches the Claude usage monitor, and starts the
+ * Netty HTTP/WebSocket server.
+ *
+ * On non-headless systems, the Compose Desktop application loop owns the
+ * main thread (required on macOS for AppKit) and renders the settings dialog
+ * and device-approval dialog on demand.
+ */
 @OptIn(FlowPreview::class)
 fun main() {
     // Bring up the persistence layer first so the loaded window config (if
@@ -210,6 +246,22 @@ fun main() {
     }
 }
 
+/**
+ * Ktor application module: installs plugins and defines all routes.
+ *
+ * Configures [ContentNegotiation] with JSON and [WebSockets], then sets up:
+ *  - Static file serving (dev: on-disk dist; prod: classpath `/web` resources).
+ *  - `GET /api/ui-settings` and `POST /api/ui-settings` REST endpoints.
+ *  - `/pty/{id}` WebSocket for bidirectional terminal I/O.
+ *  - `/window` WebSocket for the live window-state protocol.
+ *
+ * @param settingsRepo the SQLite-backed settings store, shared across all routes
+ * @param sessionStates flow of per-session AI assistant states, polled every 3 s
+ * @param usageMonitor the Claude CLI usage monitor whose data is pushed to clients
+ *
+ * @see handleWindowCommand
+ * @see handleControl
+ */
 fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableSharedFlow<Map<String, String?>>, usageMonitor: ClaudeUsageMonitor) {
     install(ContentNegotiation) { json() }
     install(WebSockets) {
@@ -502,21 +554,48 @@ internal class WindowConnectionContext(
 ) {
     private val gitWatchers = ConcurrentHashMap<String, GitWatchHandle>()
 
+    /**
+     * Register (or replace) the git auto-refresh watcher for [paneId].
+     * If a previous watcher existed for this pane, it is closed first.
+     *
+     * @param paneId the leaf pane id owning the watcher
+     * @param handle the new watcher handle, or null to remove the existing one
+     */
     fun setGitWatcher(paneId: String, handle: GitWatchHandle?) {
         val previous = if (handle == null) gitWatchers.remove(paneId) else gitWatchers.put(paneId, handle)
         previous?.close()
     }
 
+    /**
+     * Remove and close the git auto-refresh watcher for [paneId], if any.
+     *
+     * @param paneId the leaf pane id whose watcher should be cancelled
+     */
     fun cancelGitWatcher(paneId: String) {
         gitWatchers.remove(paneId)?.close()
     }
 
+    /**
+     * Close all git watchers owned by this connection. Called from the
+     * `/window` WebSocket's `finally` block on disconnect.
+     */
     fun closeAll() {
         for (handle in gitWatchers.values) handle.close()
         gitWatchers.clear()
     }
 }
 
+/**
+ * Handle a JSON control message received on a `/pty/{id}` WebSocket.
+ *
+ * Deserialises the text as a [PtyControl] and dispatches resize commands
+ * to the [TerminalSession]. Unknown or malformed messages are silently
+ * dropped.
+ *
+ * @param session the terminal session this WebSocket is attached to
+ * @param clientId unique id for this socket connection (for multi-client size negotiation)
+ * @param text the raw JSON text from the WebSocket frame
+ */
 private fun handleControl(session: TerminalSession, clientId: String, text: String) {
     val control = runCatching {
         windowJson.decodeFromString<PtyControl>(text)
@@ -543,15 +622,44 @@ private fun buildFileBrowserDirEnvelope(
     return WindowEnvelope.FileBrowserDir(paneId = paneId, dirRelPath = dirRelPath, entries = entries)
 }
 
+/**
+ * Build a `fileBrowserError` envelope for [paneId] with the given error [message].
+ *
+ * @param paneId the leaf pane id the error relates to
+ * @param message human-readable error description
+ * @return an error envelope ready to send over the `/window` WebSocket
+ */
 private fun buildFileBrowserErrorEnvelope(paneId: String, message: String): WindowEnvelope.FileBrowserError =
     WindowEnvelope.FileBrowserError(paneId = paneId, message = message)
 
+/**
+ * Build a `gitList` envelope for [paneId] by listing uncommitted changes
+ * in the git working tree at [cwd].
+ *
+ * @param paneId the leaf pane id requesting the git file list
+ * @param cwd the working directory of the pane (may be null if not yet known)
+ * @return a git list envelope with the changed files, or an empty list if [cwd] is null
+ */
 private fun buildGitListEnvelope(paneId: String, cwd: String?): WindowEnvelope.GitList {
     val entries = if (cwd.isNullOrBlank()) emptyList()
     else GitCatalog.listChanges(java.nio.file.Paths.get(cwd)) ?: emptyList()
     return WindowEnvelope.GitList(paneId = paneId, entries = entries)
 }
 
+/**
+ * Dispatch a JSON command received on the `/window` WebSocket.
+ *
+ * Deserialises [text] as a [WindowCommand] and routes it to the appropriate
+ * [WindowState] mutation or file/git catalog operation. Results (directory
+ * listings, file content, diff hunks, errors) are sent back to the requesting
+ * client via [ctx]'s unicast reply channel.
+ *
+ * @param text the raw JSON text from the WebSocket frame
+ * @param ctx per-connection state holding the reply channel and owned watchers
+ *
+ * @see WindowCommand
+ * @see WindowConnectionContext
+ */
 private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionContext) {
     val cmd = runCatching { windowJson.decodeFromString<WindowCommand>(text) }.getOrNull() ?: return
     when (cmd) {
@@ -856,6 +964,12 @@ object TerminalSessions {
         return id
     }
 
+    /**
+     * Look up a live session by its id.
+     *
+     * @param id the session id (e.g. `"s1"`)
+     * @return the session, or null if no session with that id exists
+     */
     fun get(id: String): TerminalSession? = sessions[id]
 
     /**
@@ -910,6 +1024,13 @@ object TerminalSessions {
         return result
     }
 
+    /**
+     * Tear down a session: cancel its cwd watcher, shut down the PTY, and
+     * remove all tracking state. Called when the last pane referencing this
+     * session is closed.
+     *
+     * @param id the session id to destroy
+     */
     fun destroy(id: String) {
         stateOverrides.remove(id)
         lastNonNullState.remove(id)
@@ -1019,6 +1140,12 @@ class TerminalSession private constructor(
         }
     }
 
+    /**
+     * Write raw bytes to the PTY's stdin. Called when a `/pty/{id}` WebSocket
+     * receives a binary frame containing user keystrokes.
+     *
+     * @param bytes the raw bytes to send to the shell process
+     */
     fun write(bytes: ByteArray) {
         try {
             pty.outputStream.write(bytes)
@@ -1028,6 +1155,10 @@ class TerminalSession private constructor(
         }
     }
 
+    /**
+     * Destroy the underlying PTY process and cancel all associated coroutines.
+     * Called by [TerminalSessions.destroy] when the last referencing pane is closed.
+     */
     fun shutdown() {
         try {
             pty.destroy()
@@ -1049,6 +1180,15 @@ class TerminalSession private constructor(
     private val _sizeEvents = MutableStateFlow(Pair(120, 32))
     val sizeEvents: StateFlow<Pair<Int, Int>> = _sizeEvents.asStateFlow()
 
+    /**
+     * Register the declared terminal size for [clientId]. The PTY's actual
+     * winsize is recomputed as `min(cols)` x `min(rows)` across all attached
+     * clients (tmux-style semantics).
+     *
+     * @param clientId unique per-socket identifier
+     * @param cols the client's terminal width in columns
+     * @param rows the client's terminal height in rows
+     */
     fun setClientSize(clientId: String, cols: Int, rows: Int) {
         clientSizes[clientId] = Pair(max(1, cols), max(1, rows))
         applyEffectiveSize()
@@ -1068,10 +1208,22 @@ class TerminalSession private constructor(
         applyEffectiveSize()
     }
 
+    /**
+     * Unregister a client's size entry when its WebSocket disconnects.
+     * Recomputes the effective PTY size so the remaining clients can use
+     * the full available width/height.
+     *
+     * @param clientId the disconnecting client's unique identifier
+     */
     fun removeClient(clientId: String) {
         if (clientSizes.remove(clientId) != null) applyEffectiveSize()
     }
 
+    /**
+     * Recompute the PTY's winsize as the minimum cols/rows across all
+     * attached clients and apply it. Also updates the [sizeEvents] flow
+     * and resizes the headless [ScreenEmulator].
+     */
     private fun applyEffectiveSize() {
         val sizes = clientSizes.values
         if (sizes.isEmpty()) return
@@ -1093,6 +1245,13 @@ class TerminalSession private constructor(
         return StateDetector.detectState(text)
     }
 
+    /**
+     * Return a copy of the ring buffer contents for reconnect replay.
+     * Appends a DECTCEM "show cursor" suffix to prevent cursor-hidden
+     * artifacts when the ring was captured mid-TUI-render.
+     *
+     * @return the ring buffer bytes with a trailing show-cursor escape
+     */
     fun snapshot(): ByteArray {
         val ringBytes = synchronized(ringLock) {
             if (ringSize == 0) return@synchronized ByteArray(0)
@@ -1116,6 +1275,12 @@ class TerminalSession private constructor(
         return ringBytes + SHOW_CURSOR_SUFFIX
     }
 
+    /**
+     * Append [chunk] to the circular ring buffer, evicting oldest bytes
+     * when capacity is exceeded. Also increments [bytesWritten].
+     *
+     * @param chunk the raw PTY output bytes to buffer
+     */
     private fun appendToRing(chunk: ByteArray) = synchronized(ringLock) {
         for (b in chunk) {
             val writeIdx = (ringStart + ringSize) % ringCapacity

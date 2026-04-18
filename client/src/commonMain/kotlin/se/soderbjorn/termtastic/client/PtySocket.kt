@@ -1,3 +1,16 @@
+/**
+ * WebSocket wrapper for the `/pty/{sessionId}` endpoint, providing the live
+ * bidirectional byte stream between the client's terminal renderer and the
+ * server-side PTY process.
+ *
+ * Consumers subscribe to [PtySocket.output] for terminal output bytes and call
+ * [PtySocket.send] to forward user keystrokes. Resize notifications are sent
+ * via [PtySocket.resize] (or [PtySocket.forceResize] to override multi-client
+ * min-aggregation).
+ *
+ * @see TermtasticClient.openPtySocket
+ * @see se.soderbjorn.termtastic.client.viewmodel.TerminalBackingViewModel
+ */
 package se.soderbjorn.termtastic.client
 
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
@@ -84,11 +97,25 @@ class PtySocket internal constructor(
         }
     }
 
+    /**
+     * Write raw user-input bytes to the remote PTY. The server forwards these
+     * directly to the PTY master file descriptor.
+     *
+     * @param bytes the keystrokes or paste data to send.
+     */
     suspend fun send(bytes: ByteArray) {
         val session = sessionReady.await()
         session.send(Frame.Binary(true, bytes))
     }
 
+    /**
+     * Notify the server that the terminal renderer's grid size has changed.
+     * The server aggregates sizes from all attached clients and applies the
+     * minimum to the PTY via `TIOCSWINSZ`.
+     *
+     * @param cols new column count.
+     * @param rows new row count.
+     */
     suspend fun resize(cols: Int, rows: Int) {
         val session = sessionReady.await()
         val payload = client.json.encodeToString<PtyControl>(PtyControl.Resize(cols, rows))
@@ -107,6 +134,10 @@ class PtySocket internal constructor(
         session.send(Frame.Text(payload))
     }
 
+    /**
+     * Gracefully close the WebSocket connection and cancel the reader coroutine.
+     * Safe to call multiple times.
+     */
     suspend fun close() {
         runCatching {
             if (sessionReady.isCompleted) sessionReady.await().close()

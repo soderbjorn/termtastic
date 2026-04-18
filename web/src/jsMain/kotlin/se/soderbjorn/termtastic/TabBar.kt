@@ -1,3 +1,14 @@
+/**
+ * Tab bar component for the Termtastic web frontend.
+ *
+ * Manages the tab strip at the top of the application, including the sliding
+ * active tab indicator, tab switching with CSS transitions, FLIP animations
+ * for drag-and-drop tab reordering, and scroll-into-view behavior.
+ *
+ * @see positionActiveIndicator
+ * @see setActiveTab
+ * @see runTabFlip
+ */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
@@ -5,6 +16,12 @@ import kotlinx.browser.window
 import kotlinx.serialization.encodeToString
 import org.w3c.dom.HTMLElement
 
+/**
+ * Positions the sliding active tab indicator under the currently active tab button.
+ *
+ * Reads the active button's position and size and applies a CSS transform and
+ * dimensions to the indicator element. Called after tab switches and window resizes.
+ */
 fun positionActiveIndicator() {
     val tabBar = tabBarEl ?: return
     val indicator = tabBar.querySelector(".tab-active-indicator") as? HTMLElement ?: return
@@ -21,6 +38,13 @@ fun positionActiveIndicator() {
     indicator.classList.add("ready")
 }
 
+/**
+ * Instantly positions the active tab indicator without CSS transitions.
+ *
+ * Used on first render to avoid an initial animation from the origin. Temporarily
+ * adds a "no-transition" class, positions the indicator, forces a reflow, then
+ * re-enables transitions on the next animation frame.
+ */
 fun snapActiveIndicator() {
     val tabBar = tabBarEl ?: return
     val indicator = tabBar.querySelector(".tab-active-indicator") as? HTMLElement ?: return
@@ -31,6 +55,11 @@ fun snapActiveIndicator() {
     window.requestAnimationFrame { indicator.classList.remove("no-transition") }
 }
 
+/**
+ * Scrolls the tab bar horizontally to ensure the active tab button is visible.
+ *
+ * Adds a small margin (8px) to avoid the button being flush with the edge.
+ */
 fun scrollActiveTabIntoView() {
     val tabBar = tabBarEl ?: return
     val active = tabBar.querySelector(".tab-button.active") as? HTMLElement ?: return
@@ -42,6 +71,16 @@ fun scrollActiveTabIntoView() {
     else if (btnRight > barRight) tabBar.scrollLeft += (btnRight - barRight) + 8
 }
 
+/**
+ * Switches the active tab, updating CSS classes on tab buttons and pane sections,
+ * scrolling the tab into view, repositioning the indicator, and refitting terminals.
+ *
+ * Sends [WindowCommand.SetActiveTab] to the server to persist the selection.
+ * Uses a transition listener on the new tab pane to defer terminal fitting until
+ * the fade-in animation completes.
+ *
+ * @param tabId the ID of the tab to activate
+ */
 fun setActiveTab(tabId: String) {
     if (activeTabId == tabId) return
     activeTabId = tabId
@@ -79,6 +118,16 @@ fun setActiveTab(tabId: String) {
     window.setTimeout({ doRefit() }, 320)
 }
 
+/**
+ * Performs a FLIP (First, Last, Invert, Play) animation on tab buttons after
+ * a drag-and-drop tab reorder.
+ *
+ * Compares each tab button's current position to its position in the pre-reorder
+ * snapshot, applies an inverse translateX transform, then removes it in the next
+ * animation frame to trigger a smooth CSS transition.
+ *
+ * @param snapshot a map of tab IDs to their previous left-edge positions (in pixels)
+ */
 fun runTabFlip(snapshot: Map<String, Double>) {
     val tabBar = tabBarEl ?: return
     val buttons = tabBar.querySelectorAll(".tab-button")

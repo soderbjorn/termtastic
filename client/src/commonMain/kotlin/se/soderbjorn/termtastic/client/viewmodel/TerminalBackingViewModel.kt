@@ -1,3 +1,15 @@
+/**
+ * Backing ViewModel for a single terminal pane, exposing metadata used by
+ * pane headers, tab status dots, and sidebar entries.
+ *
+ * This ViewModel intentionally does **not** wrap [PtySocket.output] -- platform
+ * code subscribes to the raw byte stream directly to feed into xterm.js or a
+ * native terminal renderer. Instead, it tracks the current PTY size, session
+ * state, title, and per-pane font size.
+ *
+ * @see se.soderbjorn.termtastic.client.PtySocket
+ * @see AppBackingViewModel
+ */
 package se.soderbjorn.termtastic.client.viewmodel
 
 import kotlinx.coroutines.coroutineScope
@@ -18,6 +30,14 @@ import se.soderbjorn.termtastic.client.WindowSocket
  * pane headers, tab status dots, and sidebar entries can reactively
  * observe per-terminal state.
  */
+/**
+ * ViewModel for a terminal pane identified by [paneId].
+ *
+ * @param paneId       the unique ID of the terminal leaf node.
+ * @param sessionId    the PTY session identifier.
+ * @param ptySocket    the live PTY WebSocket for resize commands.
+ * @param windowSocket the live `/window` WebSocket for observing config.
+ */
 class TerminalBackingViewModel(
     private val paneId: String,
     private val sessionId: String,
@@ -27,6 +47,15 @@ class TerminalBackingViewModel(
     private val _stateFlow = MutableStateFlow(State())
     val stateFlow: StateFlow<State> = _stateFlow.asStateFlow()
 
+    /**
+     * Immutable snapshot of the terminal pane UI state.
+     *
+     * @property ptySize      current (cols, rows) of the PTY, or `null` before
+     *   the first server-reported size.
+     * @property sessionState the human-readable process state (e.g. `"working"`).
+     * @property title        the pane title shown in the tab bar.
+     * @property fontSize     per-pane font size override, or `null` for default.
+     */
     data class State(
         val ptySize: Pair<Int, Int>? = null,
         val sessionState: String? = null,
@@ -34,6 +63,10 @@ class TerminalBackingViewModel(
         val fontSize: Int? = null,
     )
 
+    /**
+     * Start collecting PTY size, session state, and config updates. Long-running
+     * -- cancels when the enclosing scope is cancelled.
+     */
     suspend fun run() {
         coroutineScope {
             launch {
@@ -63,14 +96,32 @@ class TerminalBackingViewModel(
 
     // ── Actions ─────────────────────────────────────────────────────
 
+    /**
+     * Forward a resize event to the PTY.
+     *
+     * @param cols new column count.
+     * @param rows new row count.
+     */
     suspend fun resize(cols: Int, rows: Int) {
         ptySocket.resize(cols, rows)
     }
 
+    /**
+     * Force-resize the PTY, evicting other clients' size entries.
+     *
+     * @param cols new column count.
+     * @param rows new row count.
+     * @see PtySocket.forceResize
+     */
     suspend fun forceResize(cols: Int, rows: Int) {
         ptySocket.forceResize(cols, rows)
     }
 
+    /**
+     * Update the per-pane font size and persist it to the server.
+     *
+     * @param size the new font size in points.
+     */
     suspend fun setFontSize(size: Int) {
         emit(_stateFlow.value.copy(fontSize = size))
         windowSocket.send(WindowCommand.SetTerminalFontSize(paneId = paneId, size = size))

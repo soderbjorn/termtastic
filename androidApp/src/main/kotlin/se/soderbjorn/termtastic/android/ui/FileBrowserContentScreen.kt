@@ -1,3 +1,16 @@
+/**
+ * File content viewer screen for the Termtastic file browser.
+ *
+ * Fetches the server-rendered HTML for a single file (text with syntax
+ * highlighting, Markdown, or binary) and displays it inside an Android
+ * [android.webkit.WebView]. The HTML body is wrapped in a minimal responsive
+ * stylesheet that adapts to the system dark/light theme.
+ *
+ * Navigated to from [FileBrowserListScreen] when the user taps a file entry.
+ *
+ * @see FileBrowserListScreen
+ * @see se.soderbjorn.termtastic.android.net.ConnectionHolder
+ */
 package se.soderbjorn.termtastic.android.ui
 
 import android.webkit.WebView
@@ -32,6 +45,18 @@ import se.soderbjorn.termtastic.FileContentKind
 import se.soderbjorn.termtastic.WindowEnvelope
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 
+/**
+ * Displays the rendered content of a single file from the server's file browser.
+ *
+ * Fetches the file's HTML representation via [ConnectionHolder.windowSocket] and
+ * renders it in a [WebView]. Binary files show a placeholder message; text and
+ * Markdown files are wrapped in a responsive stylesheet with syntax highlighting.
+ *
+ * @param paneId the server-side pane identifier owning the file browser session.
+ * @param relPath relative path of the file within the project root.
+ * @param onBack callback invoked when the user navigates back (back button or gesture).
+ * @see FileBrowserListScreen
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserContentScreen(

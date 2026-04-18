@@ -1,19 +1,46 @@
+/**
+ * Claude API usage bar component for the Termtastic web frontend.
+ *
+ * Renders a horizontal status bar showing Claude Code session and weekly usage
+ * percentages, with color-coded severity indicators (ok/warn/critical) and
+ * a refresh button. The bar is updated whenever a [WindowEnvelope.ClaudeUsage]
+ * envelope arrives from the server via [connectWindow].
+ *
+ * @see updateClaudeUsageBadge
+ * @see WindowConnection
+ */
 package se.soderbjorn.termtastic
 
 import org.w3c.dom.HTMLElement
 
+/**
+ * Maps abbreviated month names to zero-based month indices, used by [formatResetTime]
+ * to parse human-readable reset timestamps from the Claude API.
+ */
 private val MONTH_MAP = mapOf(
     "jan" to 0, "feb" to 1, "mar" to 2, "apr" to 3,
     "may" to 4, "jun" to 5, "jul" to 6, "aug" to 7,
     "sep" to 8, "oct" to 9, "nov" to 10, "dec" to 11,
 )
 
+/**
+ * Returns a CSS class name indicating the severity of a usage percentage.
+ *
+ * @param pct the usage percentage (0-100)
+ * @return one of "usage-critical", "usage-warn", or "usage-ok"
+ */
 private fun pctClass(pct: Int): String = when {
     pct >= 90 -> "usage-critical"
     pct >= 70 -> "usage-warn"
     else -> "usage-ok"
 }
 
+/**
+ * Formats an ISO-8601 timestamp into a human-readable "(updated YYYY-MM-DD HH:MM)" string.
+ *
+ * @param isoString the ISO-8601 date string from the server
+ * @return a formatted string like "(updated 2026-04-18 14:30)", or empty string on failure
+ */
 private fun formatFetchedAt(isoString: String): String {
     if (isoString.isBlank()) return ""
     return try {
@@ -27,6 +54,13 @@ private fun formatFetchedAt(isoString: String): String {
     } catch (_: Exception) { "" }
 }
 
+/**
+ * Parses the Claude API reset time string (e.g. "3:00 pm" or "Apr 20 3:00 pm")
+ * into a formatted "(resets YYYY-MM-DD HH:MM)" string for display in the usage bar.
+ *
+ * @param raw the raw reset time string from the Claude API response
+ * @return a formatted reset time string, or empty string if parsing fails
+ */
 private fun formatResetTime(raw: String): String {
     if (raw.isBlank()) return ""
     val timeMatch = Regex("""(\d{1,2})(?::(\d{2}))?\s*(am|pm)""", RegexOption.IGNORE_CASE).find(raw)
@@ -61,12 +95,32 @@ private fun formatResetTime(raw: String): String {
     return "(resets $yyyy-$mo-$dd $hh:$mm)"
 }
 
+/**
+ * Builds an HTML snippet for a single usage metric (e.g. "Session 42%").
+ *
+ * @param label the metric label (e.g. "Session", "Week", "Sonnet")
+ * @param pct the usage percentage (0-100)
+ * @param resetTime optional raw reset time string to format and display
+ * @return an HTML string containing the styled usage item
+ */
 private fun usageItem(label: String, pct: Int, resetTime: String = ""): String {
     val reset = formatResetTime(resetTime)
     val resetHtml = if (reset.isNotBlank()) """ <span class="usage-reset">$reset</span>""" else ""
     return """<span class="usage-item">$label <span class="usage-pct ${pctClass(pct)}">${pct}%</span>$resetHtml</span>"""
 }
 
+/**
+ * Updates the Claude usage bar DOM element with the latest usage data.
+ *
+ * Called by [connectWindow] when a [WindowEnvelope.ClaudeUsage] envelope is received.
+ * Extracts session, weekly, and Sonnet usage percentages from the dynamic payload,
+ * renders them as color-coded badges, and attaches a refresh button that sends
+ * [WindowCommand.RefreshUsage] to the server.
+ *
+ * @param usage a dynamic object containing sessionPercent, weeklyAllPercent,
+ *              weeklySonnetPercent, reset times, and fetchedAt fields; or null to hide the bar
+ * @see connectWindow
+ */
 fun updateClaudeUsageBadge(usage: dynamic) {
     val bar = usageBar ?: return
     if (usage == null || usage == undefined) {

@@ -1,3 +1,19 @@
+/**
+ * WebSocket wrapper for the `/window` endpoint, exposing the server's
+ * authoritative window layout ([WindowConfig]) and per-session state map as
+ * hot [StateFlow]s.
+ *
+ * [WindowSocket] also provides suspend-function round-trips for file-browser
+ * and git operations: the client sends a [WindowCommand], then awaits the
+ * matching [WindowEnvelope] reply with a configurable timeout.
+ *
+ * The socket includes automatic reconnection with exponential backoff. The
+ * actual state storage lives in [WindowStateRepository] (held by
+ * [TermtasticClient]) so that data survives reconnects.
+ *
+ * @see TermtasticClient.openWindowSocket
+ * @see WindowStateRepository
+ */
 package se.soderbjorn.termtastic.client
 
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
@@ -181,13 +197,27 @@ class WindowSocket internal constructor(
         sessionReady.await()
     }
 
+    /**
+     * Serialize and send a [WindowCommand] to the server over the live
+     * WebSocket. If the session is not yet established, suspends until the
+     * handshake completes.
+     *
+     * @param command the command to send (e.g. [WindowCommand.AddTab]).
+     */
     suspend fun send(command: WindowCommand) {
         val session = _activeSession.value ?: sessionReady.await()
         val payload = client.json.encodeToString<WindowCommand>(command)
         session.send(Frame.Text(payload))
     }
 
-    /** List one directory for [paneId]. [dirRelPath] is `""` for the root. */
+    /**
+     * Request a directory listing from the server for a file-browser pane.
+     *
+     * @param paneId     the file-browser pane that owns the request.
+     * @param dirRelPath relative path of the directory to list; `""` for root.
+     * @param timeoutMs  maximum time to wait for the server response.
+     * @return the list of [FileBrowserEntry] items, or `null` on error/timeout.
+     */
     suspend fun fileBrowserListDir(
         paneId: String,
         dirRelPath: String,
@@ -207,7 +237,15 @@ class WindowSocket internal constructor(
         }
     }
 
-    /** Open [relPath] in [paneId] and await the rendered/highlighted HTML. */
+    /**
+     * Open a file and receive its server-rendered/highlighted content.
+     *
+     * @param paneId    the file-browser pane that owns the request.
+     * @param relPath   relative path of the file to open.
+     * @param timeoutMs maximum time to wait for the server response.
+     * @return a [WindowEnvelope.FileBrowserContentMsg] on success,
+     *   [WindowEnvelope.FileBrowserError] on failure, or `null` on timeout.
+     */
     suspend fun fileBrowserOpenFile(
         paneId: String,
         relPath: String,
@@ -222,12 +260,25 @@ class WindowSocket internal constructor(
         }
     }
 
-    /** Fire-and-forget: update the persisted expansion state for [dirRelPath]. */
+    /**
+     * Fire-and-forget: persist whether [dirRelPath] is expanded or collapsed
+     * in the file-browser pane identified by [paneId].
+     *
+     * @param paneId     the owning file-browser pane.
+     * @param dirRelPath relative path of the directory.
+     * @param expanded   `true` to expand, `false` to collapse.
+     */
     suspend fun fileBrowserSetExpanded(paneId: String, dirRelPath: String, expanded: Boolean) {
         send(WindowCommand.FileBrowserSetExpanded(paneId, dirRelPath, expanded))
     }
 
-    /** Request a git file list for [paneId] and await the reply. */
+    /**
+     * Request the list of changed files from git for the given pane.
+     *
+     * @param paneId    the git pane that owns the request.
+     * @param timeoutMs maximum time to wait for the reply.
+     * @return list of [GitFileEntry] items, or `null` on error/timeout.
+     */
     suspend fun gitList(paneId: String, timeoutMs: Long = 10_000): List<GitFileEntry>? {
         send(WindowCommand.GitList(paneId))
         val reply = withTimeoutOrNull(timeoutMs) {
@@ -243,7 +294,15 @@ class WindowSocket internal constructor(
         }
     }
 
-    /** Request a diff for [filePath] in [paneId] and await the result. */
+    /**
+     * Request the diff for a single file in the given git pane.
+     *
+     * @param paneId    the git pane that owns the request.
+     * @param filePath  path of the file to diff.
+     * @param timeoutMs maximum time to wait for the reply.
+     * @return a [WindowEnvelope.GitDiffResult] on success,
+     *   [WindowEnvelope.GitError] on failure, or `null` on timeout.
+     */
     suspend fun gitDiff(
         paneId: String,
         filePath: String,
@@ -258,6 +317,10 @@ class WindowSocket internal constructor(
         }
     }
 
+    /**
+     * Permanently close the socket connection and stop the reconnect loop.
+     * After this call the [WindowSocket] is no longer usable.
+     */
     suspend fun close() {
         closed = true
         runCatching { _activeSession.value?.close() }
