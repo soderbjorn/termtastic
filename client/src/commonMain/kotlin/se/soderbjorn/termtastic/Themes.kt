@@ -28,7 +28,21 @@ data class TerminalTheme(
     val darkFg: String,
     val lightFg: String,
     val darkBg: String = "#000000",
-    val lightBg: String = "#ffffff"
+    val lightBg: String = "#ffffff",
+    /**
+     * Optional hand-tuned colour overrides for semantic tokens that should
+     * not be derived from the fg/bg seed.
+     *
+     * Keys follow the pattern `"group.token.mode"`, e.g.
+     * `"syntax.keyword.dark"`, `"sidebar.bg.light"`.  Values are ARGB
+     * [Long] values.  The [resolve] function checks this map before falling
+     * back to the deterministic derivation.
+     *
+     * Most themes leave this `null`; only designer palettes (Solarized,
+     * Tokyo Night, etc.) specify overrides for their signature syntax colours
+     * or other tokens where the derivation would look flat.
+     */
+    val overrides: Map<String, Long>? = null,
 )
 
 /**
@@ -41,11 +55,74 @@ data class TerminalTheme(
  *
  * Kept in sync with the "Recommended" tab in `tools/neon-green-picker.html`.
  */
+// ── Syntax override maps for designer themes ──────────────────────────
+
+/**
+ * Syntax colour overrides for the Tron theme. The green-accent base would
+ * produce a monochromatic syntax palette without these hand-tuned values
+ * from the design spec.
+ */
+private val tronOverrides: Map<String, Long> = mapOf(
+    "syntax.keyword.dark"  to 0xFF7EE2C1L, "syntax.keyword.light"  to 0xFF00795CL,
+    "syntax.string.dark"   to 0xFFE6C380L, "syntax.string.light"   to 0xFFA8771AL,
+    "syntax.number.dark"   to 0xFF84D2C7L, "syntax.number.light"   to 0xFF1A7A75L,
+    "syntax.comment.dark"  to 0xFF5E7570L, "syntax.comment.light"  to 0xFF8AA29AL,
+    "syntax.function.dark" to 0xFF9EE8C4L, "syntax.function.light" to 0xFF1A7A4AL,
+    "syntax.type.dark"     to 0xFFE8A5C1L, "syntax.type.light"     to 0xFFB64A78L,
+    "syntax.operator.dark" to 0xFFC9D2CDL, "syntax.operator.light" to 0xFF3D4945L,
+    "syntax.constant.dark" to 0xFFFF9F6EL, "syntax.constant.light" to 0xFFB85C1CL,
+)
+
+/**
+ * Syntax colour overrides for the Solarized theme, using the canonical
+ * Solarized accent palette (same values in both modes for most tokens).
+ */
+private val solarizedOverrides: Map<String, Long> = mapOf(
+    "syntax.keyword.dark"  to 0xFF859900L, "syntax.keyword.light"  to 0xFF859900L,
+    "syntax.string.dark"   to 0xFF2AA198L, "syntax.string.light"   to 0xFF2AA198L,
+    "syntax.number.dark"   to 0xFFD33682L, "syntax.number.light"   to 0xFFD33682L,
+    "syntax.comment.dark"  to 0xFF586E75L, "syntax.comment.light"  to 0xFF93A1A1L,
+    "syntax.function.dark" to 0xFF268BD2L, "syntax.function.light" to 0xFF268BD2L,
+    "syntax.type.dark"     to 0xFFB58900L, "syntax.type.light"     to 0xFFB58900L,
+    "syntax.operator.dark" to 0xFF93A1A1L, "syntax.operator.light" to 0xFF657B83L,
+    "syntax.constant.dark" to 0xFFCB4B16L, "syntax.constant.light" to 0xFFCB4B16L,
+)
+
+/**
+ * Syntax colour overrides for the Tokyo Night theme, using the official
+ * Storm palette values.
+ */
+private val tokyoNightOverrides: Map<String, Long> = mapOf(
+    "syntax.keyword.dark"  to 0xFFBB9AF7L, "syntax.keyword.light"  to 0xFF5A3E8EL,
+    "syntax.string.dark"   to 0xFF9ECE6AL, "syntax.string.light"   to 0xFF485E30L,
+    "syntax.number.dark"   to 0xFFFF9E64L, "syntax.number.light"   to 0xFFA05A20L,
+    "syntax.comment.dark"  to 0xFF565F89L, "syntax.comment.light"  to 0xFF8A91A8L,
+    "syntax.function.dark" to 0xFF7AA2F7L, "syntax.function.light" to 0xFF2E5CA8L,
+    "syntax.type.dark"     to 0xFF7DCFFFL, "syntax.type.light"     to 0xFF1F6A94L,
+    "syntax.operator.dark" to 0xFF89DDFFL, "syntax.operator.light" to 0xFF1F6A94L,
+    "syntax.constant.dark" to 0xFFF7768EL, "syntax.constant.light" to 0xFF9A2A44L,
+)
+
+/**
+ * Syntax colour overrides for the Rose Pine theme, using the official
+ * dawn/moon palette values.
+ */
+private val rosePineOverrides: Map<String, Long> = mapOf(
+    "syntax.keyword.dark"  to 0xFFC4A7E7L, "syntax.keyword.light"  to 0xFF6E5599L,
+    "syntax.string.dark"   to 0xFFF6C177L, "syntax.string.light"   to 0xFFA87B2AL,
+    "syntax.number.dark"   to 0xFFEB6F92L, "syntax.number.light"   to 0xFFA83352L,
+    "syntax.comment.dark"  to 0xFF6E6A86L, "syntax.comment.light"  to 0xFF908CAAL,
+    "syntax.function.dark" to 0xFF9CCFD8L, "syntax.function.light" to 0xFF2A7B90L,
+    "syntax.type.dark"     to 0xFFEBBCBAL, "syntax.type.light"     to 0xFFA85A58L,
+    "syntax.operator.dark" to 0xFF908CAAL, "syntax.operator.light" to 0xFF575279L,
+    "syntax.constant.dark" to 0xFFEB6F92L, "syntax.constant.light" to 0xFFA83352L,
+)
+
 val recommendedThemes: List<TerminalTheme> = listOf(
     TerminalTheme("Matrix",        "#33ff66", "#0a7d2c"),
     TerminalTheme("Mint terminal", "#33ff99", "#0b8a5b"),
     TerminalTheme("Cyber teal",    "#00e5ff", "#006d80"),
-    TerminalTheme("Tron",          "#00ff9f", "#00795c"),
+    TerminalTheme("Tron",          "#00ff9f", "#00795c", overrides = tronOverrides),
     TerminalTheme("Vapor pink",    "#ff77ff", "#a3008c"),
     TerminalTheme("Amber CRT",     "#ffb000", "#8a4b00"),
     TerminalTheme("Ember",         "#ff6d3d", "#a23b00"),
@@ -88,7 +165,8 @@ val recommendedThemes: List<TerminalTheme> = listOf(
     // background colors instead of pure black/white. These give the picker
     // real variation (cream Solarized Light, deep navy Tokyo Night, etc.).
     TerminalTheme("Solarized",      darkFg = "#93a1a1", lightFg = "#657b83",
-                                    darkBg = "#002b36", lightBg = "#fdf6e3"),
+                                    darkBg = "#002b36", lightBg = "#fdf6e3",
+                                    overrides = solarizedOverrides),
     TerminalTheme("Gruvbox",        darkFg = "#ebdbb2", lightFg = "#3c3836",
                                     darkBg = "#282828", lightBg = "#fbf1c7"),
     TerminalTheme("Nord",           darkFg = "#d8dee9", lightFg = "#2e3440",
@@ -98,7 +176,8 @@ val recommendedThemes: List<TerminalTheme> = listOf(
     TerminalTheme("Monokai",        darkFg = "#f8f8f2", lightFg = "#272822",
                                     darkBg = "#272822", lightBg = "#fafafa"),
     TerminalTheme("Tokyo Night",    darkFg = "#a9b1d6", lightFg = "#343b58",
-                                    darkBg = "#1a1b26", lightBg = "#d5d6db"),
+                                    darkBg = "#1a1b26", lightBg = "#d5d6db",
+                                    overrides = tokyoNightOverrides),
     TerminalTheme("One Dark",       darkFg = "#abb2bf", lightFg = "#383a42",
                                     darkBg = "#282c34", lightBg = "#fafafa"),
     TerminalTheme("GitHub",         darkFg = "#c9d1d9", lightFg = "#24292f",
@@ -106,7 +185,8 @@ val recommendedThemes: List<TerminalTheme> = listOf(
     TerminalTheme("Catppuccin",     darkFg = "#cdd6f4", lightFg = "#4c4f69",
                                     darkBg = "#1e1e2e", lightBg = "#eff1f5"),
     TerminalTheme("Rose Pine",      darkFg = "#e0def4", lightFg = "#575279",
-                                    darkBg = "#191724", lightBg = "#faf4ed"),
+                                    darkBg = "#191724", lightBg = "#faf4ed",
+                                    overrides = rosePineOverrides),
     TerminalTheme("Ayu",            darkFg = "#b3b1ad", lightFg = "#5c6773",
                                     darkBg = "#0a0e14", lightBg = "#fafafa"),
     TerminalTheme("Ayu Mirage",     darkFg = "#cbccc6", lightFg = "#5c6773",

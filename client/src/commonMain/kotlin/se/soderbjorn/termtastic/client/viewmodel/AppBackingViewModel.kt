@@ -26,6 +26,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import se.soderbjorn.termtastic.Appearance
 import se.soderbjorn.termtastic.ClaudeUsageData
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
+import se.soderbjorn.termtastic.ResolvedPalette
 import se.soderbjorn.termtastic.SplitDirection
 import se.soderbjorn.termtastic.TerminalTheme
 import se.soderbjorn.termtastic.WindowCommand
@@ -36,6 +37,7 @@ import se.soderbjorn.termtastic.client.WindowSocket
 import se.soderbjorn.termtastic.client.WindowStateRepository
 import se.soderbjorn.termtastic.client.parsePaneStatusDisplay
 import se.soderbjorn.termtastic.recommendedThemes
+import se.soderbjorn.termtastic.resolve
 
 /**
  * Backing ViewModel for the top-level application screen. Merges server-pushed
@@ -63,12 +65,25 @@ class AppBackingViewModel(
      * @property sessionStates      per-session state labels keyed by session ID.
      * @property pendingApproval    `true` if the device is awaiting approval.
      * @property claudeUsage        latest AI token usage data, if available.
-     * @property theme              the active terminal colour theme.
+     * @property theme              the active terminal colour theme (global default).
      * @property appearance         the user's light/dark mode preference.
      * @property paneStatusDisplay  how pane activity is indicated in the sidebar.
      * @property paneFontSize       per-pane font size override, or `null` for default.
      * @property sidebarWidth       persisted sidebar width in pixels, or `null`.
+     * @property sidebarCollapsed    whether the sidebar is currently collapsed.
      * @property desktopNotifications whether desktop notifications are enabled.
+     * @property sidebarTheme       optional theme override for sidebar sections,
+     *   or `null` to use [theme].
+     * @property terminalTheme      optional theme override for terminal panes,
+     *   or `null` to use [theme].
+     * @property diffTheme          optional theme override for git diff panes,
+     *   or `null` to use [theme].
+     * @property fileBrowserTheme   optional theme override for file browser panes,
+     *   or `null` to use [theme].
+     * @property tabsTheme          optional theme override for the tab bar,
+     *   or `null` to use [theme].
+     * @property chromeTheme        optional theme override for window chrome
+     *   (pane titlebars and borders), or `null` to use [theme].
      */
     data class State(
         val config: WindowConfig? = null,
@@ -77,10 +92,18 @@ class AppBackingViewModel(
         val claudeUsage: ClaudeUsageData? = null,
         val theme: TerminalTheme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME },
         val appearance: Appearance = Appearance.Auto,
-        val paneStatusDisplay: PaneStatusDisplay = PaneStatusDisplay.Glow,
+        val paneStatusDisplay: PaneStatusDisplay = PaneStatusDisplay.On,
         val paneFontSize: Int? = null,
         val sidebarWidth: Int? = null,
+        val sidebarCollapsed: Boolean = false,
         val desktopNotifications: Boolean = true,
+        val sidebarTheme: TerminalTheme? = null,
+        val terminalTheme: TerminalTheme? = null,
+        val diffTheme: TerminalTheme? = null,
+        val fileBrowserTheme: TerminalTheme? = null,
+        val tabsTheme: TerminalTheme? = null,
+        val chromeTheme: TerminalTheme? = null,
+        val windowsTheme: TerminalTheme? = null,
     )
 
     /**
@@ -172,6 +195,16 @@ class AppBackingViewModel(
     }
 
     /**
+     * Collapse or expand the sidebar and persist the preference.
+     *
+     * @param collapsed `true` to collapse, `false` to expand.
+     */
+    suspend fun setSidebarCollapsed(collapsed: Boolean) {
+        emit(_stateFlow.value.copy(sidebarCollapsed = collapsed))
+        settingsPersister?.putSetting("sidebarCollapsed", collapsed.toString())
+    }
+
+    /**
      * Enable or disable desktop notifications and persist the preference.
      *
      * @param enabled `true` to enable notifications.
@@ -179,6 +212,29 @@ class AppBackingViewModel(
     suspend fun setDesktopNotifications(enabled: Boolean) {
         emit(_stateFlow.value.copy(desktopNotifications = enabled))
         settingsPersister?.putSetting("desktopNotifications", enabled.toString())
+    }
+
+    /**
+     * Set a per-section theme override and persist it. Pass `null` to clear
+     * the override and fall back to the global theme.
+     *
+     * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`
+     * @param theme   the override theme, or `null` to clear
+     */
+    suspend fun setSectionTheme(section: String, theme: TerminalTheme?) {
+        val cur = _stateFlow.value
+        val updated = when (section) {
+            "sidebar" -> cur.copy(sidebarTheme = theme)
+            "terminal" -> cur.copy(terminalTheme = theme)
+            "diff" -> cur.copy(diffTheme = theme)
+            "fileBrowser" -> cur.copy(fileBrowserTheme = theme)
+            "tabs" -> cur.copy(tabsTheme = theme)
+            "chrome" -> cur.copy(chromeTheme = theme)
+            "windows" -> cur.copy(windowsTheme = theme)
+            else -> cur
+        }
+        emit(updated)
+        settingsPersister?.putSetting("theme.$section", theme?.name ?: "")
     }
 
     // ── Layout mutations (delegated to server) ──────────────────────
@@ -337,7 +393,14 @@ class AppBackingViewModel(
         val psd = parsePaneStatusDisplay(settings["paneStatusDisplay"]?.jsonPrimitive?.contentOrNull)
         val fontSize = settings["paneFontSize"]?.jsonPrimitive?.intOrNull ?: cur.paneFontSize
         val sidebarW = settings["sidebarWidth"]?.jsonPrimitive?.intOrNull ?: cur.sidebarWidth
+        val sidebarCol = settings["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: cur.sidebarCollapsed
         val desktopNotif = settings["desktopNotifications"]?.jsonPrimitive?.booleanOrNull ?: cur.desktopNotifications
+
+        fun sectionTheme(key: String, current: TerminalTheme?): TerminalTheme? {
+            val name = settings[key]?.jsonPrimitive?.contentOrNull ?: return current
+            if (name.isEmpty()) return null
+            return recommendedThemes.firstOrNull { it.name == name } ?: current
+        }
 
         emit(cur.copy(
             theme = theme,
@@ -345,11 +408,52 @@ class AppBackingViewModel(
             paneStatusDisplay = psd,
             paneFontSize = fontSize,
             sidebarWidth = sidebarW,
+            sidebarCollapsed = sidebarCol,
             desktopNotifications = desktopNotif,
+            sidebarTheme = sectionTheme("theme.sidebar", cur.sidebarTheme),
+            terminalTheme = sectionTheme("theme.terminal", cur.terminalTheme),
+            diffTheme = sectionTheme("theme.diff", cur.diffTheme),
+            fileBrowserTheme = sectionTheme("theme.fileBrowser", cur.fileBrowserTheme),
+            tabsTheme = sectionTheme("theme.tabs", cur.tabsTheme),
+            chromeTheme = sectionTheme("theme.chrome", cur.chromeTheme),
+            windowsTheme = sectionTheme("theme.windows", cur.windowsTheme),
         ))
     }
 
     private fun emit(state: State) {
         _stateFlow.value = state
     }
+}
+
+/**
+ * Resolves the full semantic palette for this state snapshot.
+ *
+ * @param systemIsDark whether the host OS is currently in dark mode
+ * @return the fully resolved [ResolvedPalette]
+ * @see se.soderbjorn.termtastic.resolve
+ */
+fun AppBackingViewModel.State.resolvedPalette(systemIsDark: Boolean): ResolvedPalette =
+    theme.resolve(appearance, systemIsDark)
+
+/**
+ * Resolves the semantic palette for a specific app section, using the
+ * section-specific theme override if set, or falling back to the global theme.
+ *
+ * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"windows"`
+ * @param systemIsDark whether the host OS is currently in dark mode
+ * @return the resolved [ResolvedPalette] for that section
+ * @see resolvedPalette
+ */
+fun AppBackingViewModel.State.sectionPalette(section: String, systemIsDark: Boolean): ResolvedPalette {
+    val sectionTheme = when (section) {
+        "sidebar" -> sidebarTheme
+        "terminal" -> terminalTheme
+        "diff" -> diffTheme
+        "fileBrowser" -> fileBrowserTheme
+        "tabs" -> tabsTheme
+        "chrome" -> chromeTheme
+        "windows" -> windowsTheme
+        else -> null
+    }
+    return (sectionTheme ?: theme).resolve(appearance, systemIsDark)
 }

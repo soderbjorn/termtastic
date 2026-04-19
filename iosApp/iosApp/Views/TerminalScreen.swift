@@ -59,16 +59,19 @@ struct TerminalScreen: View {
         .toolbar {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 6) {
+                    if paneState == "working" {
+                        ProgressView()
+                            .scaleEffect(0.75)
+                            .frame(width: 14, height: 14)
+                    }
                     Text(headerTitle.uppercased())
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .foregroundStyle(Palette.headerAccent)
                         .tracking(0.6)
                         .lineLimit(1)
-                    if let state = paneState {
-                        PaneStateDot(state: state)
-                    }
                 }
+                .modifier(WaitingPulseModifier(isWaiting: paneState == "waiting"))
             }
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 4) {
@@ -282,7 +285,7 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
 
     private func applyTheme(_ settings: Client.UiSettings) {
         // Apply theme colors to the terminal if available
-        let colors = settings.theme.effectiveColors(appearance: settings.appearance, systemIsDark: true)
+        let colors = settings.sectionTheme(section: "terminal").effectiveColors(appearance: settings.appearance, systemIsDark: true)
         let fg = colors.first! as String
         let bg = colors.second! as String
         terminalView?.nativeForegroundColor = UIColor(hexString: fg)
@@ -364,47 +367,6 @@ private struct TerminalViewRepresentable: UIViewRepresentable {
     }
 }
 
-// MARK: - Pane State Dot
-
-/// 8 pt dot matching the web `.pane-state-dot` CSS:
-/// - "working" → blue (#5AC8FA) with a pulse animation
-/// - "waiting" → red (#FF6961), static
-private struct PaneStateDot: View {
-    let state: String
-
-    @State private var pulse = false
-
-    private var color: SwiftUI.Color {
-        switch state {
-        case "working": return SwiftUI.Color(red: 0x5A/255, green: 0xC8/255, blue: 0xFA/255)
-        case "waiting": return SwiftUI.Color(red: 0xFF/255, green: 0x69/255, blue: 0x61/255)
-        default: return .clear
-        }
-    }
-
-    private var shouldPulse: Bool {
-        state == "working" || state == "waiting"
-    }
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
-            .opacity(shouldPulse ? (pulse ? 0.4 : 1.0) : 1.0)
-            .animation(
-                shouldPulse
-                    ? .easeInOut(duration: 0.75).repeatForever(autoreverses: true)
-                    : .default,
-                value: pulse
-            )
-            .onAppear { if shouldPulse { pulse = true } }
-            .onChange(of: state) { newState in
-                pulse = (newState == "working" || newState == "waiting")
-            }
-            .accessibilityLabel("Status: \(state)")
-    }
-}
-
 // MARK: - Swipe Input Bar
 
 /// Visible text field for gesture-typing (iOS QuickPath / Android swipe).
@@ -426,7 +388,7 @@ private struct SwipeInputBar: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
-                .background(Color(red: 0x1C/255, green: 0x1C/255, blue: 0x1E/255), in: RoundedRectangle(cornerRadius: 6))
+                .background(Palette.background, in: RoundedRectangle(cornerRadius: 6))
                 .focused($isFocused)
                 .onSubmit { onSubmit() }
 
@@ -434,13 +396,13 @@ private struct SwipeInputBar: View {
                 Text("\u{23CE}")
                     .font(.system(size: 18))
                     .frame(width: 36, height: 36)
-                    .background(Color(red: 0xF4/255, green: 0xB8/255, blue: 0x69/255), in: RoundedRectangle(cornerRadius: 6))
-                    .foregroundStyle(Color(red: 0x1C/255, green: 0x1C/255, blue: 0x1E/255))
+                    .background(Palette.headerAccent, in: RoundedRectangle(cornerRadius: 6))
+                    .foregroundStyle(Palette.background)
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(Color(red: 0x2C/255, green: 0x2C/255, blue: 0x2E/255))
+        .background(Palette.surface)
         .onAppear { isFocused = true }
     }
 }
@@ -477,14 +439,14 @@ private struct ImeHelperToolbar: View {
             .padding(.horizontal, 4)
         }
         .frame(height: 44)
-        .background(Color(red: 0x1E/255, green: 0x1E/255, blue: 0x1E/255))
+        .background(Palette.background)
     }
 }
 
 private struct ToolbarDivider: View {
     var body: some View {
         Rectangle()
-            .fill(Color(red: 0x3A/255, green: 0x3A/255, blue: 0x3A/255))
+            .fill(Palette.textSecondary.opacity(0.3))
             .frame(width: 1)
             .padding(.vertical, 10)
     }
@@ -509,7 +471,7 @@ private struct StickyToolbarKey: View {
                 .padding(.horizontal, 14)
                 .frame(maxHeight: .infinity)
                 .background(
-                    active ? Color(red: 0x0A/255, green: 0x84/255, blue: 0xFF/255) : Color(red: 0x1E/255, green: 0x1E/255, blue: 0x1E/255),
+                    active ? Palette.headerAccent : Palette.background,
                     in: RoundedRectangle(cornerRadius: 6)
                 )
                 .overlay(
@@ -534,7 +496,7 @@ private struct ToolbarKey: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .frame(maxHeight: .infinity)
-                .background(Color(red: 0x2E/255, green: 0x2E/255, blue: 0x2E/255), in: RoundedRectangle(cornerRadius: 6))
+                .background(Palette.surface, in: RoundedRectangle(cornerRadius: 6))
         }
         .padding(.vertical, 6)
         .accessibilityLabel(accessLabel ?? label)

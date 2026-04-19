@@ -10,26 +10,21 @@
 package se.soderbjorn.termtastic.client
 
 /**
- * Visual style for the pane activity indicator in the sidebar.
+ * Visual style for the pane activity indicator in the sidebar, tabs, and pane headers.
  *
- * - [Dots]  -- small coloured dots (blue = working, red = waiting).
- * - [Glow]  -- a subtle glow around the pane entry (default).
- * - [Both]  -- dots and glow combined.
- * - [None]  -- no indicator at all.
+ * - [On]   -- spinners for "working" state, opacity pulsation for "waiting" state.
+ * - [None] -- no indicator at all.
  */
-enum class PaneStatusDisplay { Dots, Glow, Both, None }
+enum class PaneStatusDisplay { On, None }
 
 /**
  * Parse a string value from the server's UI settings JSON into a
- * [PaneStatusDisplay]. Unknown or `null` values default to [PaneStatusDisplay.Glow].
+ * [PaneStatusDisplay]. Legacy values (`"Dots"`, `"Glow"`, `"Both"`) are
+ * mapped to [PaneStatusDisplay.On] for backward compatibility. Only the
+ * explicit `"None"` value disables indicators.
  *
- * @param s the raw string value, e.g. `"Dots"`, or `null`.
+ * @param s the raw string value, e.g. `"On"`, or `null`.
  * @return the corresponding enum member.
  */
 fun parsePaneStatusDisplay(s: String?): PaneStatusDisplay =
-    when (s) {
-        "Dots" -> PaneStatusDisplay.Dots
-        "Both" -> PaneStatusDisplay.Both
-        "None" -> PaneStatusDisplay.None
-        else -> PaneStatusDisplay.Glow
-    }
+    if (s == "None") PaneStatusDisplay.None else PaneStatusDisplay.On

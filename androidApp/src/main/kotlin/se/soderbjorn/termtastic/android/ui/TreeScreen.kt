@@ -4,8 +4,8 @@
  * Displays the server's window layout as a flat list of tab headers and leaf
  * pane rows, mirroring the sidebar in the web/Electron client. Each leaf is
  * annotated with a type icon (terminal, file browser, git, floating, or empty)
- * and a pulsing state dot reflecting the server-pushed "working"/"waiting"
- * status. Tapping a leaf navigates to [TerminalScreen], [FileBrowserListScreen],
+ * and a status indicator (spinner for "working", opacity pulse for "waiting")
+ * reflecting the server-pushed session state. Tapping a leaf navigates to [TerminalScreen], [FileBrowserListScreen],
  * or [GitListScreen] depending on the pane type.
  *
  * Also hosts the "+" button that launches the [CreateKindPickerDialog] flow
@@ -24,7 +24,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -36,7 +35,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,6 +62,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -88,10 +88,6 @@ import se.soderbjorn.termtastic.client.addSiblingTerminal
 import se.soderbjorn.termtastic.client.addTab
 
 // Palette tokens live in SidebarPalette.kt — shared with MarkdownListScreen.
-// Sidebar colors are @Composable getters (adaptive to system theme), so
-// reference them directly rather than caching at file scope.
-private val DotWorking = SidebarDotWorking
-private val DotWaiting = SidebarDotWaiting
 
 /**
  * Sealed hierarchy representing the two kinds of rows in the tree list.
@@ -166,7 +162,7 @@ private fun flatten(config: WindowConfig, states: Map<String, String?>): List<Tr
         for (fp in tab.floating) addLeaf(fp.leaf, floating = true, out = leaves)
         for (po in tab.poppedOut) addLeaf(po.leaf, floating = false, out = leaves)
 
-        // "waiting" wins over "working" — matches updateStateDots() in main.kt.
+        // "waiting" wins over "working" — matches updateStateIndicators() in WebState.kt.
         var tabState: String? = null
         for (leaf in leaves) {
             when (states[leaf.sessionId]) {
@@ -414,26 +410,28 @@ fun TreeScreen(
  */
 @Composable
 private fun TabHeaderRow(row: TreeRow.TabHeader) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = row.title.uppercase(),
-            modifier = Modifier.weight(1f, fill = false),
-            style = MaterialTheme.typography.labelLarge.copy(
-                color = SidebarTextPrimary,
-                letterSpacing = 0.5.sp,
-            ),
-        )
-        StateDot(state = row.aggregateState, sizeDp = 7, leadingSpacer = 7)
+    WaitingPulse(state = row.aggregateState) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = row.title.uppercase(),
+                modifier = Modifier.weight(1f, fill = false),
+                style = MaterialTheme.typography.labelLarge.copy(
+                    color = SidebarTextPrimary,
+                    letterSpacing = 0.5.sp,
+                ),
+            )
+            StateSpinner(state = row.aggregateState, sizeDp = 12, leadingSpacer = 7)
+        }
     }
 }
 
 /**
- * Renders a clickable leaf pane row with a type icon, state dot, and title.
+ * Renders a clickable leaf pane row with a type icon, spinner, and title.
  *
  * @param row the leaf pane data to render.
  * @param state the current state string ("working", "waiting", or null).
@@ -445,65 +443,78 @@ private fun LeafRow(
     state: String?,
     onClick: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .semantics {
-                role = Role.Button
-                contentDescription = "${row.title}, ${row.kind.name.lowercase()}"
-            }
-            .padding(start = 32.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        PaneIcon(kind = row.kind, floating = row.floating)
-        Spacer(Modifier.width(8.dp))
-        StateDot(state = state, sizeDp = 7, trailingSpacer = 7)
-        Text(
-            text = row.title,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyLarge.copy(
-                color = SidebarTextSecondary,
-            ),
-            maxLines = 1,
-        )
+    WaitingPulse(state = state) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .semantics {
+                    role = Role.Button
+                    contentDescription = "${row.title}, ${row.kind.name.lowercase()}"
+                }
+                .padding(start = 32.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PaneIcon(kind = row.kind, floating = row.floating)
+            Spacer(Modifier.width(8.dp))
+            StateSpinner(state = state, sizeDp = 12, trailingSpacer = 7)
+            Text(
+                text = row.title,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    color = SidebarTextSecondary,
+                ),
+                maxLines = 1,
+            )
+        }
     }
 }
 
 /**
- * 6dp dot — only rendered when [state] is "working" or "waiting", matching the
- * web client where the dot is `display: none` until the server pushes a state.
+ * Small spinning indicator shown when the session state is "working".
+ * Matches the web client spinner CSS.
  */
 @Composable
-private fun StateDot(
+private fun StateSpinner(
     state: String?,
     sizeDp: Int,
     leadingSpacer: Int = 0,
     trailingSpacer: Int = 0,
 ) {
-    val color = when (state) {
-        "working" -> DotWorking
-        "waiting" -> DotWaiting
-        else -> return
-    }
-    val transition = rememberInfiniteTransition(label = "dotPulse")
-    val alpha = transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.4f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 750),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "dotAlpha",
-    ).value
+    if (state != "working") return
     if (leadingSpacer > 0) Spacer(Modifier.width(leadingSpacer.dp))
-    Box(
+    CircularProgressIndicator(
         modifier = Modifier
             .size(sizeDp.dp)
-            .background(color = color.copy(alpha = alpha), shape = CircleShape)
-            .semantics { stateDescription = state!! },
+            .semantics { stateDescription = "working" },
+        strokeWidth = 2.dp,
+        color = SidebarTextPrimary,
+        trackColor = SidebarTextSecondary.copy(alpha = 0.3f),
     )
     if (trailingSpacer > 0) Spacer(Modifier.width(trailingSpacer.dp))
+}
+
+/**
+ * Wraps [content] in a pulsating opacity animation when [state] is "waiting",
+ * drawing attention to panes that need user input.
+ */
+@Composable
+private fun WaitingPulse(state: String?, content: @Composable () -> Unit) {
+    if (state == "waiting") {
+        val transition = rememberInfiniteTransition(label = "waitPulse")
+        val alpha = transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.35f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 750),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "waitAlpha",
+        ).value
+        Box(modifier = Modifier.graphicsLayer { this.alpha = alpha }) { content() }
+    } else {
+        content()
+    }
 }
 
 /**

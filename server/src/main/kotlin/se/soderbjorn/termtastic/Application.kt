@@ -200,8 +200,7 @@ fun main() {
         repo.close()
     })
 
-    val port = System.getenv("TERMTASTIC_PORT")?.toIntOrNull()
-        ?: System.getProperty("termtastic.port")?.toIntOrNull()
+    val port = System.getProperty("termtastic.port")?.toIntOrNull()
         ?: SERVER_PORT
     SettingsDialog.setListeningPort(port)
 

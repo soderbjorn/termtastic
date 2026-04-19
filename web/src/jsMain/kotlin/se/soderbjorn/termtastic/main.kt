@@ -28,6 +28,7 @@ import se.soderbjorn.termtastic.client.ServerUrl
 import se.soderbjorn.termtastic.client.TermtasticClient
 import se.soderbjorn.termtastic.client.viewmodel.AppBackingViewModel
 import se.soderbjorn.termtastic.client.viewmodel.SettingsPersister
+import se.soderbjorn.termtastic.client.viewmodel.findLeafById
 import kotlin.js.json
 
 /**
@@ -117,6 +118,7 @@ private fun start() {
             appVm.applyServerUiSettings(jsonObj)
             applyAll()
             applyPaneStatusClasses()
+            applySidebarState()
         }
     }
 
@@ -188,7 +190,7 @@ private fun start() {
             submenu.textContent = "Set pane state"
             val submenuList = document.createElement("div") as HTMLElement
             submenuList.className = "pane-submenu-list"
-            for ((label, state) in listOf("Working" to "working", "Waiting" to "waiting", "Clear" to null)) {
+            for ((label, mode) in listOf("Working" to "working", "Waiting" to "waiting", "Clear" to "auto")) {
                 val item = document.createElement("div") as HTMLElement
                 item.className = "pane-menu-item"; item.textContent = label
                 item.addEventListener("click", { ev ->
@@ -196,11 +198,10 @@ private fun start() {
                     val focusedCell = document.querySelector(".terminal-cell.focused") as? HTMLElement
                     val paneId = focusedCell?.getAttribute("data-pane")
                     if (paneId != null) {
-                        val entry = terminals[paneId]
-                        if (entry != null) {
-                            if (state != null) debugSessionStates[entry.sessionId] = state
-                            else debugSessionStates.remove(entry.sessionId)
-                            updateStateDots(appVm.stateFlow.value.sessionStates)
+                        val sessionId = terminals[paneId]?.sessionId
+                            ?: appVm.stateFlow.value.config?.let { findLeafById(it, paneId) }?.sessionId
+                        if (!sessionId.isNullOrEmpty()) {
+                            launchCmd(WindowCommand.SetStateOverride(sessionId, mode))
                         }
                     }
                 })
@@ -256,8 +257,15 @@ private fun start() {
             sidebarDividerLocal.classList.remove("dragging")
             sidebarElLocal.style.transition = ""; document.body?.style?.cursor = ""
             document.body?.style?.removeProperty("user-select")
-            val w = sidebarElLocal.getBoundingClientRect().width
-            GlobalScope.launch { appVm.setSidebarWidth(w.toInt()) }
+            val w = sidebarElLocal.getBoundingClientRect().width.toInt()
+            if (w <= 10) {
+                GlobalScope.launch { appVm.setSidebarCollapsed(true) }
+            } else {
+                GlobalScope.launch {
+                    appVm.setSidebarWidth(w)
+                    appVm.setSidebarCollapsed(false)
+                }
+            }
             fitVisible()
         })
     }
@@ -268,13 +276,16 @@ private fun start() {
         toggleBtn?.addEventListener("click", { ev ->
             ev.stopPropagation()
             val currentWidth = sidebarElLocal.getBoundingClientRect().width.toInt()
-            val openWidth = appVm.stateFlow.value.sidebarWidth ?: 260
             if (currentWidth > 10) {
+                // Collapse — remember current width, then hide.
+                GlobalScope.launch { appVm.setSidebarWidth(currentWidth) }
                 sidebarElLocal.style.width = "0px"
-                GlobalScope.launch { appVm.setSidebarWidth(0) }
+                GlobalScope.launch { appVm.setSidebarCollapsed(true) }
             } else {
+                // Expand — restore the last open width.
+                val openWidth = (appVm.stateFlow.value.sidebarWidth ?: 0).takeIf { it > 10 } ?: 260
                 sidebarElLocal.style.width = "${openWidth}px"
-                GlobalScope.launch { appVm.setSidebarWidth(openWidth) }
+                GlobalScope.launch { appVm.setSidebarCollapsed(false) }
             }
             sidebarElLocal.addEventListener("transitionend", { fitVisible() }, js("({once:true})"))
         })

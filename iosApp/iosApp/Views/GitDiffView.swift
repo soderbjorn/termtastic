@@ -11,6 +11,7 @@ struct GitDiffView: View {
 
     @State private var diffHtml: String?
     @State private var errorMessage: String?
+    @State private var diffTheme: Client.TerminalTheme?
 
     private var fileName: String {
         filePath.components(separatedBy: "/").last ?? filePath
@@ -32,6 +33,12 @@ struct GitDiffView: View {
         .navigationTitle(fileName)
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadDiff() }
+        .task {
+            if let client = ConnectionHolder.shared.client,
+               let settings = try? await client.fetchUiSettings() {
+                diffTheme = settings.sectionTheme(section: "diff")
+            }
+        }
     }
 
     private func loadDiff() async {
@@ -42,7 +49,7 @@ struct GitDiffView: View {
         do {
             let reply = try await socket.gitDiff(paneId: paneId, filePath: filePath, timeoutMs: 10_000)
             if let result = reply as? Client.WindowEnvelope.GitDiffResult {
-                diffHtml = buildDiffHtml(result)
+                diffHtml = buildDiffHtml(result, theme: diffTheme)
             } else if let error = reply as? Client.WindowEnvelope.GitError {
                 errorMessage = error.message
             } else {
@@ -75,7 +82,7 @@ private struct DiffWebView: UIViewRepresentable {
 
 // MARK: - Diff HTML builder
 
-private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult) -> String {
+private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult, theme: Client.TerminalTheme? = nil) -> String {
     var body = ""
     for hunk in result.hunks {
         for line in hunk.lines {
@@ -103,6 +110,43 @@ private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult) -> Str
         }
     }
 
+    let effectiveTheme: Client.TerminalTheme
+    if let theme = theme {
+        effectiveTheme = theme
+    } else {
+        let themes = Client.ThemesKt.recommendedThemes
+        effectiveTheme = themes.first { ($0 as! Client.TerminalTheme).name == Client.ThemesKt.DEFAULT_THEME_NAME } as! Client.TerminalTheme
+    }
+    let darkPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: true)
+    let lightPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: false)
+    let c = { (v: Int64) -> String in Client.ColorMathKt.argbToCss(argb: v) }
+
+    func diffVars(_ pal: Client.ResolvedPalette) -> String {
+        return """
+            --background: \(c(pal.surface.base));
+            --surface: \(c(pal.surface.raised));
+            --text-primary: \(c(pal.text.primary));
+            --text-secondary: \(c(pal.text.secondary));
+            --add-bg: \(c(pal.diff.addBg));
+            --del-bg: \(c(pal.diff.removeBg));
+            --ln-color: \(c(pal.text.tertiary));
+            --separator: \(c(pal.border.subtle));
+        """
+    }
+
+    func syntaxVars(_ pal: Client.ResolvedPalette) -> String {
+        return """
+            .hl-keyword  { color: \(c(pal.syntax.keyword)); }
+            .hl-string   { color: \(c(pal.syntax.string)); }
+            .hl-comment  { color: \(c(pal.syntax.comment)); font-style: italic; }
+            .hl-number   { color: \(c(pal.syntax.number)); }
+            .hl-type     { color: \(c(pal.syntax.type)); }
+            .hl-function { color: \(c(pal.syntax.function)); }
+            .hl-operator { color: \(c(pal.syntax.operator)); }
+            .hl-punctuation { color: \(c(pal.syntax.operator)); }
+        """
+    }
+
     return """
     <!DOCTYPE html>
     <html>
@@ -111,25 +155,11 @@ private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult) -> Str
     <style>
       :root {
         color-scheme: light dark;
-        --background: #1C1C1E;
-        --surface: #2C2C2E;
-        --text-primary: #F5F5F5;
-        --text-secondary: #8E8E93;
-        --add-bg: rgba(40, 167, 69, 0.18);
-        --del-bg: rgba(220, 53, 69, 0.18);
-        --ln-color: #555;
-        --separator: rgba(255, 255, 255, 0.1);
+        \(diffVars(darkPal))
       }
       @media (prefers-color-scheme: light) {
         :root {
-          --background: #F5F5F7;
-          --surface: #FFFFFF;
-          --text-primary: #1C1C1E;
-          --text-secondary: #6E6E73;
-          --add-bg: rgba(40, 167, 69, 0.14);
-          --del-bg: rgba(220, 53, 69, 0.14);
-          --ln-color: #999;
-          --separator: rgba(0, 0, 0, 0.12);
+          \(diffVars(lightPal))
         }
       }
       * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -169,25 +199,11 @@ private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult) -> Str
         overflow-x: auto;
       }
 
-      /* Syntax highlighting classes (server pre-highlights) */
-      .hl-keyword  { color: #C678DD; }
-      .hl-string   { color: #98C379; }
-      .hl-comment  { color: #7F848E; font-style: italic; }
-      .hl-number   { color: #D19A66; }
-      .hl-type     { color: #E5C07B; }
-      .hl-function { color: #61AFEF; }
-      .hl-operator { color: #ABB2BF; }
-      .hl-punctuation { color: #ABB2BF; }
+      /* Syntax highlighting — derived from the semantic palette */
+      \(syntaxVars(darkPal))
 
       @media (prefers-color-scheme: light) {
-        .hl-keyword  { color: #A626A4; }
-        .hl-string   { color: #50A14F; }
-        .hl-comment  { color: #A0A1A7; font-style: italic; }
-        .hl-number   { color: #986801; }
-        .hl-type     { color: #C18401; }
-        .hl-function { color: #4078F2; }
-        .hl-operator { color: #383A42; }
-        .hl-punctuation { color: #383A42; }
+        \(syntaxVars(lightPal))
       }
     </style>
     </head>

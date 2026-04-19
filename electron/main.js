@@ -260,7 +260,7 @@ function spawnEmbeddedServer(jarPath) {
   if (process.platform === "darwin") {
     javaArgs.push("-Dapple.awt.UIElement=true");
   }
-  javaArgs.push("-jar", jarPath);
+  javaArgs.push(`-Dtermtastic.port=${PROD_PORT}`, "-jar", jarPath);
 
   // Pipe server stdout+stderr to a log file. We open an fd and hand it to the
   // child via stdio so the OS keeps the descriptor alive even after Electron
@@ -270,7 +270,6 @@ function spawnEmbeddedServer(jarPath) {
   const child = spawn(java, javaArgs, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: { ...process.env, TERMTASTIC_PORT: String(PROD_PORT) },
   });
   // Close our copy of the fd — the spawned process has its own.
   fs.closeSync(logFd);
@@ -471,6 +470,7 @@ function createWindow() {
     minWidth: 720,
     minHeight: 480,
     title: "Termtastic",
+    icon: path.join(__dirname, "icons", "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

@@ -221,10 +221,10 @@ fun renderConfig(config: dynamic) {
         label.className = "tab-label"; label.textContent = title
         tabWrap.appendChild(label)
 
-        val tabDot = document.createElement("span") as HTMLElement
-        tabDot.className = "pane-state-dot tab-state-dot"
-        tabDot.setAttribute("data-tab-state", tabId)
-        tabWrap.appendChild(tabDot)
+        val tabSpinner = document.createElement("span") as HTMLElement
+        tabSpinner.className = "pane-status-spinner spinner-tab"
+        tabSpinner.setAttribute("data-tab-state", tabId)
+        tabWrap.appendChild(tabSpinner)
 
         tabWrap.addEventListener("click", { ev -> ev.stopPropagation(); if (activeTabId != tabId) setActiveTab(tabId) })
 
@@ -374,9 +374,9 @@ fun renderConfig(config: dynamic) {
         cell?.classList?.add("focused")
     }
 
-    applyThemeToTerminals()
+    applyAll()
     renderSidebar(config)
-    updateStateDots(appVm.stateFlow.value.sessionStates)
+    updateStateIndicators(appVm.stateFlow.value.sessionStates)
 
     for ((tabId, paneId) in maximizedPaneIds.toMap()) {
         val cell = wrap.querySelector("[data-pane=\"$paneId\"]") as? HTMLElement
@@ -446,7 +446,7 @@ fun connectWindow() {
                     renderConfig(dynamic)
                 }
                 is WindowEnvelope.State -> {
-                    updateStateDots(envelope.states)
+                    updateStateIndicators(envelope.states)
                 }
                 is WindowEnvelope.ClaudeUsage -> {
                     val json = windowJson.encodeToString(envelope)

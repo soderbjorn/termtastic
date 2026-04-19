@@ -155,17 +155,25 @@ fun renderGitList(paneId: String, view: GitPaneView, state: GitPaneState) {
             val filePath = entry.filePath as String
             val status = entry.status as String
             val basename = filePath.substringAfterLast('/')
-            val statusChar = when (status) {
+            val statusKey = when (status) {
                 "Added" -> "A"; "Modified" -> "M"; "Deleted" -> "D"
                 "Renamed" -> "R"; "Untracked" -> "U"; else -> "?"
+            }
+            val statusSvg = when (status) {
+                "Modified" -> """<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61ZM11.524 2.2l-8.61 8.61a.25.25 0 0 0-.064.108l-.59 2.065 2.066-.59a.25.25 0 0 0 .108-.064l8.61-8.61a.25.25 0 0 0 0-.354l-1.086-1.086a.25.25 0 0 0-.434.079Z"/></svg>"""
+                "Added" -> """<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm.75 4.75a.75.75 0 0 0-1.5 0v2.5h-2.5a.75.75 0 0 0 0 1.5h2.5v2.5a.75.75 0 0 0 1.5 0v-2.5h2.5a.75.75 0 0 0 0-1.5h-2.5Z"/></svg>"""
+                "Deleted" -> """<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM4.5 7.25a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5Z"/></svg>"""
+                "Renamed" -> """<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M1 8a.75.75 0 0 1 .75-.75h10.69L9.22 4.03a.75.75 0 0 1 1.06-1.06l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06l3.22-3.22H1.75A.75.75 0 0 1 1 8Z"/></svg>"""
+                "Untracked" -> """<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm.75 4.75a.75.75 0 0 0-1.5 0v2.5h-2.5a.75.75 0 0 0 0 1.5h2.5v2.5a.75.75 0 0 0 1.5 0v-2.5h2.5a.75.75 0 0 0 0-1.5h-2.5Z"/></svg>"""
+                else -> """<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><circle cx="8" cy="8" r="6"/></svg>"""
             }
             val item = document.createElement("div") as HTMLElement
             item.className = "git-list-item"
             if (filePath == state.selectedFilePath) item.classList.add("active")
 
             val badge = document.createElement("span") as HTMLElement
-            badge.className = "git-status-badge git-status-$statusChar"
-            badge.textContent = statusChar
+            badge.className = "git-status-badge git-status-$statusKey"
+            badge.innerHTML = statusSvg
             val name = document.createElement("span") as HTMLElement
             name.className = "git-list-item-name"
             name.textContent = basename

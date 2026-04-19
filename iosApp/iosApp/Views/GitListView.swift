@@ -105,35 +105,31 @@ struct GitStatusBadge: View {
     let status: Client.GitFileStatus
 
     var body: some View {
-        Text(statusLetter)
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(.white)
+        Image(systemName: statusIcon)
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(statusColor)
             .frame(width: 18, height: 18)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(statusColor)
-            )
     }
 
-    private var statusLetter: String {
+    private var statusIcon: String {
         switch status {
-        case .modified:  return "M"
-        case .added:     return "A"
-        case .deleted:   return "D"
-        case .renamed:   return "R"
-        case .untracked: return "U"
-        default:         return "?"
+        case .modified:  return "pencil"
+        case .added:     return "plus.circle"
+        case .deleted:   return "minus.circle"
+        case .renamed:   return "arrow.right"
+        case .untracked: return "plus.circle"
+        default:         return "questionmark"
         }
     }
 
     private var statusColor: Color {
         switch status {
-        case .modified:  return .yellow.opacity(0.85)
-        case .added:     return .green.opacity(0.85)
-        case .deleted:   return .red.opacity(0.85)
-        case .renamed:   return .blue.opacity(0.85)
-        case .untracked: return .gray.opacity(0.85)
-        default:         return .gray.opacity(0.85)
+        case .modified:  return .yellow
+        case .added:     return .green
+        case .deleted:   return .red
+        case .renamed:   return .blue
+        case .untracked: return .gray
+        default:         return .gray
         }
     }
 }

@@ -63,7 +63,7 @@ private fun makeIconBtn(titleText: String, svg: String, onClick: (dynamic) -> Un
  *
  * @param paneId the unique pane identifier
  * @param title the display title for the pane
- * @param sessionId the PTY session ID (null for non-terminal panes); used for the status dot
+ * @param sessionId the PTY session ID (null for non-terminal panes); used for the status spinner
  * @param popoutMode true if rendering in a pop-out window (shows "Dock" instead of split options)
  * @param isLink true if this pane is a linked view of another terminal session
  * @param extraControls additional control elements to insert before the action buttons
@@ -107,14 +107,13 @@ fun buildPaneHeader(
         ev.stopPropagation(); ev.preventDefault(); disarm()
         startRename(titleEl, paneId)
     })
-    header.appendChild(titleEl)
-
     if (sessionId != null) {
-        val dot = document.createElement("span") as HTMLElement
-        dot.className = "pane-state-dot"
-        dot.setAttribute("data-session", sessionId)
-        header.appendChild(dot)
+        val spinner = document.createElement("span") as HTMLElement
+        spinner.className = "pane-status-spinner spinner-header"
+        spinner.setAttribute("data-session", sessionId)
+        header.appendChild(spinner)
     }
+    header.appendChild(titleEl)
 
     val spacer = document.createElement("div") as HTMLElement
     spacer.className = "terminal-header-spacer"

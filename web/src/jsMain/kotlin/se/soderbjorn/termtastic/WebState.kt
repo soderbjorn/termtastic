@@ -62,7 +62,6 @@ internal val previousPaneIds = HashSet<String>()
 internal var pendingTabFlip: Map<String, Double>? = null
 internal var firstRender = true
 internal var devToolsEnabled = false
-internal val debugSessionStates = HashMap<String, String?>()
 internal val previousSessionStates = HashMap<String, String?>()
 
 // Settings panel DOM state
@@ -296,14 +295,20 @@ internal fun fitVisible() {
  * @return a dynamic object suitable for `term.options.theme`
  */
 internal fun buildXtermTheme(): dynamic {
-    val state = appVm.stateFlow.value
-    val bg = themeBackgroundForCurrent(state.theme, state.appearance)
-    val fg = themeForegroundForCurrent(state.theme, state.appearance)
-    val bgLight = isBackgroundLight(bg)
+    val palette = sectionPalette("terminal")
+    val bg = argbToHex(palette.terminal.bg)
+    val fg = argbToHex(palette.terminal.fg)
+    val bgLight = isColorLight(palette.terminal.bg)
     val base = kotlin.js.json(
-        "background" to bg, "foreground" to fg, "cursor" to fg, "cursorAccent" to bg,
-        "selectionBackground" to if (bgLight) "rgba(0,0,0,0.18)" else "rgba(255,255,255,0.25)"
+        "background" to bg,
+        "foreground" to fg,
+        "cursor" to argbToHex(palette.terminal.cursor),
+        "cursorAccent" to argbToHex(palette.accent.onPrimary),
+        "selectionBackground" to argbToCss(palette.terminal.selection),
     )
+    // ANSI colour overrides for terminal readability — not part of the
+    // semantic palette, but required so ANSI-coloured output stays
+    // legible against light or dark backgrounds.
     if (bgLight) {
         base["white"] = "#3b3b3b"; base["brightWhite"] = "#5a5a5a"
         base["yellow"] = "#866a00"; base["brightYellow"] = "#9d7e00"
@@ -328,9 +333,76 @@ internal fun applyAppearanceClass() {
     kotlinx.browser.document.body?.classList?.remove("appearance-light", "appearance-dark", "dark-spiced")
     val light = isLightActive(state.appearance)
     kotlinx.browser.document.body?.classList?.add(if (light) "appearance-light" else "appearance-dark")
-    if (!light && DARK_SPICED) kotlinx.browser.document.body?.classList?.add("dark-spiced")
-    val bg = themeBackgroundForCurrent(state.theme, state.appearance)
-    kotlinx.browser.document.body?.style?.setProperty("--terminal-bg", bg)
+
+    // Emit all semantic --t-* CSS custom properties from the resolved palette.
+    val palette = currentResolvedPalette()
+    val root = kotlinx.browser.document.documentElement as? HTMLElement
+    for ((prop, value) in palette.toCssVarMap()) {
+        root?.style?.setProperty(prop, value)
+    }
+
+    // Apply per-section overrides. CSS alias vars (--surface, --background,
+    // etc.) are resolved at :root, so children inherit the resolved value —
+    // setting --t-* on a child does NOT update the alias. We must set BOTH
+    // the --t-* vars AND the legacy aliases on each section container.
+    fun queryElements(selector: String): List<HTMLElement> {
+        val nodes = kotlinx.browser.document.querySelectorAll(selector)
+        return (0 until nodes.length).mapNotNull { nodes.item(it) as? HTMLElement }
+    }
+    val sectionContainers: Map<String, List<HTMLElement>> = buildMap {
+        val sidebarEls = buildList {
+            (kotlinx.browser.document.getElementById("sidebar") as? HTMLElement)?.let { add(it) }
+            (kotlinx.browser.document.querySelector(".settings-sidebar") as? HTMLElement)?.let { add(it) }
+        }
+        if (sidebarEls.isNotEmpty()) put("sidebar", sidebarEls)
+        // Tabs section covers the entire top bar (app-header + tab-bar).
+        val tabsEls = listOfNotNull(
+            kotlinx.browser.document.querySelector(".app-header") as? HTMLElement,
+            kotlinx.browser.document.getElementById("tab-bar") as? HTMLElement,
+        )
+        if (tabsEls.isNotEmpty()) put("tabs", tabsEls)
+        // Windows section covers all pane frames (header, border, controls).
+        queryElements(".terminal-cell").takeIf { it.isNotEmpty() }?.let { put("windows", it) }
+        // Content-kind sections target the content container inside the pane,
+        // not the .terminal-cell itself, so they don't conflict with the
+        // windows override that styles the pane chrome (header, border).
+        queryElements(".terminal-cell[data-content-kind='terminal'] > .terminal").takeIf { it.isNotEmpty() }?.let { put("terminal", it) }
+        queryElements(".terminal-cell[data-content-kind='fileBrowser'] > .md-view").takeIf { it.isNotEmpty() }?.let { put("fileBrowser", it) }
+        queryElements(".terminal-cell[data-content-kind='git'] > .git-view").takeIf { it.isNotEmpty() }?.let { put("diff", it) }
+    }
+    // First pass: clear all previous inline overrides from every section container.
+    val allProps = palette.toCssVarMap().keys + palette.toCssAliasMap().keys
+    for ((_, elements) in sectionContainers) {
+        for (el in elements) {
+            for (prop in allProps) el.style.removeProperty(prop)
+        }
+    }
+    // Second pass: apply overrides. "windows" targets .terminal-cell while
+    // content-kind sections target the content container inside (e.g.
+    // .git-view, .md-view, .terminal). Because CSS custom properties are
+    // inherited, a windows override on .terminal-cell cascades into content
+    // containers. Content-kind sections must re-apply their own palette
+    // (even the global one) to block inherited windows vars.
+    val windowsPalette = sectionPalette("windows")
+    val windowsOverrideActive = windowsPalette != palette
+    val paneContentSections = setOf("terminal", "fileBrowser", "diff")
+    for ((section, elements) in sectionContainers) {
+        val sp = sectionPalette(section)
+        val differs = sp != palette
+        // Content sections must apply their palette when the windows override
+        // is active, even if their own palette matches global, to prevent
+        // the inherited windows CSS custom properties from bleeding through.
+        val needsApply = differs || (windowsOverrideActive && section in paneContentSections)
+        console.log("[theme] section=$section elements=${elements.size} differs=$differs needsApply=$needsApply")
+        if (needsApply) {
+            val cssVars = sp.toCssVarMap() + sp.toCssAliasMap()
+            for (el in elements) {
+                for ((prop, value) in cssVars) {
+                    el.style.setProperty(prop, value)
+                }
+            }
+        }
+    }
 }
 
 /** Applies the current xterm theme to all registered terminal instances. */
@@ -347,19 +419,30 @@ internal fun applyAll() {
 
 /**
  * Updates CSS classes on `<body>` to control pane status indicator visibility
- * (dots, glow, both, or none) based on the user's preference.
+ * (spinners and waiting-pulse) based on the user's preference.
  */
+/**
+ * Applies the persisted sidebar width and collapsed state to the DOM.
+ * Called once during initial settings hydration so that the sidebar
+ * renders in the correct state on page load without fighting ongoing
+ * user interactions.
+ */
+internal fun applySidebarState() {
+    val state = appVm.stateFlow.value
+    val sb = sidebarEl ?: return
+    if (state.sidebarCollapsed) {
+        sb.style.width = "0px"
+    } else {
+        val w = (state.sidebarWidth ?: 0).takeIf { it > 10 } ?: 260
+        sb.style.width = "${w}px"
+    }
+}
+
 internal fun applyPaneStatusClasses() {
     val psd = appVm.stateFlow.value.paneStatusDisplay
-    kotlinx.browser.document.body?.classList?.remove("show-pane-dots", "show-pane-glow")
-    when (psd) {
-        se.soderbjorn.termtastic.client.PaneStatusDisplay.Dots -> kotlinx.browser.document.body?.classList?.add("show-pane-dots")
-        se.soderbjorn.termtastic.client.PaneStatusDisplay.Glow -> kotlinx.browser.document.body?.classList?.add("show-pane-glow")
-        se.soderbjorn.termtastic.client.PaneStatusDisplay.Both -> {
-            kotlinx.browser.document.body?.classList?.add("show-pane-dots")
-            kotlinx.browser.document.body?.classList?.add("show-pane-glow")
-        }
-        se.soderbjorn.termtastic.client.PaneStatusDisplay.None -> {}
+    kotlinx.browser.document.body?.classList?.remove("show-pane-status")
+    if (psd == se.soderbjorn.termtastic.client.PaneStatusDisplay.On) {
+        kotlinx.browser.document.body?.classList?.add("show-pane-status")
     }
 }
 
@@ -369,11 +452,35 @@ internal fun applyPaneStatusClasses() {
  * @param t the terminal theme to render
  * @return an HTML string with two colored half-swatches
  */
-internal fun renderThemeSwatch(t: TerminalTheme): String =
-    """<span class="theme-swatch">
-        <span class="half light" style="color:${t.lightFg};background:${t.lightBg}">A</span>
-        <span class="half dark" style="color:${t.darkFg};background:${t.darkBg}">A</span>
+/**
+ * Renders an HTML snippet for a theme swatch preview, showing a mini
+ * terminal rectangle with accent prompt and a row of syntax colour dots.
+ *
+ * The preview resolves the palette for the current appearance mode so it
+ * reflects what the user would actually see.
+ *
+ * @param t the terminal theme to render
+ * @return an HTML string with the rich theme preview
+ */
+internal fun renderThemeSwatch(t: TerminalTheme): String {
+    val isDark = !isLightActive(appVm.stateFlow.value.appearance)
+    val p = t.resolve(isDark)
+    val bg = argbToHex(p.terminal.bg)
+    val fg = argbToHex(p.terminal.fg)
+    val accent = argbToHex(p.accent.primary)
+    val syntaxDots = listOf(
+        p.syntax.keyword, p.syntax.string, p.syntax.number, p.syntax.comment,
+        p.syntax.function, p.syntax.type, p.syntax.operator, p.syntax.constant,
+    ).joinToString("") { color ->
+        """<span class="syntax-dot" style="background:${argbToHex(color)}"></span>"""
+    }
+    return """<span class="theme-swatch">
+        <span class="swatch-terminal" style="background:$bg;color:$fg">
+            <span class="swatch-prompt" style="color:$accent">❯</span> ls
+        </span>
+        <span class="swatch-syntax-row">$syntaxDots</span>
     </span>"""
+}
 
 /**
  * Applies a new font size to all terminals, file browser rendered areas, and git diff panes.
@@ -444,7 +551,6 @@ private fun checkStateNotifications(sessionStates: Map<String, String?>) {
     if ((js("Notification.permission") as String) != "granted") return
 
     val effective = HashMap(sessionStates)
-    for ((k, v) in debugSessionStates) effective[k] = v
 
     for ((sessionId, newState) in effective) {
         val oldState = previousSessionStates[sessionId]
@@ -473,8 +579,8 @@ private fun checkStateNotifications(sessionStates: Map<String, String?>) {
 }
 
 /**
- * Updates all session state indicator dots, tab state indicators, and the global
- * connection status indicator based on the current session states.
+ * Updates all session state indicators (spinners for "working", opacity
+ * pulsation for "waiting") across the sidebar, tab bar, and pane headers.
  *
  * Also triggers desktop notification checks and adjusts the tab bar active
  * indicator position.
@@ -482,25 +588,32 @@ private fun checkStateNotifications(sessionStates: Map<String, String?>) {
  * @param sessionStates the current session ID to state map from the server
  * @see checkStateNotifications
  */
-internal fun updateStateDots(sessionStates: Map<String, String?>) {
+internal fun updateStateIndicators(sessionStates: Map<String, String?>) {
     val document = kotlinx.browser.document
     checkStateNotifications(sessionStates)
     val effective = HashMap(sessionStates)
-    for ((k, v) in debugSessionStates) effective[k] = v
     for ((sessionId, state) in effective) {
-        val dots = document.querySelectorAll(".pane-state-dot[data-session='$sessionId']")
-        for (i in 0 until dots.length) {
-            val el = dots.item(i) as? HTMLElement ?: continue
-            val isSidebar = el.classList.contains("sidebar-state-dot")
-            val base = if (isSidebar) "pane-state-dot sidebar-state-dot" else "pane-state-dot"
-            el.className = if (state != null) "$base state-$state" else base
-            if (!isSidebar) {
-                val cellEl = el.closest(".terminal-cell") as? HTMLElement
-                if (cellEl != null) {
-                    cellEl.classList.remove("pane-working", "pane-waiting")
-                    if (state != null) cellEl.classList.add("pane-$state")
-                }
-            }
+        val spinners = document.querySelectorAll(".pane-status-spinner[data-session='$sessionId']")
+        for (i in 0 until spinners.length) {
+            val el = spinners.item(i) as? HTMLElement ?: continue
+            val isSidebar = el.classList.contains("spinner-sidebar")
+            val baseClass = if (isSidebar) "pane-status-spinner spinner-sidebar"
+                else if (el.classList.contains("spinner-tab")) "pane-status-spinner spinner-tab"
+                else "pane-status-spinner spinner-header"
+            el.className = if (state == "working") "$baseClass state-working" else baseClass
+        }
+        val sidebarItems = document.querySelectorAll(".sidebar-pane-item[data-pane]")
+        for (i in 0 until sidebarItems.length) {
+            val item = sidebarItems.item(i) as? HTMLElement ?: continue
+            val spinner = item.querySelector(".pane-status-spinner[data-session='$sessionId']") ?: continue
+            item.classList.remove("state-waiting")
+            if (state == "waiting") item.classList.add("state-waiting")
+        }
+        val headerSpinners = document.querySelectorAll(".pane-status-spinner.spinner-header[data-session='$sessionId']")
+        for (i in 0 until headerSpinners.length) {
+            val header = (headerSpinners.item(i) as? HTMLElement)?.closest(".terminal-header") as? HTMLElement ?: continue
+            header.classList.remove("header-waiting")
+            if (state == "waiting") header.classList.add("header-waiting")
         }
     }
     val cfg = appVm.stateFlow.value.config ?: return
@@ -520,32 +633,22 @@ internal fun updateStateDots(sessionStates: Map<String, String?>) {
                 "working" -> if (tabState != "working") tabState = "working"
             }
         }
-        val tabDots = document.querySelectorAll("[data-tab-state='$tabId']")
-        for (j in 0 until tabDots.length) {
-            val el = tabDots.item(j) as? HTMLElement ?: continue
-            val isSidebar = el.classList.contains("sidebar-state-dot")
-            val base = if (isSidebar) "pane-state-dot sidebar-state-dot" else "pane-state-dot tab-state-dot"
-            el.className = if (tabState != null) "$base state-$tabState" else base
+        val tabSpinners = document.querySelectorAll("[data-tab-state='$tabId']")
+        for (j in 0 until tabSpinners.length) {
+            val el = tabSpinners.item(j) as? HTMLElement ?: continue
+            val isSidebar = el.classList.contains("spinner-sidebar")
+            val baseClass = if (isSidebar) "pane-status-spinner spinner-sidebar" else "pane-status-spinner spinner-tab"
+            el.className = if (tabState == "working") "$baseClass state-working" else baseClass
+        }
+        val sidebarTabHeader = document.querySelector(".sidebar-tab-header[data-tab='$tabId']") as? HTMLElement
+        if (sidebarTabHeader != null) {
+            sidebarTabHeader.classList.remove("state-waiting")
+            if (tabState == "waiting") sidebarTabHeader.classList.add("state-waiting")
         }
         val tabBtn = document.querySelector(".tab-button[data-tab='$tabId']") as? HTMLElement
         if (tabBtn != null) {
-            tabBtn.classList.remove("tab-working", "tab-waiting")
-            if (tabState != null) tabBtn.classList.add("tab-$tabState")
-        }
-    }
-    val statusDot = document.getElementById("connection-status") as? HTMLElement
-    var globalPaneState: String? = null
-    for ((_, state) in effective) {
-        when (state) {
-            "waiting" -> { globalPaneState = "waiting"; break }
-            "working" -> if (globalPaneState != "working") globalPaneState = "working"
-        }
-    }
-    if (statusDot != null) {
-        statusDot.classList.remove("pane-state-working", "pane-state-waiting")
-        when (globalPaneState) {
-            "working" -> statusDot.classList.add("pane-state-working")
-            "waiting" -> statusDot.classList.add("pane-state-waiting")
+            tabBtn.classList.remove("tab-waiting")
+            if (tabState == "waiting") tabBtn.classList.add("tab-waiting")
         }
     }
     val indicator = document.querySelector(".tab-active-indicator") as? HTMLElement

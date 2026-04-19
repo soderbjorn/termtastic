@@ -1,130 +1,60 @@
+/* ── Semantic colour aliases ─────────────────────────────────────────
+   The --t-* custom properties are set dynamically by Kotlin via
+   applyAppearanceClass().  The legacy names (--background, --surface,
+   etc.) are kept as aliases so existing CSS rules work unchanged. */
 :root {
-    --termtastic-orange: #F4B869;
-    --termtastic-orange-accent: #E89A3C;
-    --background: #1C1C1E;
-    --surface: #2C2C2E;
-    --bg-elevated: #3A3A3C;
-    --text-primary: #F5F5F5;
-    --text-secondary: #8E8E93;
-    --separator: rgba(255, 255, 255, 0.1);
-    --terminal-bg: #000000;
-    --toolbar-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    --termtastic-orange: var(--t-accent-primary, #F4B869);
+    --termtastic-orange-accent: var(--t-accent-primary, #E89A3C);
+    --background: var(--t-sidebar-bg, #1C1C1E);
+    --surface: var(--t-surface-raised, #2C2C2E);
+    --bg-elevated: var(--t-surface-overlay, #3A3A3C);
+    --text-primary: var(--t-text-primary, #F5F5F5);
+    --text-secondary: var(--t-text-secondary, #8E8E93);
+    --separator: var(--t-border-subtle, rgba(255, 255, 255, 0.1));
+    --terminal-bg: var(--t-terminal-bg, #000000);
+    --toolbar-shadow: 0 2px 8px var(--t-chrome-shadow, rgba(0, 0, 0, 0.3));
     --header-height: 40px;
-    /* Outer breathing room around the terminal cards. Bumped from 12px after
-       removing the inner .terminal padding — without inner padding the cards
-       were sitting too close to the window edges. */
     --terminal-padding: 18px;
     --terminal-gap: 12px;
 }
 
-body.appearance-light {
-    --background: #E8EDF4;
-    --surface: #F2F5FA;
-    --bg-elevated: #DDE3EC;
-    --text-primary: #1C1C1E;
-    --text-secondary: #5E6B7E;
-    --separator: rgba(30, 50, 90, 0.14);
-    --terminal-bg: #FFFFFF;
-    --toolbar-shadow: 0 2px 10px rgba(30, 50, 90, 0.08);
-}
-
-/* Light mode: make the active tab's "body" pure white so it visually
-   connects to the content surface below, and tint it faintly with the
-   accent. In dark mode the default (var(--background)) already works. */
+/* Light-mode accent tint on the active tab. Uses semantic accent with
+   transparency so it adapts to any theme's accent colour. */
 body.appearance-light .tab-button.active {
     background: linear-gradient(
         180deg,
-        rgba(244, 184, 105, 0.10) 0%,
-        #FFFFFF 60%
+        var(--t-accent-primarySoft, rgba(244, 184, 105, 0.10)) 0%,
+        var(--t-surface-raised, #FFFFFF) 60%
     );
 }
 
-/* Stronger accent wash on the selected sidebar pane in light mode — the
-   default 0.08 alpha is nearly invisible against the tinted chrome. */
+/* Accent wash on the selected sidebar pane in light mode. */
 body.appearance-light .sidebar-pane-item.active-pane {
-    background: rgba(232, 154, 60, 0.14);
+    background: var(--t-sidebar-activeBg, rgba(232, 154, 60, 0.14));
 }
 
-/* Give the app header a hairline accent stripe along the bottom so the
-   chrome/content boundary reads as intentional instead of incidental. */
+/* Accent stripe at the bottom of the header. */
 body.appearance-light .app-header {
     box-shadow:
         var(--toolbar-shadow),
-        inset 0 -1px 0 rgba(232, 154, 60, 0.18);
+        inset 0 -1px 0 var(--t-accent-primarySoft, rgba(232, 154, 60, 0.18));
 }
 
-/* #1 — tint the sidebar a shade darker/cooler than the header so the
-   chrome has internal hierarchy instead of reading as one flat slab.
-   Also drop the hard 1px right border in favor of a soft shadow (#4). */
+/* Sidebar gradient tint for light mode hierarchy. */
 body.appearance-light .sidebar {
-    background: linear-gradient(
-        180deg,
-        #E3E9F2 0%,
-        #DDE4EE 100%
-    );
+    background: var(--t-sidebar-bg, #E3E9F2);
     border-right: none;
     box-shadow:
-        2px 0 8px rgba(30, 50, 90, 0.06),
-        inset -1px 0 0 rgba(30, 50, 90, 0.08);
+        2px 0 8px var(--t-chrome-shadow, rgba(30, 50, 90, 0.06)),
+        inset -1px 0 0 var(--t-border-subtle, rgba(30, 50, 90, 0.08));
 }
 
-/* #4 — swap the terminal card's 1px ring for a soft elevated shadow so
-   the cards float above the tinted chrome instead of sitting inside a
-   hairline box. Dark mode keeps the ring (shadows don't read there). */
+/* Elevated card shadow for light mode. */
 body.appearance-light .terminal-inner {
     box-shadow:
-        0 1px 2px rgba(30, 50, 90, 0.06),
-        0 6px 18px rgba(30, 50, 90, 0.08),
-        0 0 0 1px rgba(30, 50, 90, 0.05);
-}
-
-/* ---- Dark-mode "spiced" treatment (gated by the .dark-spiced class,
-   toggled from main.kt via the DARK_SPICED constant). Parallels the
-   light-mode tweaks above: cooler tint, sidebar hierarchy, accent
-   stripe on the header, orange glow on the active tab, deeper card
-   shadows. */
-body.appearance-dark.dark-spiced {
-    --background: #191B22;
-    --surface: #23262F;
-    --bg-elevated: #2E323D;
-    --separator: rgba(140, 160, 200, 0.12);
-}
-
-body.appearance-dark.dark-spiced .app-header {
-    box-shadow:
-        var(--toolbar-shadow),
-        inset 0 -1px 0 rgba(232, 154, 60, 0.22);
-}
-
-body.appearance-dark.dark-spiced .sidebar {
-    background: linear-gradient(
-        180deg,
-        #14161C 0%,
-        #191C24 100%
-    );
-    border-right: none;
-    box-shadow:
-        2px 0 10px rgba(0, 0, 0, 0.35),
-        inset -1px 0 0 rgba(244, 184, 105, 0.06);
-}
-
-body.appearance-dark.dark-spiced .tab-button.active {
-    background: linear-gradient(
-        180deg,
-        rgba(244, 184, 105, 0.18) 0%,
-        var(--background) 60%
-    );
-}
-
-body.appearance-dark.dark-spiced .sidebar-pane-item.active-pane {
-    background: rgba(232, 154, 60, 0.16);
-}
-
-body.appearance-dark.dark-spiced .terminal-inner {
-    box-shadow:
-        0 2px 6px rgba(0, 0, 0, 0.32),
-        0 10px 28px rgba(0, 0, 0, 0.38),
-        0 0 0 1px rgba(244, 184, 105, 0.06);
+        0 1px 2px var(--t-chrome-shadow, rgba(30, 50, 90, 0.06)),
+        0 6px 18px var(--t-chrome-shadow, rgba(30, 50, 90, 0.08)),
+        0 0 0 1px var(--t-border-subtle, rgba(30, 50, 90, 0.05));
 }
 
 * {
@@ -243,9 +173,6 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     height: 30px;
     width: 30px;
     padding: 0;
-    border-radius: 6px 6px 0 0;
-    border-bottom: none;
-    margin-bottom: -1px;
 }
 
 /* Claude Code usage bar (bottom of window) */
@@ -256,9 +183,9 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     padding: 3px 12px;
     font-size: 11px;
     font-weight: 500;
-    color: var(--text-secondary, #999);
-    background: var(--bg-secondary, #1e1e1e);
-    border-top: 1px solid var(--border-color, #333);
+    color: var(--text-secondary);
+    background: var(--background);
+    border-top: 1px solid var(--separator);
     white-space: nowrap;
     user-select: none;
     flex-shrink: 0;
@@ -269,9 +196,9 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     gap: 5px;
 }
 .claude-usage-bar .usage-pct { font-weight: 600; }
-.claude-usage-bar.usage-ok { color: #34C759; }
-.claude-usage-bar.usage-warn { color: #FFD60A; }
-.claude-usage-bar.usage-critical { color: #FF6961; }
+.claude-usage-bar .usage-pct.usage-ok { color: var(--t-semantic-success, #34C759); }
+.claude-usage-bar .usage-pct.usage-warn { color: var(--t-semantic-warn, #FFD60A); }
+.claude-usage-bar .usage-pct.usage-critical { color: var(--t-semantic-danger, #FF6961); }
 .claude-usage-bar .usage-refresh-btn {
     background: none;
     border: none;
@@ -284,15 +211,6 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 }
 .claude-usage-bar .usage-refresh-btn:hover { opacity: 1; }
 
-.status-dot {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: #34C759;
-    box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.2);
-    transition: background-color 120ms ease-in-out, box-shadow 120ms ease-in-out;
-    flex-shrink: 0;
-}
 
 
 .tab-bar {
@@ -321,7 +239,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     left: 0;
     width: 0;
     height: 0;
-    border: 2px solid var(--termtastic-orange);
+    border: 2px solid var(--t-accent-primary, var(--termtastic-orange));
     border-radius: 6px 6px 0 0;
     box-shadow: 0 0 0 0 rgba(244, 184, 105, 0.0);
     pointer-events: none;
@@ -610,7 +528,14 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 .sidebar {
     width: 260px;
     min-width: 0;
-    background: var(--surface);
+    /* Subtle vertical gradient tinted with the accent colour, giving the
+       sidebar depth and a connection to the terminal theme. */
+    background: linear-gradient(
+        180deg,
+        var(--t-sidebar-bg, var(--surface)) 0%,
+        color-mix(in oklab, var(--t-sidebar-bg, var(--surface)) 94%, var(--t-accent-primary, var(--surface))) 40%,
+        var(--t-sidebar-bg, var(--surface)) 100%
+    );
     border-right: 1px solid var(--separator);
     overflow-y: auto;
     overflow-x: hidden;
@@ -628,14 +553,8 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     height: 30px;
     width: 30px;
     padding: 0;
-    border-radius: 6px 6px 0 0;
-    border-bottom: none;
-    margin-bottom: -1px;
 }
 
-.app-header > .status-dot {
-    align-self: center;
-}
 
 .sidebar-divider {
     width: 9px;
@@ -736,8 +655,10 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 }
 
 .sidebar-pane-item.active-pane {
-    color: var(--termtastic-orange);
-    background: rgba(244, 184, 105, 0.08);
+    color: var(--t-sidebar-activeText, var(--termtastic-orange));
+    background: var(--t-sidebar-activeBg, rgba(244, 184, 105, 0.08));
+    border-radius: 6px;
+    border: 1px solid var(--t-accent-primarySoft, rgba(244, 184, 105, 0.12));
 }
 
 .sidebar-pane-icon {
@@ -910,8 +831,18 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 0 4px 6px;
+    padding: 6px 10px;
     flex-shrink: 0;
+    /* Gradient titlebar: slightly lighter at the top edge, fading down to
+       the chrome surface colour. Gives the pane header a polished, lit-
+       from-above look like native macOS window chrome. */
+    background: linear-gradient(
+        180deg,
+        color-mix(in oklab, var(--t-chrome-titlebar, var(--surface)), var(--t-text-primary, #fff) 12%) 0%,
+        var(--t-chrome-titlebar, var(--surface)) 100%
+    );
+    border-bottom: 1px solid var(--t-chrome-border, var(--separator));
+    margin: 0 0 -1px 0;
 }
 
 /* Docked pane headers are HTML5-draggable so they can be dropped on a tab
@@ -930,7 +861,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 .terminal-title {
     font-size: 11px;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: var(--t-chrome-titleText, var(--text-secondary));
     text-transform: uppercase;
     letter-spacing: 0.6px;
     padding: 2px 6px;
@@ -983,131 +914,63 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     flex: 1;
 }
 
-/* Small dot next to pane title indicating session state: AI assistant activity
-   (Claude Code, Codex CLI, Gemini CLI). Hidden by default;
-   visibility is driven by body.show-pane-dots. Sidebar dots always show. */
-.pane-state-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
+/* ── Spinner for "working" state ──
+   Small rotating border circle shown next to pane/tab names when an AI
+   assistant is actively running. Hidden by default; visibility is driven
+   by the state-working class (sidebar: always, others: body.show-pane-status). */
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.pane-status-spinner {
     display: none;
+    border-radius: 50%;
+    border: 2px solid var(--text-secondary, #555);
+    border-top-color: var(--text-primary, #f5f5f5);
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+    box-sizing: border-box;
 }
 
-/* Sidebar dots always visible regardless of the pane-status setting. */
-.sidebar-state-dot.state-working,
-.sidebar-state-dot.state-waiting {
-    display: block;
+/* Size variants */
+.pane-status-spinner.spinner-sidebar { width: 12px; height: 12px; border-width: 2px; }
+.pane-status-spinner.spinner-tab     { width: 12px; height: 12px; border-width: 2px; align-self: center; }
+.pane-status-spinner.spinner-header  { width: 14px; height: 14px; border-width: 2.5px; margin-right: 6px; }
+
+/* Sidebar spinners always visible when working. */
+.pane-status-spinner.spinner-sidebar.state-working {
+    display: inline-block;
 }
 
-/* Non-sidebar dots only visible when show-pane-dots is active. */
-body.show-pane-dots .pane-state-dot.state-working,
-body.show-pane-dots .pane-state-dot.state-waiting {
-    display: block;
+/* Non-sidebar spinners visible only when the setting is on. */
+body.show-pane-status .pane-status-spinner.state-working {
+    display: inline-block;
 }
 
-.pane-state-dot.state-working {
-    background: #5AC8FA;
-    animation: pulse-dot 1.5s ease-in-out infinite;
-}
-
-.pane-state-dot.state-waiting {
-    background: #FF6961;
-    animation: pulse-dot 1.5s ease-in-out infinite;
-}
-
-.sidebar-state-dot {
-    width: 6px;
-    height: 6px;
-}
-
-.tab-state-dot {
-    width: 7px;
-    height: 7px;
-    /* Ensure the dot doesn't affect the tab's overall height. */
-    align-self: center;
-    margin-top: -1px;
-}
-
-@keyframes pulse-dot {
+/* ── Pulsating opacity for "waiting for input" state ──
+   Pulses the entire row/tab/header to grab the user's attention. */
+@keyframes pulse-attention {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    50%      { opacity: 0.35; }
 }
 
-/* ── Pulsating glow around panes with active status ──
-   Uses ::before (::after is reserved for the orange focus ring).
-   Only shown when body.show-pane-glow is active. */
-@keyframes pulse-glow-blue {
-    0%, 100% { border-color: rgba(90, 200, 250, 0.8);  box-shadow: inset 0 0 12px 4px rgba(90, 200, 250, 0.3); }
-    50%      { border-color: rgba(90, 200, 250, 0.3);  box-shadow: inset 0 0 20px 6px rgba(90, 200, 250, 0.08); }
+/* Sidebar: always pulsate when waiting. */
+.sidebar-pane-item.state-waiting,
+.sidebar-tab-header.state-waiting {
+    animation: pulse-attention 1.5s ease-in-out infinite;
+    color: var(--t-semantic-warn, #FFD60A);
 }
 
-@keyframes pulse-glow-red {
-    0%, 100% { border-color: rgba(255, 105, 97, 0.8);  box-shadow: inset 0 0 12px 4px rgba(255, 105, 97, 0.3); }
-    50%      { border-color: rgba(255, 105, 97, 0.3);  box-shadow: inset 0 0 20px 6px rgba(255, 105, 97, 0.08); }
+/* Tab button: pulsate when waiting (only when setting is on). */
+body.show-pane-status .tab-button.tab-waiting {
+    animation: pulse-attention 1.5s ease-in-out infinite;
+    color: var(--t-semantic-warn, #FFD60A);
 }
 
-body.show-pane-glow .terminal-cell.pane-working::before,
-body.show-pane-glow .terminal-cell.pane-waiting::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: 8px;
-    border: 2px solid transparent;
-    pointer-events: none;
-    z-index: 2;
-}
-
-body.show-pane-glow .terminal-cell.pane-working::before {
-    animation: pulse-glow-blue 1.5s ease-in-out infinite;
-}
-
-body.show-pane-glow .terminal-cell.pane-waiting::before {
-    animation: pulse-glow-red 1.5s ease-in-out infinite;
-}
-
-/* ── Pulsating glow on pane title bar with active status ── */
-@keyframes pulse-glow-blue-header {
-    0%, 100% { background-color: rgba(90, 200, 250, 0.15); }
-    50%      { background-color: rgba(90, 200, 250, 0.04); }
-}
-
-@keyframes pulse-glow-red-header {
-    0%, 100% { background-color: rgba(255, 105, 97, 0.15); }
-    50%      { background-color: rgba(255, 105, 97, 0.04); }
-}
-
-body.show-pane-glow .terminal-cell.pane-working > .terminal-header {
-    border-radius: 6px;
-    animation: pulse-glow-blue-header 1.5s ease-in-out infinite;
-}
-
-body.show-pane-glow .terminal-cell.pane-waiting > .terminal-header {
-    border-radius: 6px;
-    animation: pulse-glow-red-header 1.5s ease-in-out infinite;
-}
-
-/* When focused + status: both the orange ring and the status glow show.
-   The orange ::after sits at z-index:10, the glow ::before at z-index:2,
-   with the glow inset so a gap is visible between them. */
-
-/* ── Pulsating glow on tab buttons with active status ── */
-@keyframes pulse-glow-blue-tab {
-    0%, 100% { box-shadow: 0 0 8px 2px rgba(90, 200, 250, 0.5),  inset 0 0 0 1px rgba(90, 200, 250, 0.5); }
-    50%      { box-shadow: 0 0 14px 4px rgba(90, 200, 250, 0.15), inset 0 0 0 1px rgba(90, 200, 250, 0.2); }
-}
-
-@keyframes pulse-glow-red-tab {
-    0%, 100% { box-shadow: 0 0 8px 2px rgba(255, 105, 97, 0.5),  inset 0 0 0 1px rgba(255, 105, 97, 0.5); }
-    50%      { box-shadow: 0 0 14px 4px rgba(255, 105, 97, 0.15), inset 0 0 0 1px rgba(255, 105, 97, 0.2); }
-}
-
-body.show-pane-glow .tab-button.tab-working {
-    animation: pulse-glow-blue-tab 1.5s ease-in-out infinite;
-}
-
-body.show-pane-glow .tab-button.tab-waiting {
-    animation: pulse-glow-red-tab 1.5s ease-in-out infinite;
+/* Pane header: pulsate title area when waiting (only when setting is on). */
+body.show-pane-status .terminal-header.header-waiting {
+    animation: pulse-attention 1.5s ease-in-out infinite;
+    color: var(--t-semantic-warn, #FFD60A);
 }
 
 .pane-menu {
@@ -1436,10 +1299,10 @@ body.show-pane-glow .tab-button.tab-waiting {
     width: 100%;
     flex: 1;
     min-height: 0;
-    background: var(--terminal-bg);
+    background: var(--t-terminal-bg, var(--terminal-bg));
     border-radius: 8px;
     overflow: hidden;
-    box-shadow: 0 0 0 1px var(--separator);
+    box-shadow: 0 0 0 1px var(--t-chrome-border, var(--separator));
     /* Inner breathing room so text isn't flush with the rounded edge. The
        .xterm-viewport inside fills the content area; for this padding strip
        to be invisible (no second border), the .xterm-viewport's bg must
@@ -1459,14 +1322,14 @@ body.show-pane-glow .tab-button.tab-waiting {
     content: "";
     position: absolute;
     inset: -4px;
-    border: 2px solid var(--termtastic-orange);
+    border: 2px solid var(--t-accent-primary, var(--termtastic-orange));
     border-radius: 10px;
     pointer-events: none;
     z-index: 10;
 }
 
 .terminal-cell.focused .terminal-title {
-    color: rgba(244, 184, 105, 0.75);
+    color: var(--t-text-secondary, rgba(244, 184, 105, 0.75));
 }
 
 /* Dropdowns in header */
@@ -1476,8 +1339,8 @@ body.show-pane-glow .tab-button.tab-waiting {
 
 .icon-button {
     appearance: none;
-    background: var(--surface);
-    border: 1px solid var(--separator);
+    background: transparent;
+    border: none;
     color: var(--text-secondary);
     padding: 0 8px;
     border-radius: 6px;
@@ -1487,12 +1350,11 @@ body.show-pane-glow .tab-button.tab-waiting {
     justify-content: center;
     height: 32px;
     line-height: 0;
-    transition: color 120ms ease-in-out, border-color 120ms ease-in-out;
+    transition: color 120ms ease-in-out;
 }
 
 .icon-button:hover {
     color: var(--text-primary);
-    border-color: var(--text-secondary);
 }
 
 .dropdown-button {
@@ -1525,14 +1387,44 @@ body.show-pane-glow .tab-button.tab-waiting {
 }
 
 .theme-swatch {
-    display: inline-flex;
-    width: 28px;
-    height: 14px;
-    border-radius: 3px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
     overflow: hidden;
+}
+
+.theme-swatch .swatch-terminal {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    border-radius: 5px;
+    font-family: Menlo, Monaco, 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
     box-shadow: 0 0 0 1px var(--separator);
 }
 
+.theme-swatch .swatch-prompt {
+    font-weight: 700;
+}
+
+.theme-swatch .swatch-syntax-row {
+    display: flex;
+    gap: 3px;
+    padding: 0 2px;
+}
+
+.theme-swatch .syntax-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* Legacy half-swatch support for dropdown menus. */
 .theme-swatch .half {
     flex: 1;
     display: flex;
@@ -1708,7 +1600,7 @@ body.show-pane-glow .tab-button.tab-waiting {
 }
 
 .floating-pane:has(.terminal-cell.focused) {
-    border-color: rgba(244, 184, 105, 0.9);
+    border-color: var(--t-accent-primary, rgba(244, 184, 105, 0.9));
 }
 
 .floating-pane .terminal-inner {
@@ -1970,23 +1862,6 @@ body.show-pane-glow .tab-button.tab-waiting {
     background: var(--terminal-bg);
 }
 
-.status-dot {
-    position: relative;
-}
-
-/* When any pane across all tabs is in a working/waiting state, the logo
-   dot mirrors that state with a pulsating color override. */
-.status-dot.pane-state-working {
-    background: #5AC8FA;
-    box-shadow: 0 0 0 3px rgba(90, 200, 250, 0.2);
-    animation: pulse-dot 1.5s ease-in-out infinite;
-}
-
-.status-dot.pane-state-waiting {
-    background: #FF6961;
-    box-shadow: 0 0 0 3px rgba(255, 105, 97, 0.2);
-    animation: pulse-dot 1.5s ease-in-out infinite;
-}
 
 /* ---------- First-paint fade ----------------------------------------- */
 
@@ -2501,6 +2376,7 @@ body.appearance-light .pane-picker-btn:hover:not(.disabled) {
     margin-right: 5px;
     opacity: 0.55;
     flex-shrink: 0;
+    color: var(--t-chrome-titleText, var(--text-secondary));
 }
 
 /* ── Confirm dialog ── */
@@ -2873,18 +2749,16 @@ body.appearance-light .link-picker-card:hover {
     width: 18px;
     height: 18px;
     border-radius: 3px;
-    text-align: center;
-    font-size: 11px;
-    font-weight: bold;
-    line-height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-.git-status-M { background: #d4a017; color: white; }
-.git-status-A { background: #2da44e; color: white; }
-.git-status-D { background: #cf222e; color: white; }
-.git-status-U { background: #888; color: white; }
-.git-status-R { background: #0969da; color: white; }
+.git-status-M { color: #d4a017; }
+.git-status-A { color: #2da44e; }
+.git-status-D { color: #cf222e; }
+.git-status-U { color: #888; }
+.git-status-R { color: #0969da; }
 
 /* Git divider (mirrors .md-divider) */
 .git-divider {
@@ -2970,6 +2844,8 @@ body.appearance-light .link-picker-card:hover {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: inherit;
     line-height: inherit;
+    min-width: fit-content;
+    background: var(--t-surface-base, var(--surface, #252526));
 }
 .git-diff-line {
     display: flex;
@@ -3006,6 +2882,8 @@ body.appearance-light .link-picker-card:hover {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: inherit;
     line-height: inherit;
+    min-width: fit-content;
+    background: var(--t-surface-base, var(--surface, #252526));
 }
 .git-split-row {
     display: flex;
@@ -3251,24 +3129,19 @@ body.appearance-light .hl-punctuation { color: #6e7781; }
     min-width: 0;
     overflow: hidden;
     flex-shrink: 0;
-    background: var(--surface, #252526);
-    border-left: 1px solid var(--separator, #333);
+    background: var(--t-sidebar-bg, var(--surface, #252526));
+    border-left: 1px solid var(--t-border-subtle, var(--separator, #333));
     display: flex;
     flex-direction: column;
     position: relative;
-    color: var(--text-primary, #d4d4d4);
+    color: var(--t-sidebar-text, var(--text-primary, #d4d4d4));
     font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", sans-serif;
     transition: width 200ms ease, min-width 200ms ease;
 }
 
 .settings-sidebar.open {
-    width: 340px;
-    min-width: 280px;
-}
-
-body.appearance-light .settings-sidebar {
-    background: #f5f5f5;
-    border-left-color: rgba(0, 0, 0, 0.12);
+    width: 450px;
+    min-width: 360px;
 }
 
 .settings-sidebar-body {
@@ -3297,58 +3170,81 @@ body.appearance-light .settings-sidebar {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--text-secondary, #999);
+    color: var(--t-sidebar-textDim, var(--text-secondary, #999));
     margin-bottom: 8px;
 }
 
 /* Theme grid inside settings modal */
 .settings-theme-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
     gap: 6px;
-    max-height: 260px;
+    max-height: 450px;
     overflow-y: auto;
     padding: 2px;
 }
 
 .settings-theme-card {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    border-radius: 6px;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border-radius: 8px;
     cursor: pointer;
     border: 1px solid transparent;
     transition: background 80ms ease, border-color 80ms ease;
 }
 
 .settings-theme-card:hover {
-    background: var(--separator, #333);
+    background: var(--t-border-subtle, var(--separator, #333));
 }
 
 .settings-theme-card.selected {
-    border-color: var(--accent, #4fc1ff);
-    background: var(--separator, #333);
+    border-color: var(--t-accent-primary, #4fc1ff);
+    background: var(--t-accent-primarySoft, var(--separator, #333));
 }
 
 .settings-theme-card .theme-swatch {
-    width: 28px;
-    height: 14px;
-    flex-shrink: 0;
+    width: 100%;
 }
 
 .settings-theme-name {
-    font-size: 12px;
+    font-size: 11px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    text-align: center;
+    color: var(--t-text-secondary, var(--text-secondary));
+}
+
+.settings-theme-card.selected .settings-theme-name {
+    color: var(--t-text-primary, var(--text-primary));
 }
 
 body.appearance-light .settings-theme-card:hover {
-    background: rgba(0, 0, 0, 0.06);
+    background: var(--t-border-subtle, rgba(0, 0, 0, 0.06));
 }
 body.appearance-light .settings-theme-card.selected {
-    background: rgba(0, 0, 0, 0.08);
+    background: var(--t-accent-primarySoft, rgba(0, 0, 0, 0.08));
+}
+
+/* Slot dropdown above the theme grid */
+.settings-slot-select {
+    margin-bottom: 8px;
+    width: 100%;
+}
+
+/* "Default" swatch card (no-override) */
+.theme-swatch-default {
+    width: 100%;
+    height: 40px;
+    border-radius: 6px;
+    border: 1px dashed var(--t-border-default, var(--separator, #555));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--t-text-tertiary, #888);
+    font-size: 11px;
 }
 
 /* Choice buttons (appearance, font size, pane status) */
@@ -3434,4 +3330,39 @@ body.appearance-light .settings-server-btn {
 }
 body.appearance-light .settings-server-btn:hover {
     background: rgba(0, 0, 0, 0.04);
+}
+
+/* ─── Section theme overrides ─────────────────────────────────────── */
+.settings-hint {
+    font-size: 11px;
+    color: var(--t-text-tertiary, var(--text-secondary));
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
+
+.settings-section-select {
+    appearance: none;
+    background: var(--t-surface-raised, var(--surface));
+    border: 1px solid var(--t-border-default, var(--separator));
+    color: var(--t-text-primary, var(--text-primary));
+    border-radius: 6px;
+    padding: 4px 28px 4px 10px;
+    font: 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    cursor: pointer;
+    min-width: 120px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--t-text-tertiary, #888) 50%),
+                      linear-gradient(135deg, var(--t-text-tertiary, #888) 50%, transparent 50%);
+    background-position: calc(100% - 12px) 52%, calc(100% - 8px) 52%;
+    background-size: 4px 4px;
+    background-repeat: no-repeat;
+}
+
+.settings-section-select:focus {
+    outline: none;
+    border-color: var(--t-accent-primary, var(--termtastic-orange));
+}
+
+body.appearance-light .settings-section-select {
+    background-color: #fff;
+    border-color: rgba(0, 0, 0, 0.15);
 }

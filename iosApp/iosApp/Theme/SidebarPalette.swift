@@ -1,38 +1,54 @@
 import SwiftUI
 import UIKit
+import Client
 
-/// Adaptive colour palette matching the web client's `:root` (dark) and
-/// `body.appearance-light` CSS blocks. Follows the system appearance setting.
+/// Adaptive colour palette derived from the Termtastic semantic theme system.
+///
+/// Resolves the default theme (Tron) for the current system appearance.
+/// Screens with access to the shared ViewModel should resolve from the
+/// user's actual selected theme instead.
 enum Palette {
-    // Dark
-    private static let backgroundDark   = UIColor(Color(hex: 0xFF1C1C1E))
-    private static let surfaceDark      = UIColor(Color(hex: 0xFF2C2C2E))
-    private static let textPrimaryDark  = UIColor(Color(hex: 0xFFF5F5F5))
-    private static let textSecondaryDark = UIColor(Color(hex: 0xFF8E8E93))
+    /// Resolves the default Tron palette for the given appearance.
+    private static func defaultPalette(isDark: Bool) -> Client.ResolvedPalette {
+        let themes = Client.ThemesKt.recommendedThemes
+        let tron = themes.first { ($0 as! Client.TerminalTheme).name == Client.ThemesKt.DEFAULT_THEME_NAME } as! Client.TerminalTheme
+        return Client.ThemeResolverKt.resolve(tron, isDark: isDark)
+    }
 
-    // Light — matches web `body.appearance-light`
-    private static let backgroundLight   = UIColor(Color(hex: 0xFFF5F5F7))
-    private static let surfaceLight      = UIColor(Color(hex: 0xFFFFFFFF))
-    private static let textPrimaryLight  = UIColor(Color(hex: 0xFF1C1C1E))
-    private static let textSecondaryLight = UIColor(Color(hex: 0xFF6E6E73))
-
-    // Dots are the same in both themes
-    static let dotWorking   = Color(hex: 0xFF5AC8FA)
-    static let dotWaiting   = Color(hex: 0xFFFF6961)
-    static let headerAccent = Color(red: 0xF4/255.0, green: 0xB8/255.0, blue: 0x69/255.0, opacity: 0.75)
+    /// Theme accent colour derived from the terminal foreground.
+    static var headerAccent: Color {
+        let pal = defaultPalette(isDark: UITraitCollection.current.userInterfaceStyle == .dark)
+        return Color(argb: pal.accent.primary).opacity(0.75)
+    }
 
     // Adaptive accessors — resolve at render time based on system appearance
     static var background: Color {
-        Color(UIColor { $0.userInterfaceStyle == .dark ? backgroundDark : backgroundLight })
+        Color(UIColor { traitCollection in
+            let isDark = traitCollection.userInterfaceStyle == .dark
+            let pal = defaultPalette(isDark: isDark)
+            return UIColor(Color(argb: pal.sidebar.bg))
+        })
     }
     static var surface: Color {
-        Color(UIColor { $0.userInterfaceStyle == .dark ? surfaceDark : surfaceLight })
+        Color(UIColor { traitCollection in
+            let isDark = traitCollection.userInterfaceStyle == .dark
+            let pal = defaultPalette(isDark: isDark)
+            return UIColor(Color(argb: pal.surface.raised))
+        })
     }
     static var textPrimary: Color {
-        Color(UIColor { $0.userInterfaceStyle == .dark ? textPrimaryDark : textPrimaryLight })
+        Color(UIColor { traitCollection in
+            let isDark = traitCollection.userInterfaceStyle == .dark
+            let pal = defaultPalette(isDark: isDark)
+            return UIColor(Color(argb: pal.sidebar.text))
+        })
     }
     static var textSecondary: Color {
-        Color(UIColor { $0.userInterfaceStyle == .dark ? textSecondaryDark : textSecondaryLight })
+        Color(UIColor { traitCollection in
+            let isDark = traitCollection.userInterfaceStyle == .dark
+            let pal = defaultPalette(isDark: isDark)
+            return UIColor(Color(argb: pal.sidebar.textDim))
+        })
     }
 }
 
@@ -44,5 +60,10 @@ extension Color {
         let g = Double((hex >> 8) & 0xFF) / 255.0
         let b = Double(hex & 0xFF) / 255.0
         self.init(.sRGB, red: r, green: g, blue: b, opacity: a)
+    }
+
+    /// Create a Color from a Kotlin Long ARGB value (bridged as Int64).
+    init(argb: Int64) {
+        self.init(hex: UInt64(bitPattern: argb))
     }
 }

@@ -27,6 +27,7 @@ import org.w3c.dom.HTMLElement
 import org.w3c.dom.events.Event
 import org.w3c.dom.events.KeyboardEvent
 import se.soderbjorn.termtastic.client.PaneStatusDisplay
+import se.soderbjorn.termtastic.client.viewmodel.findLeafById
 
 /** Available font size presets for the text size setting. */
 private val fontSizePresets = listOf(10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
@@ -100,18 +101,79 @@ fun openSettingsPanel() {
     themeTitle.textContent = "Theme"
     themeSection.appendChild(themeTitle)
 
+    val slotEntries = listOf(
+        "" to "Main theme",
+        "tabs" to "Tab strip",
+        "windows" to "Windows",
+        "sidebar" to "Sidebar",
+        "terminal" to "Terminal",
+        "diff" to "Diff",
+        "fileBrowser" to "File browser",
+    )
+
+    var activeSlot = ""
+
+    fun currentSectionTheme(section: String): TerminalTheme? {
+        val state = appVm.stateFlow.value
+        return when (section) {
+            "sidebar" -> state.sidebarTheme
+            "terminal" -> state.terminalTheme
+            "diff" -> state.diffTheme
+            "fileBrowser" -> state.fileBrowserTheme
+            "tabs" -> state.tabsTheme
+            "chrome" -> state.chromeTheme
+            "windows" -> state.windowsTheme
+            else -> null
+        }
+    }
+
+    val slotSelect = document.createElement("select") as org.w3c.dom.HTMLSelectElement
+    slotSelect.className = "settings-section-select settings-slot-select"
+    for ((key, label) in slotEntries) {
+        val opt = document.createElement("option") as org.w3c.dom.HTMLOptionElement
+        opt.value = key
+        opt.textContent = label
+        slotSelect.appendChild(opt)
+    }
+    themeSection.appendChild(slotSelect)
+
     val themeGrid = document.createElement("div") as HTMLElement
     themeGrid.className = "settings-theme-grid"
 
     fun renderThemeGrid() {
         themeGrid.innerHTML = ""
-        val currentTheme = appVm.stateFlow.value.theme
+        val isMainSlot = activeSlot.isEmpty()
+        val currentTheme = if (isMainSlot) appVm.stateFlow.value.theme
+            else currentSectionTheme(activeSlot)
+
+        if (!isMainSlot) {
+            val defaultCard = document.createElement("div") as HTMLElement
+            defaultCard.className = "settings-theme-card settings-theme-default" +
+                if (currentTheme == null) " selected" else ""
+            defaultCard.innerHTML = """<div class="theme-swatch theme-swatch-default"></div><span class="settings-theme-name">Default</span>"""
+            defaultCard.addEventListener("click", {
+                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    appVm.setSectionTheme(activeSlot, null)
+                }
+                applyAll()
+                renderThemeGrid()
+            })
+            themeGrid.appendChild(defaultCard)
+        }
+
         for (t in recommendedThemes) {
             val card = document.createElement("div") as HTMLElement
-            card.className = "settings-theme-card" + if (t.name == currentTheme.name) " selected" else ""
+            card.className = "settings-theme-card" +
+                if (currentTheme != null && t.name == currentTheme.name) " selected" else ""
             card.innerHTML = """${renderThemeSwatch(t)}<span class="settings-theme-name">${t.name}</span>"""
             card.addEventListener("click", {
-                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setTheme(t) }
+                if (isMainSlot) {
+                    GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setTheme(t) }
+                } else {
+                    GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        appVm.setSectionTheme(activeSlot, t)
+                    }
+                }
                 applyAll()
                 renderThemeGrid()
             })
@@ -119,6 +181,12 @@ fun openSettingsPanel() {
         }
     }
     renderThemeGrid()
+
+    slotSelect.addEventListener("change", {
+        activeSlot = slotSelect.value
+        renderThemeGrid()
+    })
+
     themeSection.appendChild(themeGrid)
     body.appendChild(themeSection)
 
@@ -197,9 +265,7 @@ fun openSettingsPanel() {
         val currentPsd = appVm.stateFlow.value.paneStatusDisplay
         for (mode in PaneStatusDisplay.values()) {
             val label = when (mode) {
-                PaneStatusDisplay.Dots -> "Colored dots"
-                PaneStatusDisplay.Glow -> "Colored glow"
-                PaneStatusDisplay.Both -> "Both"
+                PaneStatusDisplay.On -> "Show status"
                 PaneStatusDisplay.None -> "None"
             }
             val btn = document.createElement("button") as HTMLElement
@@ -208,7 +274,7 @@ fun openSettingsPanel() {
             btn.addEventListener("click", {
                 GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setPaneStatusDisplay(mode) }
                 applyPaneStatusClasses()
-                updateStateDots(appVm.stateFlow.value.sessionStates)
+                updateStateIndicators(appVm.stateFlow.value.sessionStates)
                 renderStatusRow()
             })
             statusRow.appendChild(btn)
@@ -259,21 +325,22 @@ fun openSettingsPanel() {
 
     val devRow = document.createElement("div") as HTMLElement
     devRow.className = "settings-button-row"
-    for ((label, state) in listOf("Working" to "working", "Waiting" to "waiting", "Clear" to null)) {
+    for ((label, mode) in listOf("Working" to "working", "Waiting" to "waiting", "Clear" to "auto")) {
         val btn = document.createElement("button") as HTMLElement
         btn.className = "settings-choice-btn"
         btn.textContent = label
         btn.addEventListener("click", {
             val focusedCell = document.querySelector(".terminal-cell.focused") as? HTMLElement
             val paneId = focusedCell?.getAttribute("data-pane")
-            if (paneId != null) {
-                val entry = terminals[paneId]
-                if (entry != null) {
-                    if (state != null) debugSessionStates[entry.sessionId] = state
-                    else debugSessionStates.remove(entry.sessionId)
-                    updateStateDots(appVm.stateFlow.value.sessionStates)
-                }
+            if (paneId == null) {
+                return@addEventListener
             }
+            val sessionId = terminals[paneId]?.sessionId
+                ?: appVm.stateFlow.value.config?.let { findLeafById(it, paneId) }?.sessionId
+            if (sessionId.isNullOrEmpty()) {
+                return@addEventListener
+            }
+            launchCmd(WindowCommand.SetStateOverride(sessionId, mode))
         })
         devRow.appendChild(btn)
     }
@@ -290,6 +357,16 @@ fun openSettingsPanel() {
 
     appBody.appendChild(panel)
     settingsPanel = panel
+
+    // Apply the sidebar section theme so the settings panel matches the sidebar.
+    val sidebarPalette = sectionPalette("sidebar")
+    val rootPalette = currentResolvedPalette()
+    if (sidebarPalette != rootPalette) {
+        val cssVars = sidebarPalette.toCssVarMap() + sidebarPalette.toCssAliasMap()
+        for ((prop, value) in cssVars) {
+            panel.style.setProperty(prop, value)
+        }
+    }
 
     window.requestAnimationFrame { panel.classList.add("open") }
 
