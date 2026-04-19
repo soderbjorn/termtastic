@@ -857,14 +857,18 @@ fun buildGitView(paneId: String, leaf: dynamic, headerEl: HTMLElement? = null): 
         diffContent.style.lineHeight = "${(state.diffFontSize * 1.54).toInt()}px"
     }
 
-    val emptyState = document.createElement("div") as HTMLElement
-    emptyState.className = "git-diff-empty"
-    emptyState.innerHTML = """
-        <div class="git-diff-empty-icon">&#128221;</div>
-        <div class="git-diff-empty-title">No file selected</div>
-        <div class="git-diff-empty-subtitle">Choose a file from the list to view its diff</div>
-    """.trimIndent()
-    diffContent.appendChild(emptyState)
+    if (state.selectedFilePath == null && state.diffHtml == null) {
+        val emptyState = document.createElement("div") as HTMLElement
+        emptyState.className = "git-diff-empty"
+        emptyState.innerHTML = """
+            <div class="git-diff-empty-icon">&#128221;</div>
+            <div class="git-diff-empty-title">No file selected</div>
+            <div class="git-diff-empty-subtitle">Choose a file from the list to view its diff</div>
+        """.trimIndent()
+        diffContent.appendChild(emptyState)
+    } else if (state.diffHtml != null) {
+        diffContent.innerHTML = state.diffHtml!!
+    }
     right.appendChild(diffContent)
     applyFontSize()
 
@@ -873,7 +877,6 @@ fun buildGitView(paneId: String, leaf: dynamic, headerEl: HTMLElement? = null): 
     val view = GitPaneView(listBody, diffContent, searchCounter, searchNavButtons)
     gitPaneViews[paneId] = view
     renderGitList(paneId, view, state)
-    if (state.diffHtml != null) diffContent.innerHTML = state.diffHtml!!
     if (state.entries == null) {
         launchCmd(WindowCommand.GitList(paneId = paneId))
     }

@@ -163,7 +163,32 @@ fun handlePaneContentMessage(type: String?, parsed: dynamic): Boolean {
  * @see connectWindow
  * @see buildNode
  */
+/**
+ * Returns true when [prev] and [next] differ only in per-tab `focusedPaneId`
+ * fields, meaning no structural DOM rebuild is needed.
+ */
+private fun isOnlyFocusChange(prev: dynamic, next: dynamic): Boolean {
+    if (prev == null) return false
+    val prevTabs = prev.tabs as? Array<dynamic> ?: return false
+    val nextTabs = next.tabs as? Array<dynamic> ?: return false
+    if (prevTabs.size != nextTabs.size) return false
+    if ((prev.activeTabId as? String) != (next.activeTabId as? String)) return false
+    val stringify = js("JSON.stringify") as (dynamic) -> String
+    for (i in prevTabs.indices) {
+        val pt = prevTabs[i]; val nt = nextTabs[i]
+        if ((pt.id as? String) != (nt.id as? String)) return false
+        if ((pt.title as? String) != (nt.title as? String)) return false
+        if (stringify(pt.root) != stringify(nt.root)) return false
+        if (stringify(pt.floating) != stringify(nt.floating)) return false
+    }
+    return true
+}
+
 fun renderConfig(config: dynamic) {
+    if (isOnlyFocusChange(currentConfig, config)) {
+        currentConfig = config
+        return
+    }
     currentConfig = config
     val wrap = terminalWrapEl ?: return
     val tabBar = tabBarEl ?: return

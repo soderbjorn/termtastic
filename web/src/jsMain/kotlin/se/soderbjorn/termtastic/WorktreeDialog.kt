@@ -115,6 +115,17 @@ fun showWorktreeDialog(
         pathPreview.textContent = if (path.isNotBlank()) path else "(enter a branch name)"
     }
 
+    fun updateCreateEnabled() {
+        val branchFilled = branchInput.value.trim().isNotEmpty()
+        val pathFilled = if (selectedMode == "custom") customInput.value.trim().isNotEmpty() else true
+        val enabled = branchFilled && pathFilled
+        if (enabled) {
+            createBtn.removeAttribute("disabled")
+        } else {
+            createBtn.setAttribute("disabled", "")
+        }
+    }
+
     fun makeRadio(value: String, label: String, description: String): HTMLElement {
         val row = document.createElement("label") as HTMLElement
         row.className = "worktree-radio-row"
@@ -174,18 +185,6 @@ fun showWorktreeDialog(
         migrateCheckbox = checkbox
     } else {
         migrateCheckbox = null
-    }
-
-    // ---- Update preview and button state on input ----
-    fun updateCreateEnabled() {
-        val branchFilled = branchInput.value.trim().isNotEmpty()
-        val pathFilled = if (selectedMode == "custom") customInput.value.trim().isNotEmpty() else true
-        val enabled = branchFilled && pathFilled
-        if (enabled) {
-            createBtn.removeAttribute("disabled")
-        } else {
-            createBtn.setAttribute("disabled", "")
-        }
     }
 
     branchInput.addEventListener("input", { _: Event -> updatePreview(); updateCreateEnabled() })

@@ -205,6 +205,20 @@ fun openSettingsPanel() {
     // Local cache of fetched configs, used for name collision checks and deletes.
     var cachedConfigs = mutableMapOf<String, dynamic>()
 
+    /** Name of the config currently being dragged, if any. */
+    var draggedConfigName: String? = null
+
+    /**
+     * Render the list of saved theme configurations with drag-and-drop
+     * reordering support.
+     *
+     * Each row has a drag handle (grip icon) on the left. Dragging a row
+     * over another row shows a drop indicator line, and dropping reorders
+     * the [cachedConfigs] map and persists the new order to the server.
+     *
+     * @see fetchThemeConfigs
+     * @see persistThemeConfigs
+     */
     fun renderConfigList() {
         configList.innerHTML = ""
         if (cachedConfigs.isEmpty()) {
@@ -217,6 +231,13 @@ fun openSettingsPanel() {
         for ((name, config) in cachedConfigs) {
             val row = document.createElement("div") as HTMLElement
             row.className = "settings-theme-config-row"
+            row.setAttribute("draggable", "true")
+            row.setAttribute("data-config-name", name)
+
+            val grip = document.createElement("span") as HTMLElement
+            grip.className = "settings-theme-config-grip"
+            grip.innerHTML = "&#x2630;"
+            row.appendChild(grip)
 
             val nameEl = document.createElement("span") as HTMLElement
             nameEl.className = "settings-theme-config-name"
@@ -244,6 +265,74 @@ fun openSettingsPanel() {
                 }
             })
             row.appendChild(deleteBtn)
+
+            // ── Drag-and-drop event handlers ──
+
+            row.addEventListener("dragstart", { ev: Event ->
+                val dt = ev.asDynamic().dataTransfer ?: return@addEventListener
+                draggedConfigName = name
+                dt.effectAllowed = "move"
+                dt.setData("text/plain", name)
+                row.classList.add("dragging")
+            })
+
+            row.addEventListener("dragend", { _: Event ->
+                draggedConfigName = null
+                row.classList.remove("dragging")
+                // Clear all drop indicators
+                val allRows = configList.querySelectorAll(".settings-theme-config-row")
+                for (i in 0 until allRows.length) {
+                    (allRows.item(i) as? HTMLElement)?.classList?.remove("drop-above", "drop-below")
+                }
+            })
+
+            row.addEventListener("dragover", { ev: Event ->
+                if (draggedConfigName == null || draggedConfigName == name) return@addEventListener
+                ev.preventDefault()
+                val dt = ev.asDynamic().dataTransfer
+                if (dt != null) dt.dropEffect = "move"
+                // Determine if the cursor is in the upper or lower half of the row
+                val rect = row.getBoundingClientRect()
+                val midY = rect.top + rect.height / 2
+                val clientY = ev.asDynamic().clientY as Double
+                if (clientY < midY) {
+                    row.classList.add("drop-above")
+                    row.classList.remove("drop-below")
+                } else {
+                    row.classList.add("drop-below")
+                    row.classList.remove("drop-above")
+                }
+            })
+
+            row.addEventListener("dragleave", { _: Event ->
+                row.classList.remove("drop-above", "drop-below")
+            })
+
+            row.addEventListener("drop", { ev: Event ->
+                ev.preventDefault()
+                row.classList.remove("drop-above", "drop-below")
+                val sourceName = draggedConfigName ?: return@addEventListener
+                if (sourceName == name) return@addEventListener
+
+                // Determine insertion position
+                val rect = row.getBoundingClientRect()
+                val midY = rect.top + rect.height / 2
+                val clientY = ev.asDynamic().clientY as Double
+                val insertBefore = clientY < midY
+
+                // Rebuild the map in the new order
+                val entries = cachedConfigs.entries.toMutableList()
+                val sourceIndex = entries.indexOfFirst { it.key == sourceName }
+                if (sourceIndex < 0) return@addEventListener
+                val sourceEntry = entries.removeAt(sourceIndex)
+                var targetIndex = entries.indexOfFirst { it.key == name }
+                if (!insertBefore) targetIndex++
+                entries.add(targetIndex, sourceEntry)
+
+                cachedConfigs = linkedMapOf(*entries.map { it.key to it.value }.toTypedArray())
+                persistThemeConfigs(cachedConfigs) {}
+                renderConfigList()
+            })
 
             configList.appendChild(row)
         }
