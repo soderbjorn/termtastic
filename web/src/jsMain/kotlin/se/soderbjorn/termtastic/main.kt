@@ -60,7 +60,7 @@ private const val AUTO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="1
  *
  * @see start
  */
-private fun updateAppearanceToggle() {
+internal fun updateAppearanceToggle() {
     val btn = document.getElementById("appearance-toggle") as? HTMLElement ?: return
     val appearance = appVm.stateFlow.value.appearance
     btn.innerHTML = when (appearance) {
@@ -239,6 +239,7 @@ private fun start() {
         GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setAppearance(next) }
         applyAll()
         updateAppearanceToggle()
+        settingsAppearanceRefresh?.invoke()
     })
     updateAppearanceToggle()
 

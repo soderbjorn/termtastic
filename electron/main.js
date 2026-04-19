@@ -705,7 +705,16 @@ app.whenReady().then(async () => {
   // the embedded .icns, but the Dock API is the only way to set it at runtime.)
   // Must run after app.whenReady() — dock APIs are unavailable before that.
   if (process.platform === "darwin" && app.dock) {
-    app.dock.setIcon(path.join(__dirname, "icons", "icon.png"));
+    try {
+      // In packaged builds __dirname is inside app.asar where icons/ doesn't
+      // exist — fall back to the .icns shipped by electron-builder in Resources.
+      const devIcon = path.join(__dirname, "icons", "icon.png");
+      const packagedIcon = path.join(process.resourcesPath, "icon.icns");
+      const iconPath = app.isPackaged ? packagedIcon : devIcon;
+      app.dock.setIcon(iconPath);
+    } catch (_) {
+      // Cosmetic — never let a missing icon abort startup.
+    }
   }
 
   // Grant notification permissions to the app's own origin. Without this,

@@ -67,6 +67,8 @@ internal val previousSessionStates = HashMap<String, String?>()
 // Settings panel DOM state
 internal var settingsPanel: HTMLElement? = null
 internal var settingsEscHandler: ((Event) -> Unit)? = null
+/** Callback to refresh the settings panel's appearance row when appearance changes externally. */
+internal var settingsAppearanceRefresh: (() -> Unit)? = null
 
 // Pane type modal DOM state
 internal val previewEntries = mutableListOf<dynamic>()

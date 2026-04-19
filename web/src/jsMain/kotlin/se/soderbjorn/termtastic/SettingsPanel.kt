@@ -46,6 +46,7 @@ fun closeSettingsPanel() {
     })
     settingsEscHandler?.let { document.removeEventListener("keydown", it) }
     settingsEscHandler = null
+    settingsAppearanceRefresh = null
     settingsPanel = null
 }
 
@@ -382,11 +383,13 @@ fun openSettingsPanel() {
                 GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setAppearance(a) }
                 applyAll()
                 renderAppearanceRow()
+                updateAppearanceToggle()
             })
             appRow.appendChild(btn)
         }
     }
     renderAppearanceRow()
+    settingsAppearanceRefresh = ::renderAppearanceRow
     appSection.appendChild(appRow)
     body.appendChild(appSection)
 
