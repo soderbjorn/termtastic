@@ -28,6 +28,7 @@
       }
     ],
     "directories": {
+      "buildResources": "icons",
       "output": "dist"
     },
     "mac": {

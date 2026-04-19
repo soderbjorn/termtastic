@@ -147,6 +147,6 @@ fun updateClaudeUsageBadge(usage: dynamic) {
 
     bar.innerHTML = html
     bar.querySelector(".usage-refresh-btn")?.addEventListener("click", { launchCmd(WindowCommand.RefreshUsage) })
-    bar.className = "claude-usage-bar ${pctClass(sessionPct)}"
+    bar.className = "claude-usage-bar"
     bar.style.display = ""
 }

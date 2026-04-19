@@ -13,6 +13,7 @@ struct FileBrowserContentView: View {
     @State private var html: String?
     @State private var kind: Client.FileContentKind?
     @State private var errorMessage: String?
+    @State private var fileTheme: Client.TerminalTheme?
 
     private var fileName: String {
         relPath.components(separatedBy: "/").last ?? relPath
@@ -25,7 +26,7 @@ struct FileBrowserContentView: View {
                     .foregroundStyle(.gray)
                     .padding()
             } else if let currentHtml = html, let currentKind = kind {
-                FileWebView(html: wrapFileHtml(currentHtml, kind: currentKind))
+                FileWebView(html: wrapFileHtml(currentHtml, kind: currentKind, theme: fileTheme))
             } else if let error = errorMessage {
                 Text(error)
                     .foregroundStyle(.gray)
@@ -38,6 +39,12 @@ struct FileBrowserContentView: View {
         .navigationTitle(fileName)
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadContent() }
+        .task {
+            if let client = ConnectionHolder.shared.client,
+               let settings = try? await client.fetchUiSettings() {
+                fileTheme = settings.sectionTheme(section: "fileBrowser")
+            }
+        }
     }
 
     private func loadContent() async {
@@ -89,7 +96,40 @@ private struct FileWebView: UIViewRepresentable {
 /// Wraps server-generated HTML with the markdown preview stylesheet, plus
 /// `.hl-\*` rules so pre-tokenised source files match the diff viewer's
 /// palette.
-private func wrapFileHtml(_ bodyHtml: String, kind: Client.FileContentKind) -> String {
+/// Generates CSS custom property declarations from a resolved palette.
+private func paletteVars(_ pal: Client.ResolvedPalette) -> String {
+    let c = { (v: Int64) -> String in Client.ColorMathKt.argbToCss(argb: v) }
+    return """
+        --background: \(c(pal.surface.base));
+        --surface: \(c(pal.surface.raised));
+        --bg-elevated: \(c(pal.surface.overlay));
+        --text-primary: \(c(pal.text.primary));
+        --text-secondary: \(c(pal.text.secondary));
+        --separator: \(c(pal.border.subtle));
+        --accent: \(c(pal.accent.primary));
+        --hl-keyword: \(c(pal.syntax.keyword));
+        --hl-string: \(c(pal.syntax.string));
+        --hl-comment: \(c(pal.syntax.comment));
+        --hl-number: \(c(pal.syntax.number));
+        --hl-tag: \(c(pal.syntax.keyword));
+        --hl-attr: \(c(pal.syntax.function));
+        --hl-type: \(c(pal.syntax.type));
+        --hl-annotation: \(c(pal.syntax.constant));
+        --hl-punctuation: \(c(pal.syntax.operator));
+    """
+}
+
+private func wrapFileHtml(_ bodyHtml: String, kind: Client.FileContentKind, theme: Client.TerminalTheme? = nil) -> String {
+    let effectiveTheme: Client.TerminalTheme
+    if let theme = theme {
+        effectiveTheme = theme
+    } else {
+        let themes = Client.ThemesKt.recommendedThemes
+        effectiveTheme = themes.first { ($0 as! Client.TerminalTheme).name == Client.ThemesKt.DEFAULT_THEME_NAME } as! Client.TerminalTheme
+    }
+    let darkPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: true)
+    let lightPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: false)
+
     let body: String
     if kind == Client.FileContentKind.text {
         body = "<pre class=\"file-source\"><code>\(bodyHtml)</code></pre>"
@@ -104,40 +144,11 @@ private func wrapFileHtml(_ bodyHtml: String, kind: Client.FileContentKind) -> S
     <style>
       :root {
         color-scheme: light dark;
-        --background: #1C1C1E;
-        --surface: #2C2C2E;
-        --bg-elevated: #3A3A3C;
-        --text-primary: #F5F5F5;
-        --text-secondary: #8E8E93;
-        --separator: rgba(255, 255, 255, 0.1);
-        --accent: #F4B869;
-        --hl-keyword: #569cd6;
-        --hl-string: #ce9178;
-        --hl-comment: #6a9955;
-        --hl-number: #b5cea8;
-        --hl-tag: #569cd6;
-        --hl-attr: #9cdcfe;
-        --hl-type: #4ec9b0;
-        --hl-annotation: #dcdcaa;
-        --hl-punctuation: #808080;
+        \(paletteVars(darkPal))
       }
       @media (prefers-color-scheme: light) {
         :root {
-          --background: #F5F5F7;
-          --surface: #FFFFFF;
-          --bg-elevated: #ECECF1;
-          --text-primary: #1C1C1E;
-          --text-secondary: #6E6E73;
-          --separator: rgba(0, 0, 0, 0.12);
-          --hl-keyword: #0550ae;
-          --hl-string: #0a3069;
-          --hl-comment: #6e7781;
-          --hl-number: #953800;
-          --hl-tag: #6639ba;
-          --hl-attr: #0550ae;
-          --hl-type: #0e6575;
-          --hl-annotation: #9a6700;
-          --hl-punctuation: #6e7781;
+          \(paletteVars(lightPal))
         }
       }
       * { margin: 0; padding: 0; box-sizing: border-box; }

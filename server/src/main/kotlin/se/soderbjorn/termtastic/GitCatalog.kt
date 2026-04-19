@@ -7,8 +7,9 @@
  * binary the user has installed.
  *
  * Called by:
- *  - [handleWindowCommand] in Application.kt for `GitList` and `GitDiff`
- *    commands received over the `/window` WebSocket.
+ *  - [handleWindowCommand] in Application.kt for `GitList`, `GitDiff`,
+ *    `GetWorktreeDefaults`, and `CreateWorktree` commands received over
+ *    the `/window` WebSocket.
  *  - [buildGitListEnvelope] to construct the file-change list envelope.
  *  - [GitWatcher] callbacks to refresh the git pane on filesystem changes.
  *
@@ -152,7 +153,7 @@ object GitCatalog {
      * @param args the git subcommand and arguments (e.g. `"status"`, `"--porcelain=v1"`)
      * @return the command's stdout, or null on failure
      */
-    private fun runGit(cwd: Path, vararg args: String): String? {
+    internal fun runGit(cwd: Path, vararg args: String): String? {
         return try {
             val cmd = listOf("git") + args.toList()
             val proc = ProcessBuilder(cmd)
@@ -171,6 +172,129 @@ object GitCatalog {
         } catch (t: Throwable) {
             log.debug("Git command failed in {}: {}", cwd, t.message)
             null
+        }
+    }
+
+    // ---- Worktree operations ------------------------------------------------
+
+    /**
+     * Return the absolute path to the repository root, or null if [cwd] is
+     * not inside a git repository.
+     *
+     * @param cwd any directory inside the repository
+     * @return the repo root as a [Path], or null
+     * @see handleWindowCommand
+     */
+    fun getRepoRoot(cwd: Path): Path? {
+        val output = runGit(cwd, "rev-parse", "--show-toplevel") ?: return null
+        val trimmed = output.trim()
+        return if (trimmed.isNotEmpty()) Path.of(trimmed) else null
+    }
+
+    /**
+     * Check whether the working tree at [cwd] has any uncommitted changes
+     * (staged, unstaged, or untracked files).
+     *
+     * @param cwd the working directory to inspect
+     * @return `true` if there are uncommitted changes
+     * @see handleWindowCommand
+     */
+    fun hasUncommittedChanges(cwd: Path): Boolean {
+        val output = runGit(cwd, "status", "--porcelain=v1", "-uall") ?: return false
+        return output.isNotBlank()
+    }
+
+    /**
+     * Validate a git branch name using `git check-ref-format`.
+     *
+     * @param name the proposed branch name
+     * @return `true` if the name is a valid git branch name
+     * @see handleWindowCommand
+     */
+    fun isValidBranchName(name: String): Boolean {
+        if (name.isBlank()) return false
+        // Use a temporary directory-independent check; cwd doesn't matter here
+        // but we need one for ProcessBuilder. Use the system temp dir.
+        val tmpDir = Path.of(System.getProperty("java.io.tmpdir"))
+        return runGit(tmpDir, "check-ref-format", "--branch", name) != null
+    }
+
+    /**
+     * Create a new git worktree with a new branch.
+     *
+     * @param cwd the repository working directory
+     * @param branchName name for the new branch
+     * @param worktreePath absolute path where the worktree directory will be created
+     * @return null on success, or an error message string on failure
+     * @see handleWindowCommand
+     */
+    fun createWorktree(cwd: Path, branchName: String, worktreePath: Path): String? {
+        val result = runGitWithStderr(cwd, "worktree", "add", "-b", branchName, worktreePath.toString())
+        return if (result.success) null else (result.stderr.ifBlank { "Failed to create worktree" })
+    }
+
+    /**
+     * Stash all uncommitted changes (including untracked files) with a message.
+     *
+     * @param cwd the working directory to stash changes from
+     * @param message the stash message
+     * @return `true` if the stash was created successfully
+     * @see handleWindowCommand
+     */
+    fun stashPush(cwd: Path, message: String): Boolean {
+        return runGit(cwd, "stash", "push", "-u", "-m", message) != null
+    }
+
+    /**
+     * Pop the most recent stash entry. Intended to be called in a worktree
+     * directory after [stashPush] was called in the original repo.
+     *
+     * @param cwd the working directory to apply the stash in (typically the new worktree)
+     * @return null on success, or an error message on failure
+     * @see handleWindowCommand
+     */
+    fun stashPop(cwd: Path): String? {
+        val result = runGitWithStderr(cwd, "stash", "pop")
+        return if (result.success) null else (result.stderr.ifBlank { "Failed to pop stash" })
+    }
+
+    /**
+     * Result of a git command that captures both stdout and stderr separately,
+     * along with the exit status.
+     *
+     * @param success `true` if the process exited with code 0
+     * @param stdout the command's standard output
+     * @param stderr the command's standard error output
+     */
+    data class GitResult(val success: Boolean, val stdout: String, val stderr: String)
+
+    /**
+     * Execute a git command capturing both stdout and stderr. Unlike [runGit],
+     * this never returns null — it always returns a [GitResult] with the exit
+     * status and both output streams. Used by worktree operations that need
+     * error messages from stderr.
+     *
+     * @param cwd the working directory to run `git` in
+     * @param args the git subcommand and arguments
+     * @return a [GitResult] with stdout, stderr, and success flag
+     */
+    private fun runGitWithStderr(cwd: Path, vararg args: String): GitResult {
+        return try {
+            val cmd = listOf("git") + args.toList()
+            val proc = ProcessBuilder(cmd)
+                .directory(cwd.toFile())
+                .redirectErrorStream(false)
+                .start()
+            val stdout = proc.inputStream.bufferedReader().readText()
+            val stderr = proc.errorStream.bufferedReader().readText()
+            val finished = proc.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            if (!finished) {
+                proc.destroyForcibly()
+                return GitResult(false, "", "Git command timed out")
+            }
+            GitResult(proc.exitValue() == 0, stdout, stderr)
+        } catch (t: Throwable) {
+            GitResult(false, "", t.message ?: "Unknown error")
         }
     }
 }

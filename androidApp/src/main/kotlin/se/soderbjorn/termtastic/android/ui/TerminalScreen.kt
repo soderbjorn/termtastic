@@ -26,7 +26,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +41,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -66,6 +66,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -77,6 +78,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -109,11 +111,13 @@ import se.soderbjorn.termtastic.client.UiSettings
 import se.soderbjorn.termtastic.client.effectiveColors
 import se.soderbjorn.termtastic.client.fetchUiSettings
 
-// Mirrors `.terminal-cell.focused .terminal-title` in styles.css so the
-// Android top bar picks up the same warm accent the electron app uses for
-// the focused pane header.
-/** Warm amber accent colour used for the terminal screen top bar, matching the electron focused pane header. */
-private val HeaderAccent = Color(0xBFF4B869)
+// Accent colour for the terminal screen top bar. Previously hardcoded as
+// warm amber; now derived from the semantic palette's accent.primary so it
+// adapts to the selected theme.
+/** Theme accent colour for the terminal screen top bar. */
+private val HeaderAccent: Color
+    @Composable @ReadOnlyComposable
+    get() = SidebarAccent
 
 /**
  * Local terminal grid metrics — cols/rows of the TerminalView's emulator.
@@ -224,7 +228,7 @@ fun TerminalScreen(
         uiSettings = client.fetchUiSettings()
     }
     val systemIsDark = isSystemInDarkTheme()
-    val effectiveColors = uiSettings?.let { it.theme.effectiveColors(it.appearance, systemIsDark) }
+    val effectiveColors = uiSettings?.let { it.sectionTheme("terminal").effectiveColors(it.appearance, systemIsDark) }
     val bgComposeColor = effectiveColors
         ?.let { runCatching { Color(android.graphics.Color.parseColor(it.second)) }.getOrNull() }
         ?: Color.Black
@@ -410,7 +414,31 @@ fun TerminalScreen(
                     }
                 },
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    val waitAlpha = if (paneState == "waiting") {
+                        val transition = rememberInfiniteTransition(label = "headerWaitPulse")
+                        transition.animateFloat(
+                            initialValue = 1f,
+                            targetValue = 0.35f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(durationMillis = 750),
+                                repeatMode = RepeatMode.Reverse,
+                            ),
+                            label = "headerWaitAlpha",
+                        ).value
+                    } else 1f
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.graphicsLayer { alpha = waitAlpha },
+                    ) {
+                        if (paneState == "working") {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = HeaderAccent,
+                                trackColor = HeaderAccent.copy(alpha = 0.3f),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
                         Text(
                             text = headerTitle.uppercase(),
                             style = MaterialTheme.typography.titleSmall.copy(
@@ -420,10 +448,6 @@ fun TerminalScreen(
                             maxLines = 1,
                             modifier = Modifier.weight(1f, fill = false),
                         )
-                        paneState?.let { state ->
-                            Spacer(Modifier.width(6.dp))
-                            PaneStateDot(state)
-                        }
                     }
                 },
                 actions = {
@@ -736,35 +760,6 @@ private fun applyTerminalColors(
     emulator.mColors.mCurrentColors[TextStyle.COLOR_INDEX_FOREGROUND] = fg
     emulator.mColors.mCurrentColors[TextStyle.COLOR_INDEX_BACKGROUND] = bg
     view.setBackgroundColor(bg)
-}
-
-/**
- * 8 dp dot that mirrors the web `.pane-state-dot` CSS:
- * - "working" → blue (#5AC8FA) with a pulse animation
- * - "waiting" → red (#FF6961), pulsating
- */
-@Composable
-private fun PaneStateDot(state: String) {
-    val color = when (state) {
-        "working" -> Color(0xFF5AC8FA)
-        "waiting" -> Color(0xFFFF6961)
-        else -> return
-    }
-    val transition = rememberInfiniteTransition(label = "dotPulse")
-    val alpha = transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.4f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 750),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "dotAlpha",
-    ).value
-    Box(
-        modifier = Modifier
-            .size(8.dp)
-            .background(color.copy(alpha = alpha), CircleShape),
-    )
 }
 
 /**

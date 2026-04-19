@@ -507,6 +507,39 @@ sealed class WindowCommand {
     @Serializable
     @SerialName("refreshUsage")
     object RefreshUsage : WindowCommand()
+
+    /**
+     * Request default values for creating a git worktree from the pane's
+     * current working directory. The server responds with a
+     * [WindowEnvelope.WorktreeDefaults] containing suggested paths and
+     * dirty-state information so the dialog can be pre-populated.
+     *
+     * @param paneId the pane requesting the defaults
+     */
+    @Serializable
+    @SerialName("getWorktreeDefaults")
+    data class GetWorktreeDefaults(val paneId: String) : WindowCommand()
+
+    /**
+     * Create a new git worktree with a new branch, optionally migrating
+     * uncommitted changes from the current working directory into the
+     * new worktree via `git stash`.
+     *
+     * @param paneId the pane initiating the worktree creation
+     * @param branchName name for the new git branch
+     * @param worktreePath absolute filesystem path for the new worktree directory
+     * @param migrateChanges `true` to stash and move uncommitted changes to the new worktree
+     * @see WindowEnvelope.WorktreeCreated
+     * @see WindowEnvelope.WorktreeError
+     */
+    @Serializable
+    @SerialName("createWorktree")
+    data class CreateWorktree(
+        val paneId: String,
+        val branchName: String,
+        val worktreePath: String,
+        val migrateChanges: Boolean,
+    ) : WindowCommand()
 }
 
 /**

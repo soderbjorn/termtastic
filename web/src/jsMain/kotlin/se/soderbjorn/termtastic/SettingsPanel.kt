@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
 import org.w3c.dom.HTMLElement
 import org.w3c.dom.events.Event
 import org.w3c.dom.events.KeyboardEvent
-import se.soderbjorn.termtastic.client.PaneStatusDisplay
+import se.soderbjorn.termtastic.client.viewmodel.findLeafById
 
 /** Available font size presets for the text size setting. */
 private val fontSizePresets = listOf(10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
@@ -46,6 +46,7 @@ fun closeSettingsPanel() {
     })
     settingsEscHandler?.let { document.removeEventListener("keydown", it) }
     settingsEscHandler = null
+    settingsAppearanceRefresh = null
     settingsPanel = null
 }
 
@@ -97,21 +98,84 @@ fun openSettingsPanel() {
     themeSection.className = "settings-section"
     val themeTitle = document.createElement("div") as HTMLElement
     themeTitle.className = "settings-label"
-    themeTitle.textContent = "Theme"
+    themeTitle.textContent = "Color themes"
     themeSection.appendChild(themeTitle)
+
+    val slotEntries = listOf(
+        "" to "Main theme",
+        "tabs" to "Tab strip",
+        "windows" to "Windows",
+        "active" to "Active indicators",
+        "sidebar" to "Sidebar",
+        "terminal" to "Terminal",
+        "diff" to "Diff",
+        "fileBrowser" to "File browser",
+    )
+
+    var activeSlot = ""
+
+    fun currentSectionTheme(section: String): TerminalTheme? {
+        val state = appVm.stateFlow.value
+        return when (section) {
+            "sidebar" -> state.sidebarTheme
+            "terminal" -> state.terminalTheme
+            "diff" -> state.diffTheme
+            "fileBrowser" -> state.fileBrowserTheme
+            "tabs" -> state.tabsTheme
+            "chrome" -> state.chromeTheme
+            "windows" -> state.windowsTheme
+            "active" -> state.activeTheme
+            else -> null
+        }
+    }
+
+    val slotSelect = document.createElement("select") as org.w3c.dom.HTMLSelectElement
+    slotSelect.className = "settings-section-select settings-slot-select"
+    for ((key, label) in slotEntries) {
+        val opt = document.createElement("option") as org.w3c.dom.HTMLOptionElement
+        opt.value = key
+        opt.textContent = label
+        slotSelect.appendChild(opt)
+    }
+    themeSection.appendChild(slotSelect)
 
     val themeGrid = document.createElement("div") as HTMLElement
     themeGrid.className = "settings-theme-grid"
 
     fun renderThemeGrid() {
         themeGrid.innerHTML = ""
-        val currentTheme = appVm.stateFlow.value.theme
+        val isMainSlot = activeSlot.isEmpty()
+        val currentTheme = if (isMainSlot) appVm.stateFlow.value.theme
+            else currentSectionTheme(activeSlot)
+
+        if (!isMainSlot) {
+            val defaultCard = document.createElement("div") as HTMLElement
+            defaultCard.className = "settings-theme-card settings-theme-default" +
+                if (currentTheme == null) " selected" else ""
+            defaultCard.innerHTML = """<div class="theme-swatch theme-swatch-default"></div><span class="settings-theme-name">Default</span>"""
+            defaultCard.addEventListener("click", {
+                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    appVm.setSectionTheme(activeSlot, null)
+                }
+                applyAll()
+                renderThemeGrid()
+            })
+            themeGrid.appendChild(defaultCard)
+        }
+
         for (t in recommendedThemes) {
             val card = document.createElement("div") as HTMLElement
-            card.className = "settings-theme-card" + if (t.name == currentTheme.name) " selected" else ""
+            card.className = "settings-theme-card" +
+                if (currentTheme != null && t.name == currentTheme.name) " selected" else ""
             card.innerHTML = """${renderThemeSwatch(t)}<span class="settings-theme-name">${t.name}</span>"""
             card.addEventListener("click", {
-                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setTheme(t) }
+                if (isMainSlot) {
+                    GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setTheme(t) }
+                } else {
+                    GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        appVm.setSectionTheme(activeSlot, t)
+                    }
+                }
                 applyAll()
                 renderThemeGrid()
             })
@@ -119,7 +183,183 @@ fun openSettingsPanel() {
         }
     }
     renderThemeGrid()
+
+    slotSelect.addEventListener("change", {
+        activeSlot = slotSelect.value
+        renderThemeGrid()
+    })
+
     themeSection.appendChild(themeGrid)
+
+    // ─── Theme configurations ──────────────────────────────────────
+    val configSection = document.createElement("div") as HTMLElement
+    configSection.className = "settings-section"
+    val configLabel = document.createElement("div") as HTMLElement
+    configLabel.className = "settings-label"
+    configLabel.textContent = "Theme configurations"
+    configSection.appendChild(configLabel)
+
+    val configList = document.createElement("div") as HTMLElement
+    configList.className = "settings-theme-configs-list"
+    configSection.appendChild(configList)
+
+    // Local cache of fetched configs, used for name collision checks and deletes.
+    var cachedConfigs = mutableMapOf<String, dynamic>()
+
+    /** Name of the config currently being dragged, if any. */
+    var draggedConfigName: String? = null
+
+    /**
+     * Render the list of saved theme configurations with drag-and-drop
+     * reordering support.
+     *
+     * Each row has a drag handle (grip icon) on the left. Dragging a row
+     * over another row shows a drop indicator line, and dropping reorders
+     * the [cachedConfigs] map and persists the new order to the server.
+     *
+     * @see fetchThemeConfigs
+     * @see persistThemeConfigs
+     */
+    fun renderConfigList() {
+        configList.innerHTML = ""
+        if (cachedConfigs.isEmpty()) {
+            val empty = document.createElement("div") as HTMLElement
+            empty.className = "settings-theme-configs-empty"
+            empty.textContent = "No saved configurations"
+            configList.appendChild(empty)
+            return
+        }
+        for ((name, config) in cachedConfigs) {
+            val row = document.createElement("div") as HTMLElement
+            row.className = "settings-theme-config-row"
+            row.setAttribute("draggable", "true")
+            row.setAttribute("data-config-name", name)
+
+            val grip = document.createElement("span") as HTMLElement
+            grip.className = "settings-theme-config-grip"
+            grip.innerHTML = "&#x2630;"
+            row.appendChild(grip)
+
+            val nameEl = document.createElement("span") as HTMLElement
+            nameEl.className = "settings-theme-config-name"
+            nameEl.textContent = name
+            nameEl.addEventListener("click", {
+                applyThemeConfig(config)
+                renderThemeGrid()
+            })
+            row.appendChild(nameEl)
+
+            val deleteBtn = document.createElement("button") as HTMLElement
+            deleteBtn.className = "settings-theme-config-delete"
+            deleteBtn.innerHTML = "&times;"
+            deleteBtn.title = "Delete"
+            deleteBtn.addEventListener("click", { ev: Event ->
+                ev.stopPropagation()
+                showConfirmDialog(
+                    title = "Delete configuration",
+                    message = "Delete theme configuration <b>$name</b>?",
+                    confirmLabel = "Delete",
+                ) {
+                    cachedConfigs.remove(name)
+                    persistThemeConfigs(cachedConfigs) { renderConfigList() }
+                    renderConfigList()
+                }
+            })
+            row.appendChild(deleteBtn)
+
+            // ── Drag-and-drop event handlers ──
+
+            row.addEventListener("dragstart", { ev: Event ->
+                val dt = ev.asDynamic().dataTransfer ?: return@addEventListener
+                draggedConfigName = name
+                dt.effectAllowed = "move"
+                dt.setData("text/plain", name)
+                row.classList.add("dragging")
+            })
+
+            row.addEventListener("dragend", { _: Event ->
+                draggedConfigName = null
+                row.classList.remove("dragging")
+                // Clear all drop indicators
+                val allRows = configList.querySelectorAll(".settings-theme-config-row")
+                for (i in 0 until allRows.length) {
+                    (allRows.item(i) as? HTMLElement)?.classList?.remove("drop-above", "drop-below")
+                }
+            })
+
+            row.addEventListener("dragover", { ev: Event ->
+                if (draggedConfigName == null || draggedConfigName == name) return@addEventListener
+                ev.preventDefault()
+                val dt = ev.asDynamic().dataTransfer
+                if (dt != null) dt.dropEffect = "move"
+                // Determine if the cursor is in the upper or lower half of the row
+                val rect = row.getBoundingClientRect()
+                val midY = rect.top + rect.height / 2
+                val clientY = ev.asDynamic().clientY as Double
+                if (clientY < midY) {
+                    row.classList.add("drop-above")
+                    row.classList.remove("drop-below")
+                } else {
+                    row.classList.add("drop-below")
+                    row.classList.remove("drop-above")
+                }
+            })
+
+            row.addEventListener("dragleave", { _: Event ->
+                row.classList.remove("drop-above", "drop-below")
+            })
+
+            row.addEventListener("drop", { ev: Event ->
+                ev.preventDefault()
+                row.classList.remove("drop-above", "drop-below")
+                val sourceName = draggedConfigName ?: return@addEventListener
+                if (sourceName == name) return@addEventListener
+
+                // Determine insertion position
+                val rect = row.getBoundingClientRect()
+                val midY = rect.top + rect.height / 2
+                val clientY = ev.asDynamic().clientY as Double
+                val insertBefore = clientY < midY
+
+                // Rebuild the map in the new order
+                val entries = cachedConfigs.entries.toMutableList()
+                val sourceIndex = entries.indexOfFirst { it.key == sourceName }
+                if (sourceIndex < 0) return@addEventListener
+                val sourceEntry = entries.removeAt(sourceIndex)
+                var targetIndex = entries.indexOfFirst { it.key == name }
+                if (!insertBefore) targetIndex++
+                entries.add(targetIndex, sourceEntry)
+
+                cachedConfigs = linkedMapOf(*entries.map { it.key to it.value }.toTypedArray())
+                persistThemeConfigs(cachedConfigs) {}
+                renderConfigList()
+            })
+
+            configList.appendChild(row)
+        }
+    }
+
+    // Fetch configs when panel opens
+    fetchThemeConfigs { configs ->
+        cachedConfigs = configs.toMutableMap()
+        renderConfigList()
+    }
+
+    val saveBtn = document.createElement("button") as HTMLElement
+    saveBtn.className = "settings-choice-btn settings-save-config-btn"
+    saveBtn.textContent = "Save current\u2026"
+    saveBtn.addEventListener("click", {
+        showSaveThemeConfigDialog(cachedConfigs.keys) { savedName ->
+            // Re-fetch to pick up the just-saved entry
+            fetchThemeConfigs { configs ->
+                cachedConfigs = configs.toMutableMap()
+                renderConfigList()
+            }
+        }
+    })
+    configSection.appendChild(saveBtn)
+
+    body.appendChild(configSection)
     body.appendChild(themeSection)
 
     // ─── Appearance ─────────────────────────────────────────────────
@@ -143,11 +383,13 @@ fun openSettingsPanel() {
                 GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setAppearance(a) }
                 applyAll()
                 renderAppearanceRow()
+                updateAppearanceToggle()
             })
             appRow.appendChild(btn)
         }
     }
     renderAppearanceRow()
+    settingsAppearanceRefresh = ::renderAppearanceRow
     appSection.appendChild(appRow)
     body.appendChild(appSection)
 
@@ -182,42 +424,6 @@ fun openSettingsPanel() {
     sizeSection.appendChild(sizeRow)
     body.appendChild(sizeSection)
 
-    // ─── Pane status display ────────────────────────────────────────
-    val statusSection = document.createElement("div") as HTMLElement
-    statusSection.className = "settings-section"
-    val statusLabel = document.createElement("div") as HTMLElement
-    statusLabel.className = "settings-label"
-    statusLabel.textContent = "Pane status indicator"
-    statusSection.appendChild(statusLabel)
-
-    val statusRow = document.createElement("div") as HTMLElement
-    statusRow.className = "settings-button-row"
-    fun renderStatusRow() {
-        statusRow.innerHTML = ""
-        val currentPsd = appVm.stateFlow.value.paneStatusDisplay
-        for (mode in PaneStatusDisplay.values()) {
-            val label = when (mode) {
-                PaneStatusDisplay.Dots -> "Colored dots"
-                PaneStatusDisplay.Glow -> "Colored glow"
-                PaneStatusDisplay.Both -> "Both"
-                PaneStatusDisplay.None -> "None"
-            }
-            val btn = document.createElement("button") as HTMLElement
-            btn.className = "settings-choice-btn" + if (mode == currentPsd) " selected" else ""
-            btn.textContent = label
-            btn.addEventListener("click", {
-                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setPaneStatusDisplay(mode) }
-                applyPaneStatusClasses()
-                updateStateDots(appVm.stateFlow.value.sessionStates)
-                renderStatusRow()
-            })
-            statusRow.appendChild(btn)
-        }
-    }
-    renderStatusRow()
-    statusSection.appendChild(statusRow)
-    body.appendChild(statusSection)
-
     // ─── Desktop notifications ─────────────────────────────────────
     val notifSection = document.createElement("div") as HTMLElement
     notifSection.className = "settings-section"
@@ -246,6 +452,13 @@ fun openSettingsPanel() {
     notifSection.appendChild(notifRow)
     body.appendChild(notifSection)
 
+    // ─── Server settings ──────────────────────────────────────────
+    val srvBtn = document.createElement("button") as HTMLElement
+    srvBtn.className = "settings-server-btn"
+    srvBtn.textContent = "Server settings\u2026"
+    srvBtn.addEventListener("click", { launchCmd(WindowCommand.OpenSettings) })
+    body.appendChild(srvBtn)
+
     // ─── Developer Tools (hidden until activated) ───────────────────
     val devSection = document.createElement("div") as HTMLElement
     devSection.className = "settings-section"
@@ -259,21 +472,22 @@ fun openSettingsPanel() {
 
     val devRow = document.createElement("div") as HTMLElement
     devRow.className = "settings-button-row"
-    for ((label, state) in listOf("Working" to "working", "Waiting" to "waiting", "Clear" to null)) {
+    for ((label, mode) in listOf("Working" to "working", "Waiting" to "waiting", "Clear" to "auto")) {
         val btn = document.createElement("button") as HTMLElement
         btn.className = "settings-choice-btn"
         btn.textContent = label
         btn.addEventListener("click", {
             val focusedCell = document.querySelector(".terminal-cell.focused") as? HTMLElement
             val paneId = focusedCell?.getAttribute("data-pane")
-            if (paneId != null) {
-                val entry = terminals[paneId]
-                if (entry != null) {
-                    if (state != null) debugSessionStates[entry.sessionId] = state
-                    else debugSessionStates.remove(entry.sessionId)
-                    updateStateDots(appVm.stateFlow.value.sessionStates)
-                }
+            if (paneId == null) {
+                return@addEventListener
             }
+            val sessionId = terminals[paneId]?.sessionId
+                ?: appVm.stateFlow.value.config?.let { findLeafById(it, paneId) }?.sessionId
+            if (sessionId.isNullOrEmpty()) {
+                return@addEventListener
+            }
+            launchCmd(WindowCommand.SetStateOverride(sessionId, mode))
         })
         devRow.appendChild(btn)
     }
@@ -282,14 +496,18 @@ fun openSettingsPanel() {
 
     panel.appendChild(body)
 
-    val srvBtn = document.createElement("button") as HTMLElement
-    srvBtn.className = "settings-server-btn"
-    srvBtn.textContent = "Server settings\u2026"
-    srvBtn.addEventListener("click", { launchCmd(WindowCommand.OpenSettings) })
-    panel.appendChild(srvBtn)
-
     appBody.appendChild(panel)
     settingsPanel = panel
+
+    // Apply the sidebar section theme so the settings panel matches the sidebar.
+    val sidebarPalette = sectionPalette("sidebar")
+    val rootPalette = currentResolvedPalette()
+    if (sidebarPalette != rootPalette) {
+        val cssVars = sidebarPalette.toCssVarMap() + sidebarPalette.toCssAliasMap()
+        for ((prop, value) in cssVars) {
+            panel.style.setProperty(prop, value)
+        }
+    }
 
     window.requestAnimationFrame { panel.classList.add("open") }
 

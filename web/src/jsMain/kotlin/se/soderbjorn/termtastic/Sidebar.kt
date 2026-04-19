@@ -72,6 +72,7 @@ fun renderSidebar(config: dynamic) {
 
         val header = document.createElement("div") as HTMLElement
         header.className = "sidebar-tab-header"
+        header.setAttribute("data-tab", tabId)
         if (isActiveTab) header.classList.add("active-tab")
         if (tabId in collapsedTabs) header.classList.add("collapsed-tree")
 
@@ -90,10 +91,10 @@ fun renderSidebar(config: dynamic) {
         titleSpan.style.asDynamic().textAlign = "left"
         header.appendChild(titleSpan)
 
-        val sidebarTabDot = document.createElement("span") as HTMLElement
-        sidebarTabDot.className = "pane-state-dot sidebar-state-dot"
-        sidebarTabDot.setAttribute("data-tab-state", tabId)
-        header.appendChild(sidebarTabDot)
+        val sidebarTabSpinner = document.createElement("span") as HTMLElement
+        sidebarTabSpinner.className = "pane-status-spinner spinner-sidebar"
+        sidebarTabSpinner.setAttribute("data-tab-state", tabId)
+        header.appendChild(sidebarTabSpinner)
 
         header.addEventListener("click", { _ ->
             if (tabId in collapsedTabs) {
@@ -152,10 +153,10 @@ fun renderSidebar(config: dynamic) {
             }
             item.appendChild(icon)
 
-            val sidebarDot = document.createElement("span") as HTMLElement
-            sidebarDot.className = "pane-state-dot sidebar-state-dot"
-            sidebarDot.setAttribute("data-session", sId)
-            item.appendChild(sidebarDot)
+            val sidebarSpinner = document.createElement("span") as HTMLElement
+            sidebarSpinner.className = "pane-status-spinner spinner-sidebar"
+            sidebarSpinner.setAttribute("data-session", sId)
+            item.appendChild(sidebarSpinner)
 
             val label = document.createElement("span") as HTMLElement
             label.textContent = paneTitle

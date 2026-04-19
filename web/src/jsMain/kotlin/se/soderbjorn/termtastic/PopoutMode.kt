@@ -106,16 +106,14 @@ fun initPopoutMode() {
                 }
                 is WindowEnvelope.UiSettings -> {
                     applyAll()
-                    applyPaneStatusClasses()
                 }
                 is WindowEnvelope.State -> {
                     val sid = sessionId; val c = cell
                     if (sid != null && c != null) {
                         val state = envelope.states[sid]
-                        val dot = c.querySelector(".pane-state-dot[data-session='$sid']") as? HTMLElement
-                        if (dot != null) {
-                            val base = "pane-state-dot"
-                            dot.className = if (state != null) "$base state-$state" else base
+                        val spinner = c.querySelector(".pane-status-spinner[data-session='$sid']") as? HTMLElement
+                        if (spinner != null) {
+                            applySpinnerState(spinner, "pane-status-spinner spinner-header", state)
                         }
                     }
                 }

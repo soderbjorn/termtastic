@@ -26,16 +26,18 @@ import kotlinx.serialization.json.jsonPrimitive
 import se.soderbjorn.termtastic.Appearance
 import se.soderbjorn.termtastic.ClaudeUsageData
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
+import se.soderbjorn.termtastic.ResolvedPalette
 import se.soderbjorn.termtastic.SplitDirection
 import se.soderbjorn.termtastic.TerminalTheme
 import se.soderbjorn.termtastic.WindowCommand
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.WindowEnvelope
-import se.soderbjorn.termtastic.client.PaneStatusDisplay
 import se.soderbjorn.termtastic.client.WindowSocket
 import se.soderbjorn.termtastic.client.WindowStateRepository
-import se.soderbjorn.termtastic.client.parsePaneStatusDisplay
 import se.soderbjorn.termtastic.recommendedThemes
+import se.soderbjorn.termtastic.resolve
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /**
  * Backing ViewModel for the top-level application screen. Merges server-pushed
@@ -51,6 +53,16 @@ class AppBackingViewModel(
     private val windowState: WindowStateRepository,
     private val settingsPersister: SettingsPersister? = null,
 ) {
+    /**
+     * Monotonic timestamp of the most recent local settings mutation.
+     * Used to suppress server-pushed [WindowEnvelope.UiSettings] echoes
+     * that arrive shortly after the client itself POSTed — these echoes
+     * carry partially-merged state that would overwrite the correct
+     * local state.
+     */
+    private var lastLocalSettingsChange: TimeSource.Monotonic.ValueTimeMark =
+        TimeSource.Monotonic.markNow()
+
     private val _stateFlow = MutableStateFlow(State())
     val stateFlow: StateFlow<State> = _stateFlow.asStateFlow()
 
@@ -63,12 +75,27 @@ class AppBackingViewModel(
      * @property sessionStates      per-session state labels keyed by session ID.
      * @property pendingApproval    `true` if the device is awaiting approval.
      * @property claudeUsage        latest AI token usage data, if available.
-     * @property theme              the active terminal colour theme.
+     * @property theme              the active terminal colour theme (global default).
      * @property appearance         the user's light/dark mode preference.
-     * @property paneStatusDisplay  how pane activity is indicated in the sidebar.
      * @property paneFontSize       per-pane font size override, or `null` for default.
      * @property sidebarWidth       persisted sidebar width in pixels, or `null`.
+     * @property sidebarCollapsed    whether the sidebar is currently collapsed.
      * @property desktopNotifications whether desktop notifications are enabled.
+     * @property sidebarTheme       optional theme override for sidebar sections,
+     *   or `null` to use [theme].
+     * @property terminalTheme      optional theme override for terminal panes,
+     *   or `null` to use [theme].
+     * @property diffTheme          optional theme override for git diff panes,
+     *   or `null` to use [theme].
+     * @property fileBrowserTheme   optional theme override for file browser panes,
+     *   or `null` to use [theme].
+     * @property tabsTheme          optional theme override for the tab bar,
+     *   or `null` to use [theme].
+     * @property chromeTheme        optional theme override for window chrome
+     *   (pane titlebars and borders), or `null` to use [theme].
+     * @property activeTheme        optional theme override for active indicators
+     *   (tab ring, focused-pane border, sidebar active-pane highlight),
+     *   or `null` to use each section's own accent.
      */
     data class State(
         val config: WindowConfig? = null,
@@ -77,10 +104,18 @@ class AppBackingViewModel(
         val claudeUsage: ClaudeUsageData? = null,
         val theme: TerminalTheme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME },
         val appearance: Appearance = Appearance.Auto,
-        val paneStatusDisplay: PaneStatusDisplay = PaneStatusDisplay.Glow,
         val paneFontSize: Int? = null,
         val sidebarWidth: Int? = null,
+        val sidebarCollapsed: Boolean = false,
         val desktopNotifications: Boolean = true,
+        val sidebarTheme: TerminalTheme? = null,
+        val terminalTheme: TerminalTheme? = null,
+        val diffTheme: TerminalTheme? = null,
+        val fileBrowserTheme: TerminalTheme? = null,
+        val tabsTheme: TerminalTheme? = null,
+        val chromeTheme: TerminalTheme? = null,
+        val windowsTheme: TerminalTheme? = null,
+        val activeTheme: TerminalTheme? = null,
     )
 
     /**
@@ -110,13 +145,29 @@ class AppBackingViewModel(
                     when (envelope) {
                         is WindowEnvelope.ClaudeUsage ->
                             emit(_stateFlow.value.copy(claudeUsage = envelope.usage))
-                        is WindowEnvelope.UiSettings ->
-                            applyServerUiSettings(envelope.settings)
+                        is WindowEnvelope.UiSettings -> {
+                            val elapsed = lastLocalSettingsChange.elapsedNow()
+                            if (elapsed > 2.seconds) {
+                                applyServerUiSettings(envelope.settings)
+                            }
+                        }
                         else -> Unit
                     }
                 }
             }
         }
+    }
+
+    /** Stamp the local-change time and persist a single setting. */
+    private suspend fun persistSetting(key: String, value: String) {
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        settingsPersister?.putSetting(key, value)
+    }
+
+    /** Stamp the local-change time and persist a batch of settings. */
+    private suspend fun persistSettings(settings: Map<String, String>) {
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        settingsPersister?.putSettings(settings)
     }
 
     // ── UI settings mutations ───────────────────────────────────────
@@ -128,7 +179,7 @@ class AppBackingViewModel(
      */
     suspend fun setTheme(theme: TerminalTheme) {
         emit(_stateFlow.value.copy(theme = theme))
-        settingsPersister?.putSetting("theme", theme.name)
+        persistSetting("theme", theme.name)
     }
 
     /**
@@ -138,17 +189,7 @@ class AppBackingViewModel(
      */
     suspend fun setAppearance(appearance: Appearance) {
         emit(_stateFlow.value.copy(appearance = appearance))
-        settingsPersister?.putSetting("appearance", appearance.name)
-    }
-
-    /**
-     * Update the pane activity indicator style and persist it to the server.
-     *
-     * @param display the new display mode.
-     */
-    suspend fun setPaneStatusDisplay(display: PaneStatusDisplay) {
-        emit(_stateFlow.value.copy(paneStatusDisplay = display))
-        settingsPersister?.putSetting("paneStatusDisplay", display.name)
+        persistSetting("appearance", appearance.name)
     }
 
     /**
@@ -158,7 +199,7 @@ class AppBackingViewModel(
      */
     suspend fun setPaneFontSize(size: Int) {
         emit(_stateFlow.value.copy(paneFontSize = size))
-        settingsPersister?.putSetting("paneFontSize", size.toString())
+        persistSetting("paneFontSize", size.toString())
     }
 
     /**
@@ -168,7 +209,17 @@ class AppBackingViewModel(
      */
     suspend fun setSidebarWidth(width: Int) {
         emit(_stateFlow.value.copy(sidebarWidth = width))
-        settingsPersister?.putSetting("sidebarWidth", width.toString())
+        persistSetting("sidebarWidth", width.toString())
+    }
+
+    /**
+     * Collapse or expand the sidebar and persist the preference.
+     *
+     * @param collapsed `true` to collapse, `false` to expand.
+     */
+    suspend fun setSidebarCollapsed(collapsed: Boolean) {
+        emit(_stateFlow.value.copy(sidebarCollapsed = collapsed))
+        persistSetting("sidebarCollapsed", collapsed.toString())
     }
 
     /**
@@ -178,7 +229,66 @@ class AppBackingViewModel(
      */
     suspend fun setDesktopNotifications(enabled: Boolean) {
         emit(_stateFlow.value.copy(desktopNotifications = enabled))
-        settingsPersister?.putSetting("desktopNotifications", enabled.toString())
+        persistSetting("desktopNotifications", enabled.toString())
+    }
+
+    /**
+     * Set a per-section theme override and persist it. Pass `null` to clear
+     * the override and fall back to the global theme.
+     *
+     * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"active"`
+     * @param theme   the override theme, or `null` to clear
+     */
+    suspend fun setSectionTheme(section: String, theme: TerminalTheme?) {
+        val cur = _stateFlow.value
+        val updated = when (section) {
+            "sidebar" -> cur.copy(sidebarTheme = theme)
+            "terminal" -> cur.copy(terminalTheme = theme)
+            "diff" -> cur.copy(diffTheme = theme)
+            "fileBrowser" -> cur.copy(fileBrowserTheme = theme)
+            "tabs" -> cur.copy(tabsTheme = theme)
+            "chrome" -> cur.copy(chromeTheme = theme)
+            "windows" -> cur.copy(windowsTheme = theme)
+            "active" -> cur.copy(activeTheme = theme)
+            else -> cur
+        }
+        emit(updated)
+        persistSetting("theme.$section", theme?.name ?: "")
+    }
+
+    /**
+     * Apply a full theme configuration atomically — main theme plus all
+     * section overrides — in a single **synchronous** state emission.
+     * Persistence is fire-and-forget so the caller can run `applyAll()`
+     * immediately after this returns without any coroutine involvement.
+     *
+     * @param theme the main theme
+     * @param sections map of section key to optional override theme
+     */
+    fun applyThemeConfiguration(
+        theme: TerminalTheme,
+        sections: Map<String, TerminalTheme?>,
+    ) {
+        val updated = _stateFlow.value.copy(
+            theme = theme,
+            sidebarTheme = sections["sidebar"],
+            terminalTheme = sections["terminal"],
+            diffTheme = sections["diff"],
+            fileBrowserTheme = sections["fileBrowser"],
+            tabsTheme = sections["tabs"],
+            chromeTheme = sections["chrome"],
+            windowsTheme = sections["windows"],
+            activeTheme = sections["active"],
+        )
+        emit(updated)
+        val batch = buildMap {
+            put("theme", theme.name)
+            for ((section, t) in sections) {
+                put("theme.$section", t?.name ?: "")
+            }
+        }
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        settingsPersister?.fireAndForgetPutSettings(batch)
     }
 
     // ── Layout mutations (delegated to server) ──────────────────────
@@ -334,22 +444,70 @@ class AppBackingViewModel(
             ?.let { runCatching { Appearance.valueOf(it) }.getOrNull() }
             ?: cur.appearance
 
-        val psd = parsePaneStatusDisplay(settings["paneStatusDisplay"]?.jsonPrimitive?.contentOrNull)
         val fontSize = settings["paneFontSize"]?.jsonPrimitive?.intOrNull ?: cur.paneFontSize
         val sidebarW = settings["sidebarWidth"]?.jsonPrimitive?.intOrNull ?: cur.sidebarWidth
+        val sidebarCol = settings["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: cur.sidebarCollapsed
         val desktopNotif = settings["desktopNotifications"]?.jsonPrimitive?.booleanOrNull ?: cur.desktopNotifications
+
+        fun sectionTheme(key: String, current: TerminalTheme?): TerminalTheme? {
+            val name = settings[key]?.jsonPrimitive?.contentOrNull ?: return current
+            if (name.isEmpty()) return null
+            return recommendedThemes.firstOrNull { it.name == name } ?: current
+        }
 
         emit(cur.copy(
             theme = theme,
             appearance = appearance,
-            paneStatusDisplay = psd,
             paneFontSize = fontSize,
             sidebarWidth = sidebarW,
+            sidebarCollapsed = sidebarCol,
             desktopNotifications = desktopNotif,
+            sidebarTheme = sectionTheme("theme.sidebar", cur.sidebarTheme),
+            terminalTheme = sectionTheme("theme.terminal", cur.terminalTheme),
+            diffTheme = sectionTheme("theme.diff", cur.diffTheme),
+            fileBrowserTheme = sectionTheme("theme.fileBrowser", cur.fileBrowserTheme),
+            tabsTheme = sectionTheme("theme.tabs", cur.tabsTheme),
+            chromeTheme = sectionTheme("theme.chrome", cur.chromeTheme),
+            windowsTheme = sectionTheme("theme.windows", cur.windowsTheme),
+            activeTheme = sectionTheme("theme.active", cur.activeTheme),
         ))
     }
 
     private fun emit(state: State) {
         _stateFlow.value = state
     }
+}
+
+/**
+ * Resolves the full semantic palette for this state snapshot.
+ *
+ * @param systemIsDark whether the host OS is currently in dark mode
+ * @return the fully resolved [ResolvedPalette]
+ * @see se.soderbjorn.termtastic.resolve
+ */
+fun AppBackingViewModel.State.resolvedPalette(systemIsDark: Boolean): ResolvedPalette =
+    theme.resolve(appearance, systemIsDark)
+
+/**
+ * Resolves the semantic palette for a specific app section, using the
+ * section-specific theme override if set, or falling back to the global theme.
+ *
+ * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"windows"`, `"active"`
+ * @param systemIsDark whether the host OS is currently in dark mode
+ * @return the resolved [ResolvedPalette] for that section
+ * @see resolvedPalette
+ */
+fun AppBackingViewModel.State.sectionPalette(section: String, systemIsDark: Boolean): ResolvedPalette {
+    val sectionTheme = when (section) {
+        "sidebar" -> sidebarTheme
+        "terminal" -> terminalTheme
+        "diff" -> diffTheme
+        "fileBrowser" -> fileBrowserTheme
+        "tabs" -> tabsTheme
+        "chrome" -> chromeTheme
+        "windows" -> windowsTheme
+        "active" -> activeTheme
+        else -> null
+    }
+    return (sectionTheme ?: theme).resolve(appearance, systemIsDark)
 }

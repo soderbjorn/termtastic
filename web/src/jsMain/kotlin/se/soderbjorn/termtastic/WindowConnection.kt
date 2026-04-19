@@ -33,6 +33,9 @@ import org.w3c.dom.HTMLElement
  * - "gitList": updates the changed files list and re-renders it
  * - "gitDiff": renders the diff in the appropriate mode (inline/split/graphical)
  * - "gitError": shows an error message in the diff panel
+ * - "worktreeDefaults": opens the worktree creation dialog with server-computed defaults
+ * - "worktreeCreated": no-op (config push handles the UI update)
+ * - "worktreeError": shows an error dialog
  *
  * @param type the message type string, or null
  * @param parsed the dynamic parsed message object
@@ -120,6 +123,23 @@ fun handlePaneContentMessage(type: String?, parsed: dynamic): Boolean {
                 renderGitList(paneId, view, state ?: GitPaneState())
             }
         }
+        "worktreeDefaults" -> {
+            showWorktreeDialog(
+                paneId = parsed.paneId as String,
+                repoName = parsed.repoName as String,
+                siblingBase = parsed.siblingPath as String,
+                dotWorktreesBase = parsed.dotWorktreesPath as String,
+                hasUncommittedChanges = parsed.hasUncommittedChanges as Boolean,
+            )
+        }
+        "worktreeCreated" -> {
+            // The server already updated the pane's cwd; the config push
+            // will re-render everything. Nothing extra needed here.
+        }
+        "worktreeError" -> {
+            val message = parsed.message as String
+            showConfirmDialog("Worktree Error", message, "OK") {}
+        }
         else -> return false
     }
     return true
@@ -143,7 +163,32 @@ fun handlePaneContentMessage(type: String?, parsed: dynamic): Boolean {
  * @see connectWindow
  * @see buildNode
  */
+/**
+ * Returns true when [prev] and [next] differ only in per-tab `focusedPaneId`
+ * fields, meaning no structural DOM rebuild is needed.
+ */
+private fun isOnlyFocusChange(prev: dynamic, next: dynamic): Boolean {
+    if (prev == null) return false
+    val prevTabs = prev.tabs as? Array<dynamic> ?: return false
+    val nextTabs = next.tabs as? Array<dynamic> ?: return false
+    if (prevTabs.size != nextTabs.size) return false
+    if ((prev.activeTabId as? String) != (next.activeTabId as? String)) return false
+    val stringify = js("JSON.stringify") as (dynamic) -> String
+    for (i in prevTabs.indices) {
+        val pt = prevTabs[i]; val nt = nextTabs[i]
+        if ((pt.id as? String) != (nt.id as? String)) return false
+        if ((pt.title as? String) != (nt.title as? String)) return false
+        if (stringify(pt.root) != stringify(nt.root)) return false
+        if (stringify(pt.floating) != stringify(nt.floating)) return false
+    }
+    return true
+}
+
 fun renderConfig(config: dynamic) {
+    if (isOnlyFocusChange(currentConfig, config)) {
+        currentConfig = config
+        return
+    }
     currentConfig = config
     val wrap = terminalWrapEl ?: return
     val tabBar = tabBarEl ?: return
@@ -196,7 +241,7 @@ fun renderConfig(config: dynamic) {
 
     val savedIndicator = tabBar.querySelector(".tab-active-indicator") as? HTMLElement
     savedIndicator?.let { it.parentElement?.removeChild(it) }
-    val staleMenus = document.querySelectorAll(".tab-menu-list")
+    val staleMenus = document.querySelectorAll(".tab-menu-list, .pane-split-flyout")
     for (i in 0 until staleMenus.length) {
         val el = staleMenus.item(i) as HTMLElement; el.parentElement?.removeChild(el)
     }
@@ -221,10 +266,10 @@ fun renderConfig(config: dynamic) {
         label.className = "tab-label"; label.textContent = title
         tabWrap.appendChild(label)
 
-        val tabDot = document.createElement("span") as HTMLElement
-        tabDot.className = "pane-state-dot tab-state-dot"
-        tabDot.setAttribute("data-tab-state", tabId)
-        tabWrap.appendChild(tabDot)
+        val tabSpinner = document.createElement("span") as HTMLElement
+        tabSpinner.className = "pane-status-spinner spinner-tab"
+        tabSpinner.setAttribute("data-tab-state", tabId)
+        tabWrap.appendChild(tabSpinner)
 
         tabWrap.addEventListener("click", { ev -> ev.stopPropagation(); if (activeTabId != tabId) setActiveTab(tabId) })
 
@@ -374,9 +419,9 @@ fun renderConfig(config: dynamic) {
         cell?.classList?.add("focused")
     }
 
-    applyThemeToTerminals()
+    applyAll()
     renderSidebar(config)
-    updateStateDots(appVm.stateFlow.value.sessionStates)
+    updateStateIndicators(appVm.stateFlow.value.sessionStates)
 
     for ((tabId, paneId) in maximizedPaneIds.toMap()) {
         val cell = wrap.querySelector("[data-pane=\"$paneId\"]") as? HTMLElement
@@ -446,7 +491,7 @@ fun connectWindow() {
                     renderConfig(dynamic)
                 }
                 is WindowEnvelope.State -> {
-                    updateStateDots(envelope.states)
+                    updateStateIndicators(envelope.states)
                 }
                 is WindowEnvelope.ClaudeUsage -> {
                     val json = windowJson.encodeToString(envelope)
@@ -459,7 +504,7 @@ fun connectWindow() {
                 is WindowEnvelope.UiSettings -> {
                     // Handled reactively: the AppBackingViewModel updates its
                     // state from this envelope, and the stateFlow collector in
-                    // main.kt calls applyAll() + applyPaneStatusClasses().
+                    // main.kt calls applyAll().
                 }
                 else -> {
                     val json = windowJson.encodeToString(envelope)

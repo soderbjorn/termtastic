@@ -192,10 +192,11 @@ private struct TabHeaderRow: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(Palette.textPrimary)
                 .tracking(0.5)
-            StateDot(state: aggregateState, size: 6)
+            StateSpinner(state: aggregateState, size: 12)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 6)
+        .modifier(WaitingPulseModifier(isWaiting: aggregateState == "waiting"))
     }
 }
 
@@ -210,7 +211,7 @@ private struct LeafRow: View {
     var body: some View {
         HStack(spacing: 6) {
             PaneIcon(kind: kind, floating: floating)
-            StateDot(state: state, size: 6)
+            StateSpinner(state: state, size: 12)
             Text(title)
                 .font(.body)
                 .foregroundStyle(Palette.textSecondary)
@@ -223,6 +224,7 @@ private struct LeafRow: View {
         .padding(.leading, 16)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
+        .modifier(WaitingPulseModifier(isWaiting: state == "waiting"))
         .accessibilityElement(children: .combine)
         .accessibilityHint(
             kind == .terminal ? "Opens terminal session" :
@@ -233,35 +235,42 @@ private struct LeafRow: View {
     }
 }
 
-// MARK: - State Dot
+// MARK: - State Spinner
 
-private struct StateDot: View {
+/// Small spinning indicator shown when the session state is "working".
+private struct StateSpinner: View {
     let state: String?
     let size: CGFloat
 
-    @State private var pulse = false
-
     var body: some View {
-        if let color = dotColor {
-            Circle()
-                .fill(color)
+        if state == "working" {
+            ProgressView()
+                .scaleEffect(size / 14)
                 .frame(width: size, height: size)
-                .opacity(pulse ? 0.4 : 1.0)
-                .animation(
-                    .easeInOut(duration: 0.75).repeatForever(autoreverses: true),
-                    value: pulse
-                )
-                .onAppear { pulse = true }
-                .accessibilityLabel("Status: \(state ?? "unknown")")
+                .accessibilityLabel("Status: working")
         }
     }
+}
 
-    private var dotColor: Color? {
-        switch state {
-        case "working": return Palette.dotWorking
-        case "waiting": return Palette.dotWaiting
-        default: return nil
-        }
+// MARK: - Waiting Pulse Modifier
+
+/// Pulses the opacity of the modified view when `isWaiting` is true,
+/// drawing attention to panes that need user input.
+struct WaitingPulseModifier: ViewModifier {
+    let isWaiting: Bool
+    @State private var pulse = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isWaiting ? (pulse ? 0.35 : 1.0) : 1.0)
+            .animation(
+                isWaiting
+                    ? .easeInOut(duration: 0.75).repeatForever(autoreverses: true)
+                    : .default,
+                value: pulse
+            )
+            .onAppear { if isWaiting { pulse = true } }
+            .onChange(of: isWaiting) { newVal in pulse = newVal }
     }
 }
 

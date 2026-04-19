@@ -85,6 +85,18 @@ class WindowSocket internal constructor(
     /** The current live session, if any. Used by [send]. */
     private val _activeSession = MutableStateFlow<DefaultClientWebSocketSession?>(null)
 
+    /**
+     * Whether the underlying WebSocket is currently connected.
+     *
+     * Emits `true` when a session handshake completes and `false` when the
+     * connection drops. UI layers can collect this to show/hide a
+     * disconnected overlay without relying on per-PTY connection states.
+     *
+     * @see _activeSession
+     */
+    private val _connected = MutableStateFlow(false)
+    val connected: StateFlow<Boolean> get() = _connected
+
     private var runJob: Job? = null
     @Volatile private var closed = false
 
@@ -107,6 +119,7 @@ class WindowSocket internal constructor(
                     val session = client.httpClient.webSocketSession(url)
                     println("WindowSocket: handshake complete for $url")
                     _activeSession.value = session
+                    _connected.value = true
                     if (!sessionReady.isCompleted) sessionReady.complete(session)
                     attempt = 0 // reset backoff on successful connection
                     session.incoming.consumeEach { frame ->
@@ -125,15 +138,20 @@ class WindowSocket internal constructor(
                             is WindowEnvelope.GitList,
                             is WindowEnvelope.GitDiffResult,
                             is WindowEnvelope.GitError,
-                            is WindowEnvelope.UiSettings -> Unit
+                            is WindowEnvelope.UiSettings,
+                            is WindowEnvelope.WorktreeDefaults,
+                            is WindowEnvelope.WorktreeCreated,
+                            is WindowEnvelope.WorktreeError -> Unit
                         }
                         _envelopes.emit(envelope)
                     }
                     // consumeEach finished — server closed the connection
                     println("WindowSocket: server closed connection")
                     _activeSession.value = null
+                    _connected.value = false
                 } catch (t: Throwable) {
                     _activeSession.value = null
+                    _connected.value = false
                     println("WindowSocket: connection to ${client.wsUrlWithAuth(path)} failed: $t")
                     if (!sessionReady.isCompleted) {
                         // First connection failed — propagate to awaitInitialConfig

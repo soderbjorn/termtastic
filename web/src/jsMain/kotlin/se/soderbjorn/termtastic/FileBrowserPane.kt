@@ -115,7 +115,7 @@ fun renderFileBrowserTree(paneId: String, view: FileBrowserPaneView, state: File
             if (isDir) {
                 val expanded = relPath in state.expandedDirs
                 chevron.textContent = if (expanded) "\u25BE" else "\u25B8"
-                chevron.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+                chevron.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
                 chevron.addEventListener("click", { ev -> ev.stopPropagation(); toggleDir(relPath) })
             }
             row.appendChild(chevron)
@@ -133,7 +133,7 @@ fun renderFileBrowserTree(paneId: String, view: FileBrowserPaneView, state: File
             label.title = relPath
             row.appendChild(icon)
             row.appendChild(label)
-            row.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+            row.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
             row.addEventListener("click", { _ ->
                 if (isDir) toggleDir(relPath)
                 else launchCmd(WindowCommand.FileBrowserOpenFile(paneId = paneId, relPath = relPath))
@@ -263,7 +263,7 @@ fun buildFileBrowserView(paneId: String, leaf: dynamic, headerEl: HTMLElement? =
     // Filter flyout
     val filterWrap = document.createElement("div") as HTMLElement
     filterWrap.className = "pane-flyout-wrap"
-    filterWrap.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+    filterWrap.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
     val filterTrigger = document.createElement("button") as HTMLElement
     filterTrigger.className = "pane-action-btn"
     filterTrigger.setAttribute("type", "button")
@@ -326,7 +326,7 @@ fun buildFileBrowserView(paneId: String, leaf: dynamic, headerEl: HTMLElement? =
     // Sort flyout
     val sortWrap = document.createElement("div") as HTMLElement
     sortWrap.className = "pane-flyout-wrap"
-    sortWrap.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+    sortWrap.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
     val sortTrigger = document.createElement("button") as HTMLElement
     sortTrigger.className = "pane-action-btn"
     sortTrigger.setAttribute("type", "button")
@@ -375,14 +375,14 @@ fun buildFileBrowserView(paneId: String, leaf: dynamic, headerEl: HTMLElement? =
     expandBtn.className = "pane-action-btn"
     expandBtn.setAttribute("type", "button"); expandBtn.setAttribute("title", "Expand all")
     expandBtn.innerHTML = iconExpand
-    expandBtn.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+    expandBtn.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
     expandBtn.addEventListener("click", { ev -> ev.stopPropagation(); launchCmd(WindowCommand.FileBrowserExpandAll(paneId = paneId)) })
 
     val collapseBtn = document.createElement("button") as HTMLElement
     collapseBtn.className = "pane-action-btn"
     collapseBtn.setAttribute("type", "button"); collapseBtn.setAttribute("title", "Collapse all")
     collapseBtn.innerHTML = iconCollapse
-    collapseBtn.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+    collapseBtn.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
     collapseBtn.addEventListener("click", { ev ->
         ev.stopPropagation()
         state.expandedDirs.clear()
@@ -401,7 +401,7 @@ fun buildFileBrowserView(paneId: String, leaf: dynamic, headerEl: HTMLElement? =
     refreshBtn.className = "pane-action-btn"
     refreshBtn.setAttribute("type", "button"); refreshBtn.setAttribute("title", "Refresh")
     refreshBtn.innerHTML = """<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8a6 6 0 0 1 10.5-3.9"/><polyline points="13,2 13,5 10,5"/><path d="M14 8a6 6 0 0 1 -10.5 3.9"/><polyline points="3,14 3,11 6,11"/></svg>"""
-    refreshBtn.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+    refreshBtn.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
     refreshBtn.addEventListener("click", { ev ->
         ev.stopPropagation()
         launchCmd(WindowCommand.FileBrowserListDir(paneId = paneId, dirRelPath = ""))

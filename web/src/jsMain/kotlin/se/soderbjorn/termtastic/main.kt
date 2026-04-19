@@ -19,6 +19,7 @@ package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
 import kotlinx.browser.window
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import org.w3c.dom.HTMLElement
@@ -28,6 +29,7 @@ import se.soderbjorn.termtastic.client.ServerUrl
 import se.soderbjorn.termtastic.client.TermtasticClient
 import se.soderbjorn.termtastic.client.viewmodel.AppBackingViewModel
 import se.soderbjorn.termtastic.client.viewmodel.SettingsPersister
+import se.soderbjorn.termtastic.client.viewmodel.findLeafById
 import kotlin.js.json
 
 /**
@@ -38,6 +40,35 @@ fun main() {
     @Suppress("UNUSED_VARIABLE")
     val css = xtermCss
     window.onload = { start() }
+}
+
+/** SVG icon for the sun (Light mode appearance toggle). */
+private const val SUN_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>"""
+
+/** SVG icon for the moon (Dark mode appearance toggle). */
+private const val MOON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>"""
+
+/** SVG icon for Auto mode appearance toggle (half-filled circle). */
+private const val AUTO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18" fill="currentColor"/></svg>"""
+
+/**
+ * Updates the appearance toggle button in the header to reflect the current
+ * [Appearance] mode. Sets the button's SVG icon and tooltip.
+ *
+ * Called on init and reactively whenever the appearance state changes, so the
+ * toggle stays in sync even when changed from the settings panel.
+ *
+ * @see start
+ */
+internal fun updateAppearanceToggle() {
+    val btn = document.getElementById("appearance-toggle") as? HTMLElement ?: return
+    val appearance = appVm.stateFlow.value.appearance
+    btn.innerHTML = when (appearance) {
+        Appearance.Light -> SUN_SVG
+        Appearance.Dark -> MOON_SVG
+        Appearance.Auto -> AUTO_SVG
+    }
+    btn.title = "Appearance: ${appearance.name}"
 }
 
 /**
@@ -82,16 +113,34 @@ private fun start() {
     )
     windowSocket = termtasticClient.openWindowSocket()
 
-    val webSettingsPersister = SettingsPersister { key, value ->
-        val init: dynamic = js("({})")
-        init.method = "POST"
-        init.headers = json(
-            "Content-Type" to "application/json",
-            "X-Termtastic-Auth" to authTokenForSending(),
-            "X-Termtastic-Client-Type" to clientTypeAtStart,
-        )
-        init.body = JSON.stringify(json(key to value))
-        window.fetch("/api/ui-settings", init)
+    val webSettingsPersister = object : SettingsPersister {
+        private fun postSettings(body: dynamic) {
+            val init: dynamic = js("({})")
+            init.method = "POST"
+            init.headers = json(
+                "Content-Type" to "application/json",
+                "X-Termtastic-Auth" to authTokenForSending(),
+                "X-Termtastic-Client-Type" to clientTypeAtStart,
+            )
+            init.body = JSON.stringify(body)
+            window.fetch("/api/ui-settings", init)
+        }
+
+        override suspend fun putSetting(key: String, value: String) {
+            postSettings(json(key to value))
+        }
+
+        override suspend fun putSettings(settings: Map<String, String>) {
+            val obj: dynamic = js("({})")
+            for ((k, v) in settings) { obj[k] = v }
+            postSettings(obj)
+        }
+
+        override fun fireAndForgetPutSettings(settings: Map<String, String>) {
+            val obj: dynamic = js("({})")
+            for ((k, v) in settings) { obj[k] = v }
+            postSettings(obj)
+        }
     }
     appVm = AppBackingViewModel(windowSocket, termtasticClient.windowState, webSettingsPersister)
 
@@ -116,7 +165,7 @@ private fun start() {
                 as kotlinx.serialization.json.JsonObject
             appVm.applyServerUiSettings(jsonObj)
             applyAll()
-            applyPaneStatusClasses()
+            applySidebarState()
         }
     }
 
@@ -129,20 +178,31 @@ private fun start() {
         }
     }
 
+    // Show/hide the disconnected modal based on the main server WebSocket state.
+    // Skip the initial `false` emission — we only show the modal after the
+    // connection has been established at least once and then drops.
+    GlobalScope.launch {
+        var wasConnected = false
+        windowSocket.connected.collect { connected ->
+            if (connected) {
+                wasConnected = true
+                hideDisconnectedModal()
+            } else if (wasConnected) {
+                showDisconnectedModal()
+            }
+        }
+    }
+
     // Reactively apply visual changes when the VM's appearance/theme state changes.
     GlobalScope.launch {
         var prevTheme = appVm.stateFlow.value.theme.name
         var prevAppearance = appVm.stateFlow.value.appearance
-        var prevPsd = appVm.stateFlow.value.paneStatusDisplay
         appVm.stateFlow.collect { state ->
             if (state.theme.name != prevTheme || state.appearance != prevAppearance) {
                 prevTheme = state.theme.name
                 prevAppearance = state.appearance
                 applyAll()
-            }
-            if (state.paneStatusDisplay != prevPsd) {
-                prevPsd = state.paneStatusDisplay
-                applyPaneStatusClasses()
+                updateAppearanceToggle()
             }
         }
     }
@@ -156,7 +216,7 @@ private fun start() {
     // Close dropdowns on outside click.
     document.addEventListener("click", {
         (document.getElementById("debug-dropdown") as? HTMLElement)?.classList?.remove("open")
-        val openMenus = document.querySelectorAll(".pane-menu.open, .tab-menu.open, .tab-menu-list.open, .pane-split-wrap.open, .pane-flyout-wrap.open")
+        val openMenus = document.querySelectorAll(".pane-menu.open, .tab-menu.open, .tab-menu-list.open, .pane-split-flyout.open, .pane-flyout-wrap.open")
         for (i in 0 until openMenus.length) {
             (openMenus.item(i) as HTMLElement).classList.remove("open")
         }
@@ -166,6 +226,29 @@ private fun start() {
     document.addEventListener("dragover", { event -> event.preventDefault() })
     document.addEventListener("drop", { event -> event.preventDefault() })
     updateAggregateStatus()
+
+    // Appearance toggle button.
+    val appearanceToggle = document.getElementById("appearance-toggle") as? HTMLElement
+    appearanceToggle?.addEventListener("click", { event ->
+        event.stopPropagation()
+        val next = when (appVm.stateFlow.value.appearance) {
+            Appearance.Auto -> Appearance.Dark
+            Appearance.Dark -> Appearance.Light
+            Appearance.Light -> Appearance.Auto
+        }
+        GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setAppearance(next) }
+        applyAll()
+        updateAppearanceToggle()
+        settingsAppearanceRefresh?.invoke()
+    })
+    updateAppearanceToggle()
+
+    // About button.
+    val aboutButton = document.getElementById("about-button") as? HTMLElement
+    aboutButton?.addEventListener("click", { event ->
+        event.stopPropagation()
+        showAboutDialog()
+    })
 
     // Settings button.
     val settingsButton = document.getElementById("settings-button") as? HTMLElement
@@ -188,7 +271,7 @@ private fun start() {
             submenu.textContent = "Set pane state"
             val submenuList = document.createElement("div") as HTMLElement
             submenuList.className = "pane-submenu-list"
-            for ((label, state) in listOf("Working" to "working", "Waiting" to "waiting", "Clear" to null)) {
+            for ((label, mode) in listOf("Working" to "working", "Waiting" to "waiting", "Clear" to "auto")) {
                 val item = document.createElement("div") as HTMLElement
                 item.className = "pane-menu-item"; item.textContent = label
                 item.addEventListener("click", { ev ->
@@ -196,11 +279,10 @@ private fun start() {
                     val focusedCell = document.querySelector(".terminal-cell.focused") as? HTMLElement
                     val paneId = focusedCell?.getAttribute("data-pane")
                     if (paneId != null) {
-                        val entry = terminals[paneId]
-                        if (entry != null) {
-                            if (state != null) debugSessionStates[entry.sessionId] = state
-                            else debugSessionStates.remove(entry.sessionId)
-                            updateStateDots(appVm.stateFlow.value.sessionStates)
+                        val sessionId = terminals[paneId]?.sessionId
+                            ?: appVm.stateFlow.value.config?.let { findLeafById(it, paneId) }?.sessionId
+                        if (!sessionId.isNullOrEmpty()) {
+                            launchCmd(WindowCommand.SetStateOverride(sessionId, mode))
                         }
                     }
                 })
@@ -256,8 +338,15 @@ private fun start() {
             sidebarDividerLocal.classList.remove("dragging")
             sidebarElLocal.style.transition = ""; document.body?.style?.cursor = ""
             document.body?.style?.removeProperty("user-select")
-            val w = sidebarElLocal.getBoundingClientRect().width
-            GlobalScope.launch { appVm.setSidebarWidth(w.toInt()) }
+            val w = sidebarElLocal.getBoundingClientRect().width.toInt()
+            if (w <= 10) {
+                GlobalScope.launch { appVm.setSidebarCollapsed(true) }
+            } else {
+                GlobalScope.launch {
+                    appVm.setSidebarWidth(w)
+                    appVm.setSidebarCollapsed(false)
+                }
+            }
             fitVisible()
         })
     }
@@ -268,13 +357,16 @@ private fun start() {
         toggleBtn?.addEventListener("click", { ev ->
             ev.stopPropagation()
             val currentWidth = sidebarElLocal.getBoundingClientRect().width.toInt()
-            val openWidth = appVm.stateFlow.value.sidebarWidth ?: 260
             if (currentWidth > 10) {
+                // Collapse — remember current width, then hide.
+                GlobalScope.launch { appVm.setSidebarWidth(currentWidth) }
                 sidebarElLocal.style.width = "0px"
-                GlobalScope.launch { appVm.setSidebarWidth(0) }
+                GlobalScope.launch { appVm.setSidebarCollapsed(true) }
             } else {
+                // Expand — restore the last open width.
+                val openWidth = (appVm.stateFlow.value.sidebarWidth ?: 0).takeIf { it > 10 } ?: 260
                 sidebarElLocal.style.width = "${openWidth}px"
-                GlobalScope.launch { appVm.setSidebarWidth(openWidth) }
+                GlobalScope.launch { appVm.setSidebarCollapsed(false) }
             }
             sidebarElLocal.addEventListener("transitionend", { fitVisible() }, js("({once:true})"))
         })

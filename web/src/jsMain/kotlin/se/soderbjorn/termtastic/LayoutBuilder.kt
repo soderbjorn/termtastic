@@ -283,6 +283,7 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false): HTMLElement {
     val cell = document.createElement("div") as HTMLElement
     cell.className = "terminal-cell"
     cell.setAttribute("data-pane", paneId)
+    cell.setAttribute("data-content-kind", contentKind)
 
     when (contentKind) {
         "fileBrowser" -> {

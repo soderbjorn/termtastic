@@ -260,7 +260,7 @@ function spawnEmbeddedServer(jarPath) {
   if (process.platform === "darwin") {
     javaArgs.push("-Dapple.awt.UIElement=true");
   }
-  javaArgs.push("-jar", jarPath);
+  javaArgs.push(`-Dtermtastic.port=${PROD_PORT}`, "-jar", jarPath);
 
   // Pipe server stdout+stderr to a log file. We open an fd and hand it to the
   // child via stdio so the OS keeps the descriptor alive even after Electron
@@ -270,7 +270,6 @@ function spawnEmbeddedServer(jarPath) {
   const child = spawn(java, javaArgs, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: { ...process.env, TERMTASTIC_PORT: String(PROD_PORT) },
   });
   // Close our copy of the fd — the spawned process has its own.
   fs.closeSync(logFd);
@@ -471,6 +470,7 @@ function createWindow() {
     minWidth: 720,
     minHeight: 480,
     title: "Termtastic",
+    icon: path.join(__dirname, "icons", "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -700,6 +700,23 @@ function registerGlobalShortcut() {
 }
 
 app.whenReady().then(async () => {
+  // Override the Dock icon on macOS so that dev-mode runs show the Termtastic
+  // icon instead of the generic Electron icon. (Packaged builds get this from
+  // the embedded .icns, but the Dock API is the only way to set it at runtime.)
+  // Must run after app.whenReady() — dock APIs are unavailable before that.
+  if (process.platform === "darwin" && app.dock) {
+    try {
+      // In packaged builds __dirname is inside app.asar where icons/ doesn't
+      // exist — fall back to the .icns shipped by electron-builder in Resources.
+      const devIcon = path.join(__dirname, "icons", "icon.png");
+      const packagedIcon = path.join(process.resourcesPath, "icon.icns");
+      const iconPath = app.isPackaged ? packagedIcon : devIcon;
+      app.dock.setIcon(iconPath);
+    } catch (_) {
+      // Cosmetic — never let a missing icon abort startup.
+    }
+  }
+
   // Grant notification permissions to the app's own origin. Without this,
   // Electron denies Notification.requestPermission() by default and the
   // renderer never gets the browser permission prompt.

@@ -31,19 +31,58 @@ import se.soderbjorn.termtastic.recommendedThemes
  * theme + appearance keys out of it.
  */
 /**
- * @property theme      the active terminal colour theme.
- * @property appearance the user's light/dark mode preference.
+ * @property theme             the active terminal colour theme.
+ * @property appearance        the user's light/dark mode preference.
+ * @property sidebarTheme      optional per-section override for the sidebar.
+ * @property terminalTheme     optional per-section override for terminal panes.
+ * @property diffTheme         optional per-section override for diff views.
+ * @property fileBrowserTheme  optional per-section override for the file browser.
+ * @property tabsTheme         optional per-section override for the tab bar.
+ * @property chromeTheme       optional per-section override for window chrome.
+ * @property windowsTheme     optional per-section override for pane window frames.
+ * @property activeTheme      optional per-section override for active indicators
+ *   (tab ring, focused-pane border, sidebar active-pane highlight).
  */
 data class UiSettings(
     val theme: TerminalTheme,
     val appearance: Appearance,
-)
+    val sidebarTheme: TerminalTheme? = null,
+    val terminalTheme: TerminalTheme? = null,
+    val diffTheme: TerminalTheme? = null,
+    val fileBrowserTheme: TerminalTheme? = null,
+    val tabsTheme: TerminalTheme? = null,
+    val chromeTheme: TerminalTheme? = null,
+    val windowsTheme: TerminalTheme? = null,
+    val activeTheme: TerminalTheme? = null,
+) {
+    /**
+     * Resolves the theme for a specific app section, falling back to the global theme.
+     *
+     * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"active"`
+     * @return the [TerminalTheme] for that section
+     */
+    fun sectionTheme(section: String): TerminalTheme = when (section) {
+        "sidebar" -> sidebarTheme
+        "terminal" -> terminalTheme
+        "diff" -> diffTheme
+        "fileBrowser" -> fileBrowserTheme
+        "tabs" -> tabsTheme
+        "chrome" -> chromeTheme
+        "windows" -> windowsTheme
+        "active" -> activeTheme
+        else -> null
+    } ?: theme
+}
 
 /**
  * Resolve the (foreground, background) hex pair this theme should paint with,
  * given the user's appearance preference and the host's system dark-mode flag.
  * Appearance.Auto defers to [systemIsDark].
  */
+@Deprecated(
+    "Use TerminalTheme.resolve(appearance, systemIsDark) for the full semantic palette",
+    replaceWith = ReplaceWith("resolve(appearance, systemIsDark)", "se.soderbjorn.termtastic.resolve"),
+)
 fun TerminalTheme.effectiveColors(
     appearance: Appearance,
     systemIsDark: Boolean,
@@ -89,7 +128,23 @@ suspend fun TermtasticClient.fetchUiSettings(): UiSettings? {
         ?.let { runCatching { Appearance.valueOf(it) }.getOrNull() }
         ?: Appearance.Auto
 
-    return UiSettings(theme = theme, appearance = appearance)
+    fun parseSectionTheme(key: String): TerminalTheme? {
+        val name = obj[key]?.jsonPrimitive?.contentOrNullSafe() ?: return null
+        return recommendedThemes.firstOrNull { it.name == name }
+    }
+
+    return UiSettings(
+        theme = theme,
+        appearance = appearance,
+        sidebarTheme = parseSectionTheme("theme.sidebar"),
+        terminalTheme = parseSectionTheme("theme.terminal"),
+        diffTheme = parseSectionTheme("theme.diff"),
+        fileBrowserTheme = parseSectionTheme("theme.fileBrowser"),
+        tabsTheme = parseSectionTheme("theme.tabs"),
+        chromeTheme = parseSectionTheme("theme.chrome"),
+        windowsTheme = parseSectionTheme("theme.windows"),
+        activeTheme = parseSectionTheme("theme.active"),
+    )
 }
 
 /**
@@ -100,7 +155,7 @@ suspend fun TermtasticClient.fetchUiSettings(): UiSettings? {
 private fun defaultUiSettings(): UiSettings =
     UiSettings(
         theme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME },
-        appearance = Appearance.Auto,
+        appearance = Appearance.Auto
     )
 
 private fun kotlinx.serialization.json.JsonPrimitive.contentOrNullSafe(): String? =

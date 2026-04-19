@@ -3,7 +3,7 @@
  *
  * Queries the server for the current `git status` of the connected project
  * and displays changed files grouped by directory, each with a coloured
- * single-letter status badge (M/A/D/R/U). Tapping a file navigates to
+ * icon badge indicating file status (modified/added/deleted/renamed/untracked). Tapping a file navigates to
  * [GitDiffScreen] to show the unified diff.
  *
  * @see GitDiffScreen
@@ -35,7 +35,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -229,32 +234,28 @@ private fun GitFileRow(entry: GitFileEntry, onClick: () -> Unit) {
 }
 
 /**
- * Colored single-letter badge indicating git status:
- *  M = yellow, A = green, D = red, R = blue, U = gray.
+ * Colored icon badge indicating git status.
+ *
+ * Uses Material icons to convey file status at a glance:
+ * pencil = modified, plus = added, trash = deleted,
+ * swap = renamed, help = untracked.
  */
 @Composable
 private fun StatusBadge(status: GitFileStatus) {
-    val (letter, color) = when (status) {
-        GitFileStatus.Modified  -> "M" to Color(0xFFFFD60A)
-        GitFileStatus.Added     -> "A" to Color(0xFF32D74B)
-        GitFileStatus.Deleted   -> "D" to Color(0xFFFF453A)
-        GitFileStatus.Renamed   -> "R" to Color(0xFF64D2FF)
-        GitFileStatus.Untracked -> "U" to Color(0xFF8E8E93)
+    val pair: Pair<ImageVector, Color> = when (status) {
+        GitFileStatus.Modified  -> Icons.Filled.Edit to Color(0xFFFFD60A)
+        GitFileStatus.Added     -> Icons.Filled.Add to Color(0xFF32D74B)
+        GitFileStatus.Deleted   -> Icons.Filled.Delete to Color(0xFFFF453A)
+        GitFileStatus.Renamed   -> Icons.Filled.Refresh to Color(0xFF64D2FF)
+        GitFileStatus.Untracked -> Icons.Filled.Add to Color(0xFF8E8E93)
     }
-    Box(
-        modifier = Modifier
-            .size(20.dp)
-            .background(color.copy(alpha = 0.2f), RoundedCornerShape(4.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = letter,
-            style = MaterialTheme.typography.labelSmall.copy(
-                color = color,
-                fontWeight = FontWeight.Bold,
-            ),
-        )
-    }
+    val (icon, color) = pair
+    Icon(
+        imageVector = icon,
+        contentDescription = status.name,
+        tint = color,
+        modifier = Modifier.size(16.dp),
+    )
 }
 
 /**

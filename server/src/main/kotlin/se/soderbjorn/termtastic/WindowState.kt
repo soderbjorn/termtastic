@@ -969,6 +969,38 @@ object WindowState {
         if (changed) _config.value = newCfg
     }
 
+    /**
+     * Directly set the working directory of a leaf identified by [paneId].
+     * Unlike [updatePaneCwd] which matches by session id, this matches by pane
+     * id — needed for file-browser and git panes that have no PTY session.
+     * Recomputes the leaf title so the header reflects the new directory.
+     *
+     * @param paneId the id of the leaf pane to update
+     * @param cwd the new working directory path
+     * @see updatePaneCwd
+     */
+    fun updateLeafCwd(paneId: String, cwd: String) = synchronized(this) {
+        if (cwd.isBlank()) return@synchronized
+        val cfg = _config.value
+        var changed = false
+        fun maybeUpdate(leaf: LeafNode): LeafNode {
+            if (leaf.id != paneId || leaf.cwd == cwd) return leaf
+            changed = true
+            val newTitle = computeLeafTitle(leaf.customName, cwd, leaf.title)
+            return leaf.copy(cwd = cwd, title = newTitle)
+        }
+        val newCfg = cfg.copy(
+            tabs = cfg.tabs.map { tab ->
+                tab.copy(
+                    root = tab.root?.let { transformAllLeaves(it, ::maybeUpdate) },
+                    floating = tab.floating.map { fp -> fp.copy(leaf = maybeUpdate(fp.leaf)) },
+                    poppedOut = tab.poppedOut.map { po -> po.copy(leaf = maybeUpdate(po.leaf)) },
+                )
+            }
+        )
+        if (changed) _config.value = newCfg
+    }
+
     private fun transformAllLeaves(node: PaneNode, f: (LeafNode) -> LeafNode): PaneNode = when (node) {
         is LeafNode -> f(node)
         is SplitNode -> node.copy(

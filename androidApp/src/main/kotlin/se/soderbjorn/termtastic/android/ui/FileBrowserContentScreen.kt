@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import se.soderbjorn.termtastic.FileContentKind
 import se.soderbjorn.termtastic.WindowEnvelope
+import se.soderbjorn.termtastic.client.fetchUiSettings
+import se.soderbjorn.termtastic.resolve
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 
 /**
@@ -74,6 +76,16 @@ fun FileBrowserContentScreen(
     var kind by remember { mutableStateOf<FileContentKind?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isDark = isSystemInDarkTheme()
+    var uiSettings by remember { mutableStateOf<se.soderbjorn.termtastic.client.UiSettings?>(null) }
+    LaunchedEffect(Unit) {
+        uiSettings = ConnectionHolder.client()?.fetchUiSettings()
+    }
+    val palette = remember(isDark, uiSettings) {
+        val theme = uiSettings?.sectionTheme("fileBrowser")
+            ?: se.soderbjorn.termtastic.recommendedThemes
+                .first { it.name == se.soderbjorn.termtastic.DEFAULT_THEME_NAME }
+        theme.resolve(isDark)
+    }
 
     LaunchedEffect(paneId, relPath) {
         val reply = runCatching { windowSocket.fileBrowserOpenFile(paneId, relPath) }.getOrNull()
@@ -132,7 +144,7 @@ fun FileBrowserContentScreen(
                     update = { webView ->
                         webView.loadDataWithBaseURL(
                             null,
-                            wrapFileHtml(currentHtml, currentKind, isDark),
+                            wrapFileHtml(currentHtml, currentKind, palette),
                             "text/html",
                             "UTF-8",
                             null,
@@ -161,41 +173,25 @@ fun FileBrowserContentScreen(
  * pre-tokenised `<span class="hl-…">` spans from [SyntaxHighlighter] — those
  * need the same hl-\* palette the diff viewer already ships on the web.
  */
-private fun wrapFileHtml(bodyHtml: String, kind: FileContentKind, isDark: Boolean): String {
-    val vars = if (isDark) """
-    --background: #1C1C1E;
-    --surface: #2C2C2E;
-    --bg-elevated: #3A3A3C;
-    --text-primary: #F5F5F5;
-    --text-secondary: #8E8E93;
-    --separator: rgba(255, 255, 255, 0.1);
-    --accent: #F4B869;
-    --hl-keyword: #569cd6;
-    --hl-string: #ce9178;
-    --hl-comment: #6a9955;
-    --hl-number: #b5cea8;
-    --hl-tag: #569cd6;
-    --hl-attr: #9cdcfe;
-    --hl-type: #4ec9b0;
-    --hl-annotation: #dcdcaa;
-    --hl-punctuation: #808080;
-    """.trimIndent() else """
-    --background: #F5F5F7;
-    --surface: #FFFFFF;
-    --bg-elevated: #ECECF1;
-    --text-primary: #1C1C1E;
-    --text-secondary: #6E6E73;
-    --separator: rgba(0, 0, 0, 0.12);
-    --accent: #F4B869;
-    --hl-keyword: #0550ae;
-    --hl-string: #0a3069;
-    --hl-comment: #6e7781;
-    --hl-number: #953800;
-    --hl-tag: #6639ba;
-    --hl-attr: #0550ae;
-    --hl-type: #0e6575;
-    --hl-annotation: #9a6700;
-    --hl-punctuation: #6e7781;
+private fun wrapFileHtml(bodyHtml: String, kind: FileContentKind, palette: se.soderbjorn.termtastic.ResolvedPalette): String {
+    val c = { v: Long -> se.soderbjorn.termtastic.argbToCss(v) }
+    val vars = """
+    --background: ${c(palette.surface.base)};
+    --surface: ${c(palette.surface.raised)};
+    --bg-elevated: ${c(palette.surface.overlay)};
+    --text-primary: ${c(palette.text.primary)};
+    --text-secondary: ${c(palette.text.secondary)};
+    --separator: ${c(palette.border.subtle)};
+    --accent: ${c(palette.accent.primary)};
+    --hl-keyword: ${c(palette.syntax.keyword)};
+    --hl-string: ${c(palette.syntax.string)};
+    --hl-comment: ${c(palette.syntax.comment)};
+    --hl-number: ${c(palette.syntax.number)};
+    --hl-tag: ${c(palette.syntax.keyword)};
+    --hl-attr: ${c(palette.syntax.function)};
+    --hl-type: ${c(palette.syntax.type)};
+    --hl-annotation: ${c(palette.syntax.constant)};
+    --hl-punctuation: ${c(palette.syntax.operator)};
     """.trimIndent()
 
     val body = when (kind) {

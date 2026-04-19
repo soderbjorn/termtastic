@@ -44,6 +44,8 @@ import se.soderbjorn.termtastic.DiffHunk
 import se.soderbjorn.termtastic.DiffLine
 import se.soderbjorn.termtastic.DiffLineType
 import se.soderbjorn.termtastic.WindowEnvelope
+import se.soderbjorn.termtastic.client.fetchUiSettings
+import se.soderbjorn.termtastic.resolve
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 
 /**
@@ -74,6 +76,16 @@ fun GitDiffScreen(
     var hunks by remember { mutableStateOf<List<DiffHunk>?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isDark = isSystemInDarkTheme()
+    var uiSettings by remember { mutableStateOf<se.soderbjorn.termtastic.client.UiSettings?>(null) }
+    LaunchedEffect(Unit) {
+        uiSettings = ConnectionHolder.client()?.fetchUiSettings()
+    }
+    val palette = remember(isDark, uiSettings) {
+        val theme = uiSettings?.sectionTheme("diff")
+            ?: se.soderbjorn.termtastic.recommendedThemes
+                .first { it.name == se.soderbjorn.termtastic.DEFAULT_THEME_NAME }
+        theme.resolve(isDark)
+    }
 
     LaunchedEffect(paneId, filePath) {
         val reply = runCatching { windowSocket.gitDiff(paneId, filePath) }.getOrNull()
@@ -118,8 +130,8 @@ fun GitDiffScreen(
             val currentHunks = hunks
             when {
                 currentHunks != null -> {
-                    val diffHtml = remember(currentHunks, isDark) {
-                        buildDiffHtml(currentHunks, isDark)
+                    val diffHtml = remember(currentHunks, isDark, palette) {
+                        buildDiffHtml(currentHunks, palette)
                     }
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
@@ -162,31 +174,20 @@ fun GitDiffScreen(
  * format, styled for mobile with line numbers, coloured backgrounds for
  * additions/deletions, and syntax-highlight CSS classes.
  */
-private fun buildDiffHtml(hunks: List<DiffHunk>, isDark: Boolean): String {
-    val vars = if (isDark) """
-    --background: #1C1C1E;
-    --surface: #2C2C2E;
-    --text-primary: #F5F5F5;
-    --text-secondary: #8E8E93;
-    --line-no: #6E6E73;
-    --add-bg: rgba(50, 215, 75, 0.12);
-    --add-border: rgba(50, 215, 75, 0.25);
-    --del-bg: rgba(255, 69, 58, 0.12);
-    --del-border: rgba(255, 69, 58, 0.25);
+private fun buildDiffHtml(hunks: List<DiffHunk>, palette: se.soderbjorn.termtastic.ResolvedPalette): String {
+    val c = { v: Long -> se.soderbjorn.termtastic.argbToCss(v) }
+    val vars = """
+    --background: ${c(palette.surface.base)};
+    --surface: ${c(palette.surface.raised)};
+    --text-primary: ${c(palette.text.primary)};
+    --text-secondary: ${c(palette.text.secondary)};
+    --line-no: ${c(palette.text.tertiary)};
+    --add-bg: ${c(palette.diff.addBg)};
+    --add-border: ${c(palette.diff.addGutter)};
+    --del-bg: ${c(palette.diff.removeBg)};
+    --del-border: ${c(palette.diff.removeGutter)};
     --ctx-bg: transparent;
-    --separator: rgba(255, 255, 255, 0.1);
-    """.trimIndent() else """
-    --background: #F5F5F7;
-    --surface: #FFFFFF;
-    --text-primary: #1C1C1E;
-    --text-secondary: #6E6E73;
-    --line-no: #8E8E93;
-    --add-bg: rgba(40, 167, 69, 0.10);
-    --add-border: rgba(40, 167, 69, 0.20);
-    --del-bg: rgba(220, 53, 69, 0.10);
-    --del-border: rgba(220, 53, 69, 0.20);
-    --ctx-bg: transparent;
-    --separator: rgba(0, 0, 0, 0.12);
+    --separator: ${c(palette.border.subtle)};
     """.trimIndent()
 
     val body = buildString {
