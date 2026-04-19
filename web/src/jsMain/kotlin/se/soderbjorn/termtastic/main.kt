@@ -135,15 +135,15 @@ private fun start() {
     GlobalScope.launch {
         var prevTheme = appVm.stateFlow.value.theme.name
         var prevAppearance = appVm.stateFlow.value.appearance
-        var prevPsd = appVm.stateFlow.value.paneStatusDisplay
+        var prevPulse = appVm.stateFlow.value.showWaitingPulse
         appVm.stateFlow.collect { state ->
             if (state.theme.name != prevTheme || state.appearance != prevAppearance) {
                 prevTheme = state.theme.name
                 prevAppearance = state.appearance
                 applyAll()
             }
-            if (state.paneStatusDisplay != prevPsd) {
-                prevPsd = state.paneStatusDisplay
+            if (state.showWaitingPulse != prevPulse) {
+                prevPulse = state.showWaitingPulse
                 applyPaneStatusClasses()
             }
         }

@@ -30,7 +30,7 @@ body.appearance-light .tab-button.active {
 
 /* Accent wash on the selected sidebar pane in light mode. */
 body.appearance-light .sidebar-pane-item.active-pane {
-    background: var(--t-sidebar-activeBg, rgba(232, 154, 60, 0.14));
+    background: var(--t-active-sidebarActiveBg, var(--t-sidebar-activeBg, rgba(232, 154, 60, 0.14)));
 }
 
 /* Accent stripe at the bottom of the header. */
@@ -239,7 +239,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     left: 0;
     width: 0;
     height: 0;
-    border: 2px solid var(--t-accent-primary, var(--termtastic-orange));
+    border: 2px solid var(--t-active-accent, var(--t-accent-primary, var(--termtastic-orange)));
     border-radius: 6px 6px 0 0;
     box-shadow: 0 0 0 0 rgba(244, 184, 105, 0.0);
     pointer-events: none;
@@ -606,7 +606,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 }
 
 .sidebar-tab-header.active-tab {
-    color: var(--termtastic-orange);
+    color: var(--t-active-accent, var(--termtastic-orange));
 }
 
 .sidebar-tab-chevron {
@@ -655,10 +655,10 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 }
 
 .sidebar-pane-item.active-pane {
-    color: var(--t-sidebar-activeText, var(--termtastic-orange));
-    background: var(--t-sidebar-activeBg, rgba(244, 184, 105, 0.08));
+    color: var(--t-active-sidebarActiveText, var(--t-sidebar-activeText, var(--termtastic-orange)));
+    background: var(--t-active-sidebarActiveBg, var(--t-sidebar-activeBg, rgba(244, 184, 105, 0.08)));
     border-radius: 6px;
-    border: 1px solid var(--t-accent-primarySoft, rgba(244, 184, 105, 0.12));
+    border: 1px solid var(--t-active-accentSoft, var(--t-accent-primarySoft, rgba(244, 184, 105, 0.12)));
 }
 
 .sidebar-pane-icon {
@@ -916,8 +916,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 
 /* ── Spinner for "working" state ──
    Small rotating border circle shown next to pane/tab names when an AI
-   assistant is actively running. Hidden by default; visibility is driven
-   by the state-working class (sidebar: always, others: body.show-pane-status). */
+   assistant is actively running. Hidden by default; shown via .state-working. */
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
@@ -937,38 +936,34 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 .pane-status-spinner.spinner-tab     { width: 12px; height: 12px; border-width: 2px; align-self: center; }
 .pane-status-spinner.spinner-header  { width: 14px; height: 14px; border-width: 2.5px; margin-right: 6px; }
 
-/* Sidebar spinners always visible when working. */
-.pane-status-spinner.spinner-sidebar.state-working {
-    display: inline-block;
-}
-
-/* Non-sidebar spinners visible only when the setting is on. */
-body.show-pane-status .pane-status-spinner.state-working {
+/* Spinners are always visible when a pane is working. */
+.pane-status-spinner.state-working {
     display: inline-block;
 }
 
 /* ── Pulsating opacity for "waiting for input" state ──
-   Pulses the entire row/tab/header to grab the user's attention. */
+   Pulses the entire row/tab/header to grab the user's attention.
+   Controlled by the body.show-waiting-pulse class. */
 @keyframes pulse-attention {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.35; }
 }
 
-/* Sidebar: always pulsate when waiting. */
-.sidebar-pane-item.state-waiting,
-.sidebar-tab-header.state-waiting {
+/* Sidebar: pulsate when waiting (only when setting is on). */
+body.show-waiting-pulse .sidebar-pane-item.state-waiting,
+body.show-waiting-pulse .sidebar-tab-header.state-waiting {
     animation: pulse-attention 1.5s ease-in-out infinite;
     color: var(--t-semantic-warn, #FFD60A);
 }
 
 /* Tab button: pulsate when waiting (only when setting is on). */
-body.show-pane-status .tab-button.tab-waiting {
+body.show-waiting-pulse .tab-button.tab-waiting {
     animation: pulse-attention 1.5s ease-in-out infinite;
     color: var(--t-semantic-warn, #FFD60A);
 }
 
 /* Pane header: pulsate title area when waiting (only when setting is on). */
-body.show-pane-status .terminal-header.header-waiting {
+body.show-waiting-pulse .terminal-header.header-waiting {
     animation: pulse-attention 1.5s ease-in-out infinite;
     color: var(--t-semantic-warn, #FFD60A);
 }
@@ -1322,7 +1317,7 @@ body.show-pane-status .terminal-header.header-waiting {
     content: "";
     position: absolute;
     inset: -4px;
-    border: 2px solid var(--t-accent-primary, var(--termtastic-orange));
+    border: 2px solid var(--t-active-accent, var(--t-accent-primary, var(--termtastic-orange)));
     border-radius: 10px;
     pointer-events: none;
     z-index: 10;
@@ -1600,7 +1595,7 @@ body.show-pane-status .terminal-header.header-waiting {
 }
 
 .floating-pane:has(.terminal-cell.focused) {
-    border-color: var(--t-accent-primary, rgba(244, 184, 105, 0.9));
+    border-color: var(--t-active-accent, var(--t-accent-primary, rgba(244, 184, 105, 0.9)));
 }
 
 .floating-pane .terminal-inner {

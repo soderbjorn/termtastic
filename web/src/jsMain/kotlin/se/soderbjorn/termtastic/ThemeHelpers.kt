@@ -11,8 +11,6 @@
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.window
-import se.soderbjorn.termtastic.client.PaneStatusDisplay
-import se.soderbjorn.termtastic.client.parsePaneStatusDisplay
 
 /** Feature flag: when true, applies a "spiced" variant to dark themes. Currently disabled. */
 const val DARK_SPICED = false
@@ -127,6 +125,7 @@ fun sectionPalette(section: String): ResolvedPalette {
         "tabs" -> state.tabsTheme
         "chrome" -> state.chromeTheme
         "windows" -> state.windowsTheme
+        "active" -> state.activeTheme
         else -> null
     }
     return (sectionTheme ?: state.theme).resolve(isDark)
@@ -245,4 +244,54 @@ fun ResolvedPalette.toCssVarMap(): Map<String, String> = buildMap {
     put("--t-syntax-type", argbToCss(syntax.type))
     put("--t-syntax-operator", argbToCss(syntax.operator))
     put("--t-syntax-constant", argbToCss(syntax.constant))
+}
+
+/**
+ * CSS custom property names used by the "active indicators" section.
+ *
+ * These properties are always set on `:root` so they are available in
+ * every section container regardless of per-section scoping.
+ */
+private val activeAccentProps = listOf(
+    "--t-active-accent",
+    "--t-active-accentSoft",
+    "--t-active-accentGlow",
+    "--t-active-sidebarActiveBg",
+    "--t-active-sidebarActiveText",
+)
+
+/**
+ * Returns CSS custom properties derived from the "active indicators"
+ * section theme, or an empty map if no override is set.
+ *
+ * The returned vars are set on `:root` by [applyAppearanceClass] so
+ * the active-indicator CSS rules can reference them with a fallback
+ * chain back to the per-section accent colour.
+ *
+ * @return map of CSS property name to CSS colour string, or empty
+ * @see applyAppearanceClass
+ */
+fun activeAccentCssVars(): Map<String, String> {
+    val state = appVm.stateFlow.value
+    if (state.activeTheme == null) return emptyMap()
+    val p = sectionPalette("active")
+    return mapOf(
+        "--t-active-accent" to argbToCss(p.accent.primary),
+        "--t-active-accentSoft" to argbToCss(p.accent.primarySoft),
+        "--t-active-accentGlow" to argbToCss(p.accent.primaryGlow),
+        "--t-active-sidebarActiveBg" to argbToCss(p.sidebar.activeBg),
+        "--t-active-sidebarActiveText" to argbToCss(p.sidebar.activeText),
+    )
+}
+
+/**
+ * Clears the `--t-active-*` CSS properties from an element.
+ *
+ * Called when the active-indicators section theme is cleared so the
+ * CSS fallback chain reverts to each section's own accent colour.
+ *
+ * @param el the element to clear (typically `:root`)
+ */
+fun clearActiveAccentVars(el: org.w3c.dom.HTMLElement) {
+    for (prop in activeAccentProps) el.style.removeProperty(prop)
 }

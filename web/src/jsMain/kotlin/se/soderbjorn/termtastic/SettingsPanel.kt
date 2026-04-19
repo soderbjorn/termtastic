@@ -26,7 +26,6 @@ import kotlinx.coroutines.launch
 import org.w3c.dom.HTMLElement
 import org.w3c.dom.events.Event
 import org.w3c.dom.events.KeyboardEvent
-import se.soderbjorn.termtastic.client.PaneStatusDisplay
 import se.soderbjorn.termtastic.client.viewmodel.findLeafById
 
 /** Available font size presets for the text size setting. */
@@ -105,6 +104,7 @@ fun openSettingsPanel() {
         "" to "Main theme",
         "tabs" to "Tab strip",
         "windows" to "Windows",
+        "active" to "Active indicators",
         "sidebar" to "Sidebar",
         "terminal" to "Terminal",
         "diff" to "Diff",
@@ -123,6 +123,7 @@ fun openSettingsPanel() {
             "tabs" -> state.tabsTheme
             "chrome" -> state.chromeTheme
             "windows" -> state.windowsTheme
+            "active" -> state.activeTheme
             else -> null
         }
     }
@@ -250,39 +251,35 @@ fun openSettingsPanel() {
     sizeSection.appendChild(sizeRow)
     body.appendChild(sizeSection)
 
-    // ─── Pane status display ────────────────────────────────────────
-    val statusSection = document.createElement("div") as HTMLElement
-    statusSection.className = "settings-section"
-    val statusLabel = document.createElement("div") as HTMLElement
-    statusLabel.className = "settings-label"
-    statusLabel.textContent = "Pane status indicator"
-    statusSection.appendChild(statusLabel)
+    // ─── Waiting pulse ──────────────────────────────────────────────
+    val pulseSection = document.createElement("div") as HTMLElement
+    pulseSection.className = "settings-section"
+    val pulseLabel = document.createElement("div") as HTMLElement
+    pulseLabel.className = "settings-label"
+    pulseLabel.textContent = "Waiting-for-input pulse"
+    pulseSection.appendChild(pulseLabel)
 
-    val statusRow = document.createElement("div") as HTMLElement
-    statusRow.className = "settings-button-row"
-    fun renderStatusRow() {
-        statusRow.innerHTML = ""
-        val currentPsd = appVm.stateFlow.value.paneStatusDisplay
-        for (mode in PaneStatusDisplay.values()) {
-            val label = when (mode) {
-                PaneStatusDisplay.On -> "Show status"
-                PaneStatusDisplay.None -> "None"
-            }
+    val pulseRow = document.createElement("div") as HTMLElement
+    pulseRow.className = "settings-button-row"
+    fun renderPulseRow() {
+        pulseRow.innerHTML = ""
+        val enabled = appVm.stateFlow.value.showWaitingPulse
+        for ((label, value) in listOf("On" to true, "Off" to false)) {
             val btn = document.createElement("button") as HTMLElement
-            btn.className = "settings-choice-btn" + if (mode == currentPsd) " selected" else ""
+            btn.className = "settings-choice-btn" + if (value == enabled) " selected" else ""
             btn.textContent = label
             btn.addEventListener("click", {
-                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setPaneStatusDisplay(mode) }
+                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setShowWaitingPulse(value) }
                 applyPaneStatusClasses()
                 updateStateIndicators(appVm.stateFlow.value.sessionStates)
-                renderStatusRow()
+                renderPulseRow()
             })
-            statusRow.appendChild(btn)
+            pulseRow.appendChild(btn)
         }
     }
-    renderStatusRow()
-    statusSection.appendChild(statusRow)
-    body.appendChild(statusSection)
+    renderPulseRow()
+    pulseSection.appendChild(pulseRow)
+    body.appendChild(pulseSection)
 
     // ─── Desktop notifications ─────────────────────────────────────
     val notifSection = document.createElement("div") as HTMLElement

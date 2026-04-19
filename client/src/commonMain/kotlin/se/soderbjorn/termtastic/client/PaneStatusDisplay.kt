@@ -1,30 +1,24 @@
 /**
- * Pane status indicator display mode for the sidebar and tab bar.
+ * Parser for the "waiting pulse" UI setting.
  *
- * The user can choose how active/waiting PTY sessions are visually indicated
- * in the sidebar: coloured dots, a glow effect, both, or nothing. This
- * preference is stored server-side as part of the UI settings JSON blob.
+ * When a PTY session is waiting for user input, the sidebar/tab/header can
+ * pulsate to draw attention. This setting controls whether that pulsating
+ * effect is enabled. Spinners for "working" state are always shown.
  *
- * @see se.soderbjorn.termtastic.client.viewmodel.AppBackingViewModel.State.paneStatusDisplay
+ * The setting is stored server-side as part of the UI settings JSON blob.
+ *
+ * @see se.soderbjorn.termtastic.client.viewmodel.AppBackingViewModel.State.showWaitingPulse
  */
 package se.soderbjorn.termtastic.client
 
 /**
- * Visual style for the pane activity indicator in the sidebar, tabs, and pane headers.
+ * Parse a string value from the server's UI settings JSON into a boolean
+ * for the waiting-pulse setting. Legacy values (`"None"`) disable the
+ * pulse; everything else (including `null`, `"On"`, `"Dots"`, `"Glow"`,
+ * `"Both"`, `"true"`) enables it.
  *
- * - [On]   -- spinners for "working" state, opacity pulsation for "waiting" state.
- * - [None] -- no indicator at all.
+ * @param s the raw string value, e.g. `"true"`, `"On"`, `"None"`, or `null`.
+ * @return `true` if the waiting pulse should be shown, `false` otherwise.
  */
-enum class PaneStatusDisplay { On, None }
-
-/**
- * Parse a string value from the server's UI settings JSON into a
- * [PaneStatusDisplay]. Legacy values (`"Dots"`, `"Glow"`, `"Both"`) are
- * mapped to [PaneStatusDisplay.On] for backward compatibility. Only the
- * explicit `"None"` value disables indicators.
- *
- * @param s the raw string value, e.g. `"On"`, or `null`.
- * @return the corresponding enum member.
- */
-fun parsePaneStatusDisplay(s: String?): PaneStatusDisplay =
-    if (s == "None") PaneStatusDisplay.None else PaneStatusDisplay.On
+fun parseShowWaitingPulse(s: String?): Boolean =
+    s != "None" && s != "false"

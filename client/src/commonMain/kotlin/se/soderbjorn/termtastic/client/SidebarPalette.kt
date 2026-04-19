@@ -7,7 +7,7 @@
  * for light). Native clients (Android Compose, SwiftUI) convert them to their
  * respective `Color` types.
  *
- * @see se.soderbjorn.termtastic.client.PaneStatusDisplay
+ * @see se.soderbjorn.termtastic.client.parseShowWaitingPulse
  */
 package se.soderbjorn.termtastic.client
 

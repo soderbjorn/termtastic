@@ -341,6 +341,17 @@ internal fun applyAppearanceClass() {
         root?.style?.setProperty(prop, value)
     }
 
+    // Active-indicator accent — always on :root so it is available in
+    // every section container regardless of per-section scoping.
+    if (root != null) {
+        val activeVars = activeAccentCssVars()
+        if (activeVars.isNotEmpty()) {
+            for ((prop, value) in activeVars) root.style.setProperty(prop, value)
+        } else {
+            clearActiveAccentVars(root)
+        }
+    }
+
     // Apply per-section overrides. CSS alias vars (--surface, --background,
     // etc.) are resolved at :root, so children inherit the resolved value —
     // setting --t-* on a child does NOT update the alias. We must set BOTH
@@ -439,10 +450,10 @@ internal fun applySidebarState() {
 }
 
 internal fun applyPaneStatusClasses() {
-    val psd = appVm.stateFlow.value.paneStatusDisplay
-    kotlinx.browser.document.body?.classList?.remove("show-pane-status")
-    if (psd == se.soderbjorn.termtastic.client.PaneStatusDisplay.On) {
-        kotlinx.browser.document.body?.classList?.add("show-pane-status")
+    val body = kotlinx.browser.document.body ?: return
+    body.classList.remove("show-waiting-pulse")
+    if (appVm.stateFlow.value.showWaitingPulse) {
+        body.classList.add("show-waiting-pulse")
     }
 }
 

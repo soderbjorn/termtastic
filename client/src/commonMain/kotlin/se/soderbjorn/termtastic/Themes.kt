@@ -124,6 +124,7 @@ val recommendedThemes: List<TerminalTheme> = listOf(
     TerminalTheme("Cyber teal",    "#00e5ff", "#006d80"),
     TerminalTheme("Tron",          "#00ff9f", "#00795c", overrides = tronOverrides),
     TerminalTheme("Vapor pink",    "#ff77ff", "#a3008c"),
+    TerminalTheme("Amber Glow",    "#F4B869", "#A87620"),
     TerminalTheme("Amber CRT",     "#ffb000", "#8a4b00"),
     TerminalTheme("Ember",         "#ff6d3d", "#a23b00"),
     TerminalTheme("Plasma",        "#ff3df8", "#9b008f"),

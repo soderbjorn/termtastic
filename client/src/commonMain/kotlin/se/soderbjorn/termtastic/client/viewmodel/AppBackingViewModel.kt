@@ -32,10 +32,9 @@ import se.soderbjorn.termtastic.TerminalTheme
 import se.soderbjorn.termtastic.WindowCommand
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.WindowEnvelope
-import se.soderbjorn.termtastic.client.PaneStatusDisplay
 import se.soderbjorn.termtastic.client.WindowSocket
 import se.soderbjorn.termtastic.client.WindowStateRepository
-import se.soderbjorn.termtastic.client.parsePaneStatusDisplay
+import se.soderbjorn.termtastic.client.parseShowWaitingPulse
 import se.soderbjorn.termtastic.recommendedThemes
 import se.soderbjorn.termtastic.resolve
 
@@ -67,7 +66,7 @@ class AppBackingViewModel(
      * @property claudeUsage        latest AI token usage data, if available.
      * @property theme              the active terminal colour theme (global default).
      * @property appearance         the user's light/dark mode preference.
-     * @property paneStatusDisplay  how pane activity is indicated in the sidebar.
+     * @property showWaitingPulse    whether the pulsating effect is shown when a pane is waiting for input.
      * @property paneFontSize       per-pane font size override, or `null` for default.
      * @property sidebarWidth       persisted sidebar width in pixels, or `null`.
      * @property sidebarCollapsed    whether the sidebar is currently collapsed.
@@ -84,6 +83,9 @@ class AppBackingViewModel(
      *   or `null` to use [theme].
      * @property chromeTheme        optional theme override for window chrome
      *   (pane titlebars and borders), or `null` to use [theme].
+     * @property activeTheme        optional theme override for active indicators
+     *   (tab ring, focused-pane border, sidebar active-pane highlight),
+     *   or `null` to use each section's own accent.
      */
     data class State(
         val config: WindowConfig? = null,
@@ -92,7 +94,7 @@ class AppBackingViewModel(
         val claudeUsage: ClaudeUsageData? = null,
         val theme: TerminalTheme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME },
         val appearance: Appearance = Appearance.Auto,
-        val paneStatusDisplay: PaneStatusDisplay = PaneStatusDisplay.On,
+        val showWaitingPulse: Boolean = true,
         val paneFontSize: Int? = null,
         val sidebarWidth: Int? = null,
         val sidebarCollapsed: Boolean = false,
@@ -104,6 +106,7 @@ class AppBackingViewModel(
         val tabsTheme: TerminalTheme? = null,
         val chromeTheme: TerminalTheme? = null,
         val windowsTheme: TerminalTheme? = null,
+        val activeTheme: TerminalTheme? = null,
     )
 
     /**
@@ -165,13 +168,13 @@ class AppBackingViewModel(
     }
 
     /**
-     * Update the pane activity indicator style and persist it to the server.
+     * Toggle the waiting-pulse effect and persist it to the server.
      *
-     * @param display the new display mode.
+     * @param enabled whether the pulsating effect is shown when a pane is waiting for input.
      */
-    suspend fun setPaneStatusDisplay(display: PaneStatusDisplay) {
-        emit(_stateFlow.value.copy(paneStatusDisplay = display))
-        settingsPersister?.putSetting("paneStatusDisplay", display.name)
+    suspend fun setShowWaitingPulse(enabled: Boolean) {
+        emit(_stateFlow.value.copy(showWaitingPulse = enabled))
+        settingsPersister?.putSetting("paneStatusDisplay", enabled.toString())
     }
 
     /**
@@ -218,7 +221,7 @@ class AppBackingViewModel(
      * Set a per-section theme override and persist it. Pass `null` to clear
      * the override and fall back to the global theme.
      *
-     * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`
+     * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"active"`
      * @param theme   the override theme, or `null` to clear
      */
     suspend fun setSectionTheme(section: String, theme: TerminalTheme?) {
@@ -231,6 +234,7 @@ class AppBackingViewModel(
             "tabs" -> cur.copy(tabsTheme = theme)
             "chrome" -> cur.copy(chromeTheme = theme)
             "windows" -> cur.copy(windowsTheme = theme)
+            "active" -> cur.copy(activeTheme = theme)
             else -> cur
         }
         emit(updated)
@@ -390,7 +394,7 @@ class AppBackingViewModel(
             ?.let { runCatching { Appearance.valueOf(it) }.getOrNull() }
             ?: cur.appearance
 
-        val psd = parsePaneStatusDisplay(settings["paneStatusDisplay"]?.jsonPrimitive?.contentOrNull)
+        val showWaitingPulse = parseShowWaitingPulse(settings["paneStatusDisplay"]?.jsonPrimitive?.contentOrNull)
         val fontSize = settings["paneFontSize"]?.jsonPrimitive?.intOrNull ?: cur.paneFontSize
         val sidebarW = settings["sidebarWidth"]?.jsonPrimitive?.intOrNull ?: cur.sidebarWidth
         val sidebarCol = settings["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: cur.sidebarCollapsed
@@ -405,7 +409,7 @@ class AppBackingViewModel(
         emit(cur.copy(
             theme = theme,
             appearance = appearance,
-            paneStatusDisplay = psd,
+            showWaitingPulse = showWaitingPulse,
             paneFontSize = fontSize,
             sidebarWidth = sidebarW,
             sidebarCollapsed = sidebarCol,
@@ -417,6 +421,7 @@ class AppBackingViewModel(
             tabsTheme = sectionTheme("theme.tabs", cur.tabsTheme),
             chromeTheme = sectionTheme("theme.chrome", cur.chromeTheme),
             windowsTheme = sectionTheme("theme.windows", cur.windowsTheme),
+            activeTheme = sectionTheme("theme.active", cur.activeTheme),
         ))
     }
 
@@ -439,7 +444,7 @@ fun AppBackingViewModel.State.resolvedPalette(systemIsDark: Boolean): ResolvedPa
  * Resolves the semantic palette for a specific app section, using the
  * section-specific theme override if set, or falling back to the global theme.
  *
- * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"windows"`
+ * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"windows"`, `"active"`
  * @param systemIsDark whether the host OS is currently in dark mode
  * @return the resolved [ResolvedPalette] for that section
  * @see resolvedPalette
@@ -453,6 +458,7 @@ fun AppBackingViewModel.State.sectionPalette(section: String, systemIsDark: Bool
         "tabs" -> tabsTheme
         "chrome" -> chromeTheme
         "windows" -> windowsTheme
+        "active" -> activeTheme
         else -> null
     }
     return (sectionTheme ?: theme).resolve(appearance, systemIsDark)
