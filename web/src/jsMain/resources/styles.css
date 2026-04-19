@@ -833,6 +833,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     gap: 4px;
     padding: 6px 10px;
     flex-shrink: 0;
+    overflow: hidden;
     /* Gradient titlebar: slightly lighter at the top edge, fading down to
        the chrome surface colour. Gives the pane header a polished, lit-
        from-above look like native macOS window chrome. */
@@ -941,30 +942,20 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     display: inline-block;
 }
 
-/* ── Pulsating opacity for "waiting for input" state ──
-   Pulses the entire row/tab/header to grab the user's attention.
-   Controlled by the body.show-waiting-pulse class. */
-@keyframes pulse-attention {
+/* ── Warning icon for "waiting for input" state ──
+   Shows a fading warning triangle in the same position as the spinner.
+   Uses the theme's semantic warning colour. */
+@keyframes fade-warning {
     0%, 100% { opacity: 1; }
-    50%      { opacity: 0.35; }
+    50%      { opacity: 0.3; }
 }
 
-/* Sidebar: pulsate when waiting (only when setting is on). */
-body.show-waiting-pulse .sidebar-pane-item.state-waiting,
-body.show-waiting-pulse .sidebar-tab-header.state-waiting {
-    animation: pulse-attention 1.5s ease-in-out infinite;
-    color: var(--t-semantic-warn, #FFD60A);
-}
-
-/* Tab button: pulsate when waiting (only when setting is on). */
-body.show-waiting-pulse .tab-button.tab-waiting {
-    animation: pulse-attention 1.5s ease-in-out infinite;
-    color: var(--t-semantic-warn, #FFD60A);
-}
-
-/* Pane header: pulsate title area when waiting (only when setting is on). */
-body.show-waiting-pulse .terminal-header.header-waiting {
-    animation: pulse-attention 1.5s ease-in-out infinite;
+.pane-status-spinner.state-waiting {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    animation: fade-warning 2.5s ease-in-out infinite;
     color: var(--t-semantic-warn, #FFD60A);
 }
 
@@ -1083,6 +1074,7 @@ body.show-waiting-pulse .terminal-header.header-waiting {
     display: inline-flex;
     align-items: center;
     gap: 2px;
+    flex-shrink: 0;
 }
 
 .pane-action-btn {
@@ -1158,19 +1150,23 @@ body.show-waiting-pulse .terminal-header.header-waiting {
 
 .pane-split-flyout {
     display: none;
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
+    /* The .terminal-header ancestor uses overflow:hidden, which would clip
+       an absolutely-positioned flyout. Render as a fixed-position layer and
+       let JS place it at the button's screen rect (same pattern as
+       .tab-menu-list). */
+    position: fixed;
+    top: 0;
+    left: 0;
     min-width: 168px;
     background: var(--surface);
     border: 1px solid var(--separator);
     border-radius: 6px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     padding: 4px;
-    z-index: 50;
+    z-index: 1000;
 }
 
-.pane-split-wrap.open .pane-split-flyout {
+.pane-split-flyout.open {
     display: block;
 }
 
@@ -1313,7 +1309,7 @@ body.show-waiting-pulse .terminal-header.header-waiting {
 .terminal-cell {
     position: relative;
 }
-.terminal-cell.focused::after {
+.terminal-cell::after {
     content: "";
     position: absolute;
     inset: -4px;
@@ -1321,6 +1317,11 @@ body.show-waiting-pulse .terminal-header.header-waiting {
     border-radius: 10px;
     pointer-events: none;
     z-index: 10;
+    opacity: 0;
+    transition: opacity 120ms ease-in-out;
+}
+.terminal-cell.focused::after {
+    opacity: 1;
 }
 
 .terminal-cell.focused .terminal-title {
@@ -2389,7 +2390,7 @@ body.appearance-light .pane-picker-btn:hover:not(.disabled) {
     margin: 0 0 16px;
     font-size: 13px;
     line-height: 1.45;
-    color: var(--text-secondary, #c8c8c8);
+    color: var(--text-primary, #d4d4d4);
 }
 .confirm-buttons {
     display: flex;
@@ -2411,19 +2412,195 @@ body.appearance-light .pane-picker-btn:hover:not(.disabled) {
 }
 .confirm-cancel:hover { background: var(--bg-elevated, #2d2d30); }
 .confirm-ok {
-    background: #c53030;
-    color: #fff;
-    border-color: #c53030;
+    background: var(--t-accent-primary, #569cd6);
+    color: var(--t-text-inverse, #fff);
+    border-color: var(--t-accent-primary, #569cd6);
 }
-.confirm-ok:hover { background: #b52828; }
-.confirm-ok:focus { outline: 2px solid #c53030; outline-offset: 2px; }
+.confirm-ok:hover { filter: brightness(1.1); }
+.confirm-ok:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
+.confirm-ok:focus { outline: 2px solid var(--t-accent-primary, #569cd6); outline-offset: 2px; }
 body.appearance-light .confirm-cancel {
     background: #fff;
     border-color: rgba(0,0,0,0.18);
 }
 body.appearance-light .confirm-ok {
-    background: #dc3545;
-    border-color: #dc3545;
+    background: var(--t-accent-primary, #2563eb);
+    border-color: var(--t-accent-primary, #2563eb);
+}
+
+/* ── Worktree dialog ── */
+.pane-modal.worktree-modal {
+    width: auto;
+    min-width: 420px;
+    max-width: 540px;
+    padding: 18px 20px 20px;
+}
+.pane-modal.worktree-modal .pane-modal-title {
+    font-size: 15px;
+    margin: 0 0 14px;
+}
+.worktree-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary, #c8c8c8);
+    margin: 0 0 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.worktree-input {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    border: 1px solid var(--border, #3c3c3c);
+    border-radius: 5px;
+    background: var(--surface, #252526);
+    color: var(--text-primary, #d4d4d4);
+    margin-bottom: 12px;
+    outline: none;
+}
+.worktree-input:focus {
+    border-color: var(--t-accent-primary, #569cd6);
+    box-shadow: 0 0 0 2px rgba(86, 156, 214, 0.25);
+}
+.worktree-input:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.worktree-path-preview {
+    font-size: 12px;
+    font-family: var(--font-mono, 'JetBrains Mono', monospace);
+    color: var(--text-muted, #888);
+    background: var(--bg-elevated, #2d2d30);
+    border-radius: 4px;
+    padding: 6px 10px;
+    margin-bottom: 14px;
+    word-break: break-all;
+    min-height: 18px;
+}
+.worktree-radio-group {
+    margin-bottom: 14px;
+}
+.worktree-radio-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 5px 0;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-primary, #d4d4d4);
+}
+.worktree-radio-row input[type="radio"] {
+    margin-top: 3px;
+    accent-color: var(--t-accent-primary, #569cd6);
+}
+.worktree-radio-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.worktree-radio-label {
+    font-weight: 500;
+}
+.worktree-radio-desc {
+    font-size: 11px;
+    color: var(--text-muted, #888);
+}
+.worktree-custom-path {
+    margin-top: 4px;
+    margin-left: 22px;
+    width: calc(100% - 22px);
+}
+.worktree-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-primary, #d4d4d4);
+    margin-bottom: 14px;
+    cursor: pointer;
+}
+.worktree-checkbox-row input[type="checkbox"] {
+    accent-color: var(--t-accent-primary, #569cd6);
+}
+.worktree-error {
+    font-size: 12px;
+    color: #e06c75;
+    margin-bottom: 8px;
+}
+body.appearance-light .worktree-input {
+    background: #fff;
+    border-color: rgba(0,0,0,0.18);
+    color: #333;
+}
+body.appearance-light .worktree-path-preview {
+    background: #f5f5f5;
+    color: #666;
+}
+
+/* ── About dialog ── */
+.pane-modal.about-dialog {
+    width: 480px;
+    min-width: 320px;
+    max-width: 90vw;
+    padding: 24px 28px 28px;
+}
+.about-version {
+    margin: 0 0 4px;
+    font-size: 13px;
+    color: var(--text-secondary, #999);
+}
+.about-copyright {
+    margin: 0 0 12px;
+    font-size: 13px;
+    color: var(--text-secondary, #999);
+}
+.about-link-row {
+    margin: 0 0 20px;
+}
+.about-link {
+    color: var(--accent, #4fc1ff);
+    font-size: 13px;
+    text-decoration: none;
+}
+.about-link:hover {
+    text-decoration: underline;
+}
+.about-section-title {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary, #d4d4d4);
+}
+.about-deps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 240px;
+    overflow-y: auto;
+}
+.about-deps li {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border, #3c3c3c);
+}
+.about-deps li:last-child {
+    border-bottom: none;
+}
+.about-dep-name {
+    color: var(--text-primary, #d4d4d4);
+}
+.about-dep-version {
+    color: var(--text-secondary, #999);
+    font-family: monospace;
+}
+body.appearance-light .about-link {
+    color: var(--accent, #0e639c);
 }
 
 /* ── Pane type modal ── */
@@ -3227,6 +3404,124 @@ body.appearance-light .settings-theme-card.selected {
 .settings-slot-select {
     margin-bottom: 8px;
     width: 100%;
+}
+
+/* ─── Saved theme configurations list ─────────────────────────────── */
+.settings-theme-configs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 8px;
+}
+
+.settings-theme-configs-empty {
+    font-size: 12px;
+    color: var(--t-text-tertiary, var(--text-secondary, #888));
+    padding: 6px 0;
+}
+
+.settings-theme-config-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 80ms ease;
+}
+
+.settings-theme-config-row:hover {
+    background: var(--t-border-subtle, var(--separator, #333));
+}
+
+.settings-theme-config-name {
+    font-size: 13px;
+    color: var(--t-text-primary, var(--text-primary, #d4d4d4));
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-theme-config-delete {
+    appearance: none;
+    background: none;
+    border: none;
+    color: var(--t-text-tertiary, var(--text-secondary, #888));
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    border-radius: 3px;
+    opacity: 0;
+    transition: opacity 120ms ease, color 80ms ease;
+}
+
+.settings-theme-config-row:hover .settings-theme-config-delete {
+    opacity: 1;
+}
+
+.settings-theme-config-delete:hover {
+    color: #e06c75;
+}
+
+body.appearance-light .settings-theme-config-row:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+body.appearance-light .settings-theme-config-name {
+    color: #333;
+}
+
+.settings-save-config-btn {
+    width: 100%;
+}
+
+/* Theme config save dialog */
+.theme-config-save-modal {
+    min-width: 340px;
+}
+.theme-config-list {
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid var(--separator, #3c3c3c);
+    border-radius: 6px;
+    margin-bottom: 12px;
+}
+.theme-config-list-item {
+    padding: 7px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--text-primary, #d4d4d4);
+    border-bottom: 1px solid var(--separator, #3c3c3c);
+    transition: background 80ms ease;
+}
+.theme-config-list-item:last-child {
+    border-bottom: none;
+}
+.theme-config-list-item:hover {
+    background: var(--separator, #333);
+}
+.theme-config-list-item.selected {
+    background: color-mix(in srgb, var(--accent, #4fc1ff) 18%, transparent);
+    border-left: 3px solid var(--accent, #4fc1ff);
+    color: var(--text-primary, #d4d4d4);
+    font-weight: 600;
+}
+body.appearance-light .theme-config-list {
+    border-color: rgba(0, 0, 0, 0.15);
+}
+body.appearance-light .theme-config-list-item {
+    color: #333;
+    border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+body.appearance-light .theme-config-list-item:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+body.appearance-light .theme-config-list-item.selected {
+    color: #333;
+    background: color-mix(in srgb, var(--accent, #0e639c) 12%, transparent);
+    border-left: 3px solid var(--accent, #0e639c);
 }
 
 /* "Default" swatch card (no-override) */

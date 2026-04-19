@@ -34,9 +34,10 @@ import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.WindowEnvelope
 import se.soderbjorn.termtastic.client.WindowSocket
 import se.soderbjorn.termtastic.client.WindowStateRepository
-import se.soderbjorn.termtastic.client.parseShowWaitingPulse
 import se.soderbjorn.termtastic.recommendedThemes
 import se.soderbjorn.termtastic.resolve
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 /**
  * Backing ViewModel for the top-level application screen. Merges server-pushed
@@ -52,6 +53,16 @@ class AppBackingViewModel(
     private val windowState: WindowStateRepository,
     private val settingsPersister: SettingsPersister? = null,
 ) {
+    /**
+     * Monotonic timestamp of the most recent local settings mutation.
+     * Used to suppress server-pushed [WindowEnvelope.UiSettings] echoes
+     * that arrive shortly after the client itself POSTed — these echoes
+     * carry partially-merged state that would overwrite the correct
+     * local state.
+     */
+    private var lastLocalSettingsChange: TimeSource.Monotonic.ValueTimeMark =
+        TimeSource.Monotonic.markNow()
+
     private val _stateFlow = MutableStateFlow(State())
     val stateFlow: StateFlow<State> = _stateFlow.asStateFlow()
 
@@ -66,7 +77,6 @@ class AppBackingViewModel(
      * @property claudeUsage        latest AI token usage data, if available.
      * @property theme              the active terminal colour theme (global default).
      * @property appearance         the user's light/dark mode preference.
-     * @property showWaitingPulse    whether the pulsating effect is shown when a pane is waiting for input.
      * @property paneFontSize       per-pane font size override, or `null` for default.
      * @property sidebarWidth       persisted sidebar width in pixels, or `null`.
      * @property sidebarCollapsed    whether the sidebar is currently collapsed.
@@ -94,7 +104,6 @@ class AppBackingViewModel(
         val claudeUsage: ClaudeUsageData? = null,
         val theme: TerminalTheme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME },
         val appearance: Appearance = Appearance.Auto,
-        val showWaitingPulse: Boolean = true,
         val paneFontSize: Int? = null,
         val sidebarWidth: Int? = null,
         val sidebarCollapsed: Boolean = false,
@@ -136,13 +145,29 @@ class AppBackingViewModel(
                     when (envelope) {
                         is WindowEnvelope.ClaudeUsage ->
                             emit(_stateFlow.value.copy(claudeUsage = envelope.usage))
-                        is WindowEnvelope.UiSettings ->
-                            applyServerUiSettings(envelope.settings)
+                        is WindowEnvelope.UiSettings -> {
+                            val elapsed = lastLocalSettingsChange.elapsedNow()
+                            if (elapsed > 2.seconds) {
+                                applyServerUiSettings(envelope.settings)
+                            }
+                        }
                         else -> Unit
                     }
                 }
             }
         }
+    }
+
+    /** Stamp the local-change time and persist a single setting. */
+    private suspend fun persistSetting(key: String, value: String) {
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        settingsPersister?.putSetting(key, value)
+    }
+
+    /** Stamp the local-change time and persist a batch of settings. */
+    private suspend fun persistSettings(settings: Map<String, String>) {
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        settingsPersister?.putSettings(settings)
     }
 
     // ── UI settings mutations ───────────────────────────────────────
@@ -154,7 +179,7 @@ class AppBackingViewModel(
      */
     suspend fun setTheme(theme: TerminalTheme) {
         emit(_stateFlow.value.copy(theme = theme))
-        settingsPersister?.putSetting("theme", theme.name)
+        persistSetting("theme", theme.name)
     }
 
     /**
@@ -164,17 +189,7 @@ class AppBackingViewModel(
      */
     suspend fun setAppearance(appearance: Appearance) {
         emit(_stateFlow.value.copy(appearance = appearance))
-        settingsPersister?.putSetting("appearance", appearance.name)
-    }
-
-    /**
-     * Toggle the waiting-pulse effect and persist it to the server.
-     *
-     * @param enabled whether the pulsating effect is shown when a pane is waiting for input.
-     */
-    suspend fun setShowWaitingPulse(enabled: Boolean) {
-        emit(_stateFlow.value.copy(showWaitingPulse = enabled))
-        settingsPersister?.putSetting("paneStatusDisplay", enabled.toString())
+        persistSetting("appearance", appearance.name)
     }
 
     /**
@@ -184,7 +199,7 @@ class AppBackingViewModel(
      */
     suspend fun setPaneFontSize(size: Int) {
         emit(_stateFlow.value.copy(paneFontSize = size))
-        settingsPersister?.putSetting("paneFontSize", size.toString())
+        persistSetting("paneFontSize", size.toString())
     }
 
     /**
@@ -194,7 +209,7 @@ class AppBackingViewModel(
      */
     suspend fun setSidebarWidth(width: Int) {
         emit(_stateFlow.value.copy(sidebarWidth = width))
-        settingsPersister?.putSetting("sidebarWidth", width.toString())
+        persistSetting("sidebarWidth", width.toString())
     }
 
     /**
@@ -204,7 +219,7 @@ class AppBackingViewModel(
      */
     suspend fun setSidebarCollapsed(collapsed: Boolean) {
         emit(_stateFlow.value.copy(sidebarCollapsed = collapsed))
-        settingsPersister?.putSetting("sidebarCollapsed", collapsed.toString())
+        persistSetting("sidebarCollapsed", collapsed.toString())
     }
 
     /**
@@ -214,7 +229,7 @@ class AppBackingViewModel(
      */
     suspend fun setDesktopNotifications(enabled: Boolean) {
         emit(_stateFlow.value.copy(desktopNotifications = enabled))
-        settingsPersister?.putSetting("desktopNotifications", enabled.toString())
+        persistSetting("desktopNotifications", enabled.toString())
     }
 
     /**
@@ -238,7 +253,42 @@ class AppBackingViewModel(
             else -> cur
         }
         emit(updated)
-        settingsPersister?.putSetting("theme.$section", theme?.name ?: "")
+        persistSetting("theme.$section", theme?.name ?: "")
+    }
+
+    /**
+     * Apply a full theme configuration atomically — main theme plus all
+     * section overrides — in a single **synchronous** state emission.
+     * Persistence is fire-and-forget so the caller can run `applyAll()`
+     * immediately after this returns without any coroutine involvement.
+     *
+     * @param theme the main theme
+     * @param sections map of section key to optional override theme
+     */
+    fun applyThemeConfiguration(
+        theme: TerminalTheme,
+        sections: Map<String, TerminalTheme?>,
+    ) {
+        val updated = _stateFlow.value.copy(
+            theme = theme,
+            sidebarTheme = sections["sidebar"],
+            terminalTheme = sections["terminal"],
+            diffTheme = sections["diff"],
+            fileBrowserTheme = sections["fileBrowser"],
+            tabsTheme = sections["tabs"],
+            chromeTheme = sections["chrome"],
+            windowsTheme = sections["windows"],
+            activeTheme = sections["active"],
+        )
+        emit(updated)
+        val batch = buildMap {
+            put("theme", theme.name)
+            for ((section, t) in sections) {
+                put("theme.$section", t?.name ?: "")
+            }
+        }
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        settingsPersister?.fireAndForgetPutSettings(batch)
     }
 
     // ── Layout mutations (delegated to server) ──────────────────────
@@ -394,7 +444,6 @@ class AppBackingViewModel(
             ?.let { runCatching { Appearance.valueOf(it) }.getOrNull() }
             ?: cur.appearance
 
-        val showWaitingPulse = parseShowWaitingPulse(settings["paneStatusDisplay"]?.jsonPrimitive?.contentOrNull)
         val fontSize = settings["paneFontSize"]?.jsonPrimitive?.intOrNull ?: cur.paneFontSize
         val sidebarW = settings["sidebarWidth"]?.jsonPrimitive?.intOrNull ?: cur.sidebarWidth
         val sidebarCol = settings["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: cur.sidebarCollapsed
@@ -409,7 +458,6 @@ class AppBackingViewModel(
         emit(cur.copy(
             theme = theme,
             appearance = appearance,
-            showWaitingPulse = showWaitingPulse,
             paneFontSize = fontSize,
             sidebarWidth = sidebarW,
             sidebarCollapsed = sidebarCol,

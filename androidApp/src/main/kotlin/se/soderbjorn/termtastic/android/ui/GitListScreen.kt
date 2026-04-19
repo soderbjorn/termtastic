@@ -38,8 +38,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -241,13 +242,14 @@ private fun GitFileRow(entry: GitFileEntry, onClick: () -> Unit) {
  */
 @Composable
 private fun StatusBadge(status: GitFileStatus) {
-    val (icon, color) = when (status) {
+    val pair: Pair<ImageVector, Color> = when (status) {
         GitFileStatus.Modified  -> Icons.Filled.Edit to Color(0xFFFFD60A)
         GitFileStatus.Added     -> Icons.Filled.Add to Color(0xFF32D74B)
         GitFileStatus.Deleted   -> Icons.Filled.Delete to Color(0xFFFF453A)
-        GitFileStatus.Renamed   -> Icons.Filled.SwapHoriz to Color(0xFF64D2FF)
+        GitFileStatus.Renamed   -> Icons.Filled.Refresh to Color(0xFF64D2FF)
         GitFileStatus.Untracked -> Icons.Filled.Add to Color(0xFF8E8E93)
     }
+    val (icon, color) = pair
     Icon(
         imageVector = icon,
         contentDescription = status.name,

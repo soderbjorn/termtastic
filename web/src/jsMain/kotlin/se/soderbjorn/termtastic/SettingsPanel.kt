@@ -97,7 +97,7 @@ fun openSettingsPanel() {
     themeSection.className = "settings-section"
     val themeTitle = document.createElement("div") as HTMLElement
     themeTitle.className = "settings-label"
-    themeTitle.textContent = "Theme"
+    themeTitle.textContent = "Color themes"
     themeSection.appendChild(themeTitle)
 
     val slotEntries = listOf(
@@ -189,6 +189,87 @@ fun openSettingsPanel() {
     })
 
     themeSection.appendChild(themeGrid)
+
+    // ─── Theme configurations ──────────────────────────────────────
+    val configSection = document.createElement("div") as HTMLElement
+    configSection.className = "settings-section"
+    val configLabel = document.createElement("div") as HTMLElement
+    configLabel.className = "settings-label"
+    configLabel.textContent = "Theme configurations"
+    configSection.appendChild(configLabel)
+
+    val configList = document.createElement("div") as HTMLElement
+    configList.className = "settings-theme-configs-list"
+    configSection.appendChild(configList)
+
+    // Local cache of fetched configs, used for name collision checks and deletes.
+    var cachedConfigs = mutableMapOf<String, dynamic>()
+
+    fun renderConfigList() {
+        configList.innerHTML = ""
+        if (cachedConfigs.isEmpty()) {
+            val empty = document.createElement("div") as HTMLElement
+            empty.className = "settings-theme-configs-empty"
+            empty.textContent = "No saved configurations"
+            configList.appendChild(empty)
+            return
+        }
+        for ((name, config) in cachedConfigs) {
+            val row = document.createElement("div") as HTMLElement
+            row.className = "settings-theme-config-row"
+
+            val nameEl = document.createElement("span") as HTMLElement
+            nameEl.className = "settings-theme-config-name"
+            nameEl.textContent = name
+            nameEl.addEventListener("click", {
+                applyThemeConfig(config)
+                renderThemeGrid()
+            })
+            row.appendChild(nameEl)
+
+            val deleteBtn = document.createElement("button") as HTMLElement
+            deleteBtn.className = "settings-theme-config-delete"
+            deleteBtn.innerHTML = "&times;"
+            deleteBtn.title = "Delete"
+            deleteBtn.addEventListener("click", { ev: Event ->
+                ev.stopPropagation()
+                showConfirmDialog(
+                    title = "Delete configuration",
+                    message = "Delete theme configuration <b>$name</b>?",
+                    confirmLabel = "Delete",
+                ) {
+                    cachedConfigs.remove(name)
+                    persistThemeConfigs(cachedConfigs) { renderConfigList() }
+                    renderConfigList()
+                }
+            })
+            row.appendChild(deleteBtn)
+
+            configList.appendChild(row)
+        }
+    }
+
+    // Fetch configs when panel opens
+    fetchThemeConfigs { configs ->
+        cachedConfigs = configs.toMutableMap()
+        renderConfigList()
+    }
+
+    val saveBtn = document.createElement("button") as HTMLElement
+    saveBtn.className = "settings-choice-btn settings-save-config-btn"
+    saveBtn.textContent = "Save current\u2026"
+    saveBtn.addEventListener("click", {
+        showSaveThemeConfigDialog(cachedConfigs.keys) { savedName ->
+            // Re-fetch to pick up the just-saved entry
+            fetchThemeConfigs { configs ->
+                cachedConfigs = configs.toMutableMap()
+                renderConfigList()
+            }
+        }
+    })
+    configSection.appendChild(saveBtn)
+
+    body.appendChild(configSection)
     body.appendChild(themeSection)
 
     // ─── Appearance ─────────────────────────────────────────────────
@@ -251,36 +332,6 @@ fun openSettingsPanel() {
     sizeSection.appendChild(sizeRow)
     body.appendChild(sizeSection)
 
-    // ─── Waiting pulse ──────────────────────────────────────────────
-    val pulseSection = document.createElement("div") as HTMLElement
-    pulseSection.className = "settings-section"
-    val pulseLabel = document.createElement("div") as HTMLElement
-    pulseLabel.className = "settings-label"
-    pulseLabel.textContent = "Waiting-for-input pulse"
-    pulseSection.appendChild(pulseLabel)
-
-    val pulseRow = document.createElement("div") as HTMLElement
-    pulseRow.className = "settings-button-row"
-    fun renderPulseRow() {
-        pulseRow.innerHTML = ""
-        val enabled = appVm.stateFlow.value.showWaitingPulse
-        for ((label, value) in listOf("On" to true, "Off" to false)) {
-            val btn = document.createElement("button") as HTMLElement
-            btn.className = "settings-choice-btn" + if (value == enabled) " selected" else ""
-            btn.textContent = label
-            btn.addEventListener("click", {
-                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setShowWaitingPulse(value) }
-                applyPaneStatusClasses()
-                updateStateIndicators(appVm.stateFlow.value.sessionStates)
-                renderPulseRow()
-            })
-            pulseRow.appendChild(btn)
-        }
-    }
-    renderPulseRow()
-    pulseSection.appendChild(pulseRow)
-    body.appendChild(pulseSection)
-
     // ─── Desktop notifications ─────────────────────────────────────
     val notifSection = document.createElement("div") as HTMLElement
     notifSection.className = "settings-section"
@@ -308,6 +359,13 @@ fun openSettingsPanel() {
     renderNotifRow()
     notifSection.appendChild(notifRow)
     body.appendChild(notifSection)
+
+    // ─── Server settings ──────────────────────────────────────────
+    val srvBtn = document.createElement("button") as HTMLElement
+    srvBtn.className = "settings-server-btn"
+    srvBtn.textContent = "Server settings\u2026"
+    srvBtn.addEventListener("click", { launchCmd(WindowCommand.OpenSettings) })
+    body.appendChild(srvBtn)
 
     // ─── Developer Tools (hidden until activated) ───────────────────
     val devSection = document.createElement("div") as HTMLElement
@@ -345,12 +403,6 @@ fun openSettingsPanel() {
     body.appendChild(devSection)
 
     panel.appendChild(body)
-
-    val srvBtn = document.createElement("button") as HTMLElement
-    srvBtn.className = "settings-server-btn"
-    srvBtn.textContent = "Server settings\u2026"
-    srvBtn.addEventListener("click", { launchCmd(WindowCommand.OpenSettings) })
-    panel.appendChild(srvBtn)
 
     appBody.appendChild(panel)
     settingsPanel = panel

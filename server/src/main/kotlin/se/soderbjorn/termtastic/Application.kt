@@ -912,6 +912,99 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
         is WindowCommand.SetStateOverride -> TerminalSessions.setStateOverride(cmd.sessionId, cmd.mode)
         is WindowCommand.OpenSettings -> SettingsDialog.show(ctx.settingsRepo)
         is WindowCommand.RefreshUsage -> ctx.usageMonitor.requestRefresh()
+        is WindowCommand.GetWorktreeDefaults -> {
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
+            val cwd = leaf.cwd
+            if (cwd.isNullOrBlank()) {
+                ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "No working directory for this pane"))
+                return
+            }
+            val cwdPath = java.nio.file.Paths.get(cwd)
+            val repoRoot = GitCatalog.getRepoRoot(cwdPath)
+            if (repoRoot == null) {
+                ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "Not inside a git repository"))
+                return
+            }
+            val repoName = repoRoot.fileName?.toString() ?: "repo"
+            val parentDir = repoRoot.parent?.toString() ?: cwd
+            val siblingPath = "$parentDir/$repoName-"
+            val dotWorktreesPath = "$parentDir/.worktrees/$repoName-"
+            val hasChanges = GitCatalog.hasUncommittedChanges(cwdPath)
+            ctx.send(WindowEnvelope.WorktreeDefaults(
+                paneId = cmd.paneId,
+                repoName = repoName,
+                siblingPath = siblingPath,
+                dotWorktreesPath = dotWorktreesPath,
+                hasUncommittedChanges = hasChanges,
+            ))
+        }
+        is WindowCommand.CreateWorktree -> {
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
+            val cwd = leaf.cwd
+            if (cwd.isNullOrBlank()) {
+                ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "No working directory for this pane"))
+                return
+            }
+            val cwdPath = java.nio.file.Paths.get(cwd)
+            val repoRoot = GitCatalog.getRepoRoot(cwdPath)
+            if (repoRoot == null) {
+                ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "Not inside a git repository"))
+                return
+            }
+            if (!GitCatalog.isValidBranchName(cmd.branchName)) {
+                ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "Invalid branch name: ${cmd.branchName}"))
+                return
+            }
+            val worktreePath = java.nio.file.Paths.get(cmd.worktreePath)
+            if (java.nio.file.Files.exists(worktreePath)) {
+                ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "Path already exists: ${cmd.worktreePath}"))
+                return
+            }
+
+            // Optionally stash uncommitted changes before creating the worktree.
+            var stashed = false
+            if (cmd.migrateChanges && GitCatalog.hasUncommittedChanges(repoRoot)) {
+                stashed = GitCatalog.stashPush(repoRoot, "termtastic-worktree-migrate")
+                if (!stashed) {
+                    ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "Failed to stash uncommitted changes"))
+                    return
+                }
+            }
+
+            val createError = GitCatalog.createWorktree(repoRoot, cmd.branchName, worktreePath)
+            if (createError != null) {
+                // Restore stashed changes on failure.
+                if (stashed) GitCatalog.stashPop(repoRoot)
+                ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, createError))
+                return
+            }
+
+            // Apply stashed changes in the new worktree.
+            if (stashed) {
+                val popError = GitCatalog.stashPop(worktreePath)
+                if (popError != null) {
+                    // Worktree was created but stash pop failed — report partial success.
+                    ctx.send(WindowEnvelope.WorktreeError(
+                        cmd.paneId,
+                        "Worktree created but failed to migrate changes: $popError\n" +
+                            "Your changes are still in the stash. Run 'git stash pop' manually."
+                    ))
+                    return
+                }
+            }
+
+            // Switch the pane's cwd to the new worktree.
+            val newCwd = worktreePath.toAbsolutePath().toString()
+            if (leaf.sessionId != null) {
+                // Terminal pane: write cd command to the PTY shell.
+                val cdCmd = "cd '${newCwd.replace("'", "'\\''")}'\n"
+                TerminalSessions.get(leaf.sessionId)?.write(cdCmd.toByteArray())
+            } else {
+                // File browser / git pane: update cwd directly.
+                WindowState.updateLeafCwd(cmd.paneId, newCwd)
+            }
+            ctx.send(WindowEnvelope.WorktreeCreated(paneId = cmd.paneId, newCwd = newCwd))
+        }
     }
 }
 

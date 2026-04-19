@@ -169,6 +169,54 @@ sealed class WindowEnvelope {
         val paneId: String,
         val message: String,
     ) : WindowEnvelope()
+
+    /**
+     * Response to [WindowCommand.GetWorktreeDefaults]: pre-computed default values
+     * for the "Create Worktree" dialog so the client can pre-populate path fields
+     * and conditionally show the "migrate changes" checkbox.
+     *
+     * @param paneId the pane that requested the defaults
+     * @param repoName the basename of the git repository root directory
+     * @param siblingPath default worktree path as a sibling of the repo (e.g. `../repo-branch`)
+     * @param dotWorktreesPath default worktree path under a `.worktrees/` directory
+     * @param hasUncommittedChanges `true` if the working directory has staged, unstaged, or untracked changes
+     */
+    @Serializable
+    @SerialName("worktreeDefaults")
+    data class WorktreeDefaults(
+        val paneId: String,
+        val repoName: String,
+        val siblingPath: String,
+        val dotWorktreesPath: String,
+        val hasUncommittedChanges: Boolean,
+    ) : WindowEnvelope()
+
+    /**
+     * Success response after a git worktree has been created. The server has
+     * already updated the pane's cwd; this envelope is informational.
+     *
+     * @param paneId the pane whose cwd was changed to the new worktree
+     * @param newCwd the absolute path of the newly created worktree
+     */
+    @Serializable
+    @SerialName("worktreeCreated")
+    data class WorktreeCreated(
+        val paneId: String,
+        val newCwd: String,
+    ) : WindowEnvelope()
+
+    /**
+     * Error response when creating a git worktree fails.
+     *
+     * @param paneId the pane that initiated the failed worktree creation
+     * @param message human-readable error description
+     */
+    @Serializable
+    @SerialName("worktreeError")
+    data class WorktreeError(
+        val paneId: String,
+        val message: String,
+    ) : WindowEnvelope()
 }
 
 /**

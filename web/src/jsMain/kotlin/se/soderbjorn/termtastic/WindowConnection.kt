@@ -33,6 +33,9 @@ import org.w3c.dom.HTMLElement
  * - "gitList": updates the changed files list and re-renders it
  * - "gitDiff": renders the diff in the appropriate mode (inline/split/graphical)
  * - "gitError": shows an error message in the diff panel
+ * - "worktreeDefaults": opens the worktree creation dialog with server-computed defaults
+ * - "worktreeCreated": no-op (config push handles the UI update)
+ * - "worktreeError": shows an error dialog
  *
  * @param type the message type string, or null
  * @param parsed the dynamic parsed message object
@@ -120,6 +123,23 @@ fun handlePaneContentMessage(type: String?, parsed: dynamic): Boolean {
                 renderGitList(paneId, view, state ?: GitPaneState())
             }
         }
+        "worktreeDefaults" -> {
+            showWorktreeDialog(
+                paneId = parsed.paneId as String,
+                repoName = parsed.repoName as String,
+                siblingBase = parsed.siblingPath as String,
+                dotWorktreesBase = parsed.dotWorktreesPath as String,
+                hasUncommittedChanges = parsed.hasUncommittedChanges as Boolean,
+            )
+        }
+        "worktreeCreated" -> {
+            // The server already updated the pane's cwd; the config push
+            // will re-render everything. Nothing extra needed here.
+        }
+        "worktreeError" -> {
+            val message = parsed.message as String
+            showConfirmDialog("Worktree Error", message, "OK") {}
+        }
         else -> return false
     }
     return true
@@ -196,7 +216,7 @@ fun renderConfig(config: dynamic) {
 
     val savedIndicator = tabBar.querySelector(".tab-active-indicator") as? HTMLElement
     savedIndicator?.let { it.parentElement?.removeChild(it) }
-    val staleMenus = document.querySelectorAll(".tab-menu-list")
+    val staleMenus = document.querySelectorAll(".tab-menu-list, .pane-split-flyout")
     for (i in 0 until staleMenus.length) {
         val el = staleMenus.item(i) as HTMLElement; el.parentElement?.removeChild(el)
     }
@@ -459,7 +479,7 @@ fun connectWindow() {
                 is WindowEnvelope.UiSettings -> {
                     // Handled reactively: the AppBackingViewModel updates its
                     // state from this envelope, and the stateFlow collector in
-                    // main.kt calls applyAll() + applyPaneStatusClasses().
+                    // main.kt calls applyAll().
                 }
                 else -> {
                     val json = windowJson.encodeToString(envelope)

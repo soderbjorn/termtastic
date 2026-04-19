@@ -137,7 +137,7 @@ fun renderGitList(paneId: String, view: GitPaneView, state: GitPaneState) {
         childrenEl.className = "git-list-section-children"
         if (isCollapsed) childrenEl.classList.add("collapsed-tree")
 
-        headline.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+        headline.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
         headline.addEventListener("click", { _ ->
             if (sectionKey in collapsedGitSections) {
                 collapsedGitSections.remove(sectionKey)
@@ -181,7 +181,7 @@ fun renderGitList(paneId: String, view: GitPaneView, state: GitPaneState) {
             item.appendChild(badge)
             item.appendChild(name)
 
-            item.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+            item.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
             item.addEventListener("click", { _ -> launchCmd(WindowCommand.GitDiff(paneId = paneId, filePath = filePath)) })
             childrenEl.appendChild(item)
         }
@@ -706,7 +706,7 @@ fun buildGitView(paneId: String, leaf: dynamic, headerEl: HTMLElement? = null): 
     fun makeFlyoutBtn(titleText: String, svg: String, extraClass: String = ""): Pair<HTMLElement, HTMLElement> {
         val wrap = document.createElement("div") as HTMLElement
         wrap.className = "pane-flyout-wrap"
-        wrap.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+        wrap.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
         val btn = document.createElement("button") as HTMLElement
         btn.className = "pane-action-btn" + (if (extraClass.isNotEmpty()) " $extraClass" else "")
         btn.setAttribute("type", "button"); btn.setAttribute("title", titleText); btn.innerHTML = svg
@@ -818,7 +818,7 @@ fun buildGitView(paneId: String, leaf: dynamic, headerEl: HTMLElement? = null): 
     autoRefreshBtn.className = "pane-action-btn" + if (initialAutoRefresh) " active" else ""
     autoRefreshBtn.setAttribute("type", "button"); autoRefreshBtn.setAttribute("title", "Auto-refresh")
     autoRefreshBtn.innerHTML = iconAutoRefresh
-    autoRefreshBtn.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+    autoRefreshBtn.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
     autoRefreshBtn.addEventListener("click", { ev ->
         ev.stopPropagation()
         val nowOn = !autoRefreshBtn.classList.contains("active")
@@ -831,7 +831,7 @@ fun buildGitView(paneId: String, leaf: dynamic, headerEl: HTMLElement? = null): 
     refreshBtn.className = "pane-action-btn"
     refreshBtn.setAttribute("type", "button"); refreshBtn.setAttribute("title", "Refresh")
     refreshBtn.innerHTML = """<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8a6 6 0 0 1 10.5-3.9"/><polyline points="13,2 13,5 10,5"/><path d="M14 8a6 6 0 0 1 -10.5 3.9"/><polyline points="3,14 3,11 6,11"/></svg>"""
-    refreshBtn.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+    refreshBtn.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
     refreshBtn.addEventListener("click", { ev ->
         ev.stopPropagation()
         launchCmd(WindowCommand.GitList(paneId = paneId))
@@ -874,7 +874,9 @@ fun buildGitView(paneId: String, leaf: dynamic, headerEl: HTMLElement? = null): 
     gitPaneViews[paneId] = view
     renderGitList(paneId, view, state)
     if (state.diffHtml != null) diffContent.innerHTML = state.diffHtml!!
-    launchCmd(WindowCommand.GitList(paneId = paneId))
+    if (state.entries == null) {
+        launchCmd(WindowCommand.GitList(paneId = paneId))
+    }
     if (state.selectedFilePath != null && state.diffHtml == null) {
         launchCmd(WindowCommand.GitDiff(paneId = paneId, filePath = state.selectedFilePath!!))
     }

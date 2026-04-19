@@ -6,8 +6,6 @@
  * `web/src/jsMain/resources/styles.css` (`:root` for dark, `body.appearance-light`
  * for light). Native clients (Android Compose, SwiftUI) convert them to their
  * respective `Color` types.
- *
- * @see se.soderbjorn.termtastic.client.parseShowWaitingPulse
  */
 package se.soderbjorn.termtastic.client
 

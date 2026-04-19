@@ -200,9 +200,14 @@ internal fun collectPaneIds(node: dynamic, into: HashSet<String>) {
  * @return the focused pane ID, or null if not set or tab not found
  */
 internal fun savedFocusedPaneId(tabId: String): String? {
-    val cfg = appVm.stateFlow.value.config ?: return null
-    for (tab in cfg.tabs) {
-        if (tab.id == tabId) return tab.focusedPaneId
+    // Read from currentConfig (the dynamic config set synchronously by
+    // renderConfig) rather than appVm.stateFlow.value.config, which may
+    // lag behind because the AppBackingViewModel's coroutine hasn't had a
+    // chance to process the StateFlow update yet.
+    val cfg = currentConfig ?: return null
+    val tabs = cfg.tabs as? Array<dynamic> ?: return null
+    for (tab in tabs) {
+        if ((tab.id as? String) == tabId) return tab.focusedPaneId as? String
     }
     return null
 }
@@ -251,7 +256,7 @@ internal fun markPaneFocused(cell: HTMLElement) {
 internal fun focusFirstPaneInActiveTab(): Boolean {
     val wrap = terminalWrapEl ?: return false
     val activePane = wrap.querySelector(".tab-pane.active") as? HTMLElement ?: return false
-    val activeId = appVm.stateFlow.value.config?.activeTabId
+    val activeId = (currentConfig?.activeTabId as? String) ?: appVm.stateFlow.value.config?.activeTabId
     val rememberedPaneId = activeId?.let { savedFocusedPaneId(it) }
     if (rememberedPaneId != null) {
         val entry = terminals[rememberedPaneId]
@@ -366,10 +371,13 @@ internal fun applyAppearanceClass() {
             (kotlinx.browser.document.querySelector(".settings-sidebar") as? HTMLElement)?.let { add(it) }
         }
         if (sidebarEls.isNotEmpty()) put("sidebar", sidebarEls)
-        // Tabs section covers the entire top bar (app-header + tab-bar).
+        // Tabs section covers the entire top bar (app-header + tab-bar)
+        // and the Claude usage bar at the bottom, so they share the same
+        // theme colours.
         val tabsEls = listOfNotNull(
             kotlinx.browser.document.querySelector(".app-header") as? HTMLElement,
             kotlinx.browser.document.getElementById("tab-bar") as? HTMLElement,
+            kotlinx.browser.document.getElementById("claude-usage-bar") as? HTMLElement,
         )
         if (tabsEls.isNotEmpty()) put("tabs", tabsEls)
         // Windows section covers all pane frames (header, border, controls).
@@ -449,13 +457,6 @@ internal fun applySidebarState() {
     }
 }
 
-internal fun applyPaneStatusClasses() {
-    val body = kotlinx.browser.document.body ?: return
-    body.classList.remove("show-waiting-pulse")
-    if (appVm.stateFlow.value.showWaitingPulse) {
-        body.classList.add("show-waiting-pulse")
-    }
-}
 
 /**
  * Renders an HTML snippet for a theme swatch preview, showing light and dark halves.
@@ -589,9 +590,35 @@ private fun checkStateNotifications(sessionStates: Map<String, String?>) {
     previousSessionStates.putAll(effective)
 }
 
+/** Small warning-triangle SVG shown in the spinner slot when a pane is waiting for input. */
+private const val WAITING_WARNING_SVG = """<svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12"><path d="M8 1.5 L14.5 13.5 H1.5 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><rect x="7.25" y="6" width="1.5" height="4" rx="0.5" fill="currentColor"/><circle cx="8" cy="12" r="0.85" fill="currentColor"/></svg>"""
+
+/** 14px variant of the warning triangle for pane headers. */
+private const val WAITING_WARNING_SVG_HEADER = """<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 1.5 L14.5 13.5 H1.5 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><rect x="7.25" y="6" width="1.5" height="4" rx="0.5" fill="currentColor"/><circle cx="8" cy="12" r="0.85" fill="currentColor"/></svg>"""
+
 /**
- * Updates all session state indicators (spinners for "working", opacity
- * pulsation for "waiting") across the sidebar, tab bar, and pane headers.
+ * Applies the correct class and content to a spinner element based on the
+ * given pane state: spinning border for "working", warning triangle for
+ * "waiting", or hidden for idle.
+ *
+ * @param el the spinner element
+ * @param baseClass the element's base CSS classes (without state suffixes)
+ * @param state the pane state string, or `null` for idle
+ */
+internal fun applySpinnerState(el: HTMLElement, baseClass: String, state: String?) {
+    when (state) {
+        "working" -> { el.innerHTML = ""; el.className = "$baseClass state-working" }
+        "waiting" -> {
+            val svg = if ("spinner-header" in baseClass) WAITING_WARNING_SVG_HEADER else WAITING_WARNING_SVG
+            el.innerHTML = svg; el.className = "$baseClass state-waiting"
+        }
+        else -> { el.innerHTML = ""; el.className = baseClass }
+    }
+}
+
+/**
+ * Updates all session state indicators (spinners for "working", warning
+ * icons for "waiting") across the sidebar, tab bar, and pane headers.
  *
  * Also triggers desktop notification checks and adjusts the tab bar active
  * indicator position.
@@ -607,24 +634,10 @@ internal fun updateStateIndicators(sessionStates: Map<String, String?>) {
         val spinners = document.querySelectorAll(".pane-status-spinner[data-session='$sessionId']")
         for (i in 0 until spinners.length) {
             val el = spinners.item(i) as? HTMLElement ?: continue
-            val isSidebar = el.classList.contains("spinner-sidebar")
-            val baseClass = if (isSidebar) "pane-status-spinner spinner-sidebar"
+            val baseClass = if (el.classList.contains("spinner-sidebar")) "pane-status-spinner spinner-sidebar"
                 else if (el.classList.contains("spinner-tab")) "pane-status-spinner spinner-tab"
                 else "pane-status-spinner spinner-header"
-            el.className = if (state == "working") "$baseClass state-working" else baseClass
-        }
-        val sidebarItems = document.querySelectorAll(".sidebar-pane-item[data-pane]")
-        for (i in 0 until sidebarItems.length) {
-            val item = sidebarItems.item(i) as? HTMLElement ?: continue
-            val spinner = item.querySelector(".pane-status-spinner[data-session='$sessionId']") ?: continue
-            item.classList.remove("state-waiting")
-            if (state == "waiting") item.classList.add("state-waiting")
-        }
-        val headerSpinners = document.querySelectorAll(".pane-status-spinner.spinner-header[data-session='$sessionId']")
-        for (i in 0 until headerSpinners.length) {
-            val header = (headerSpinners.item(i) as? HTMLElement)?.closest(".terminal-header") as? HTMLElement ?: continue
-            header.classList.remove("header-waiting")
-            if (state == "waiting") header.classList.add("header-waiting")
+            applySpinnerState(el, baseClass, state)
         }
     }
     val cfg = appVm.stateFlow.value.config ?: return
@@ -647,19 +660,8 @@ internal fun updateStateIndicators(sessionStates: Map<String, String?>) {
         val tabSpinners = document.querySelectorAll("[data-tab-state='$tabId']")
         for (j in 0 until tabSpinners.length) {
             val el = tabSpinners.item(j) as? HTMLElement ?: continue
-            val isSidebar = el.classList.contains("spinner-sidebar")
-            val baseClass = if (isSidebar) "pane-status-spinner spinner-sidebar" else "pane-status-spinner spinner-tab"
-            el.className = if (tabState == "working") "$baseClass state-working" else baseClass
-        }
-        val sidebarTabHeader = document.querySelector(".sidebar-tab-header[data-tab='$tabId']") as? HTMLElement
-        if (sidebarTabHeader != null) {
-            sidebarTabHeader.classList.remove("state-waiting")
-            if (tabState == "waiting") sidebarTabHeader.classList.add("state-waiting")
-        }
-        val tabBtn = document.querySelector(".tab-button[data-tab='$tabId']") as? HTMLElement
-        if (tabBtn != null) {
-            tabBtn.classList.remove("tab-waiting")
-            if (tabState == "waiting") tabBtn.classList.add("tab-waiting")
+            val baseClass = if (el.classList.contains("spinner-sidebar")) "pane-status-spinner spinner-sidebar" else "pane-status-spinner spinner-tab"
+            applySpinnerState(el, baseClass, tabState)
         }
     }
     val indicator = document.querySelector(".tab-active-indicator") as? HTMLElement

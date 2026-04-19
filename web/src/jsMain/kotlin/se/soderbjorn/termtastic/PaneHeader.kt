@@ -31,6 +31,8 @@ private val ICON_POP_OUT = """<svg viewBox="0 0 24 24" width="16" height="16" fi
 private val ICON_COPY = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>"""
 private val ICON_REFORMAT = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="1.5"/><polyline points="7 10 4 12 7 14"/><polyline points="17 10 20 12 17 14"/></svg>"""
 private val ICON_CLOSE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>"""
+/** SVG icon for the "Create worktree" button: a git branch with a plus sign. */
+private val ICON_WORKTREE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="12" r="2"/><path d="M6 8v2c0 2.2 1.8 4 4 4h4"/><line x1="6" y1="8" x2="6" y2="16"/><line x1="21" y1="9" x2="21" y2="15"/><line x1="18" y1="12" x2="24" y2="12"/></svg>"""
 
 /**
  * Creates a small icon button element for use in pane headers and flyout menus.
@@ -123,7 +125,7 @@ fun buildPaneHeader(
 
     val actions = document.createElement("div") as HTMLElement
     actions.className = "pane-actions"
-    actions.addEventListener("mousedown", { ev -> ev.stopPropagation() })
+    actions.addEventListener("mousedown", { ev -> ev.stopPropagation(); (ev.currentTarget as? HTMLElement)?.asDynamic()?.closest(".terminal-cell")?.let { cell -> markPaneFocused(cell as HTMLElement) } })
 
     fun performClose() {
         val linkedCount = if (!isLink) countPanesForSession(sessionId) else 0
@@ -175,25 +177,36 @@ fun buildPaneHeader(
         val splitWrap = document.createElement("div") as HTMLElement
         splitWrap.className = "pane-split-wrap"
 
-        val splitBtn = makeIconBtn("Pane layout", ICON_SPLIT, { _ ->
-            val open = document.querySelectorAll(".pane-split-wrap.open")
-            for (i in 0 until open.length) {
-                val other = open.item(i) as HTMLElement
-                if (other !== splitWrap) other.classList.remove("open")
-            }
-            splitWrap.classList.toggle("open")
-        })
-        splitWrap.appendChild(splitBtn)
-
         val flyout = document.createElement("div") as HTMLElement
         flyout.className = "pane-split-flyout"
+
+        val splitBtn = makeIconBtn("Pane layout", ICON_SPLIT, { ev ->
+            val btn = ev.currentTarget as HTMLElement
+            val openFlyouts = document.querySelectorAll(".pane-split-flyout.open")
+            for (i in 0 until openFlyouts.length) {
+                val other = openFlyouts.item(i) as HTMLElement
+                if (other !== flyout) other.classList.remove("open")
+            }
+            val opening = !flyout.classList.contains("open")
+            flyout.classList.toggle("open")
+            if (opening) {
+                val rect = btn.asDynamic().getBoundingClientRect()
+                val right = rect.right as Double
+                val bottom = rect.bottom as Double
+                val flyoutWidth = flyout.asDynamic().offsetWidth as Number
+                val leftPos = (right - flyoutWidth.toDouble()).coerceAtLeast(4.0)
+                flyout.style.left = "${leftPos}px"
+                flyout.style.top = "${bottom + 4}px"
+            }
+        })
+        splitWrap.appendChild(splitBtn)
 
         if (!floating) {
             val compass = document.createElement("div") as HTMLElement
             compass.className = "pane-split-compass"
             fun addDir(cssCls: String, titleTxt: String, arrowSvg: String, dir: SplitDirection) {
                 val b = makeIconBtn(titleTxt, arrowSvg, { _ ->
-                    splitWrap.classList.remove("open")
+                    flyout.classList.remove("open")
                     showPaneTypeModal(paneId, dir, null)
                 }, cssCls)
                 compass.appendChild(b)
@@ -220,7 +233,7 @@ fun buildPaneHeader(
             item.innerHTML = """<span class="pane-split-item-icon">$svg</span><span class="pane-split-item-label">$label</span>"""
             item.addEventListener("click", { ev ->
                 ev.stopPropagation()
-                splitWrap.classList.remove("open")
+                flyout.classList.remove("open")
                 onClick()
             })
             flyout.appendChild(item)
@@ -239,7 +252,7 @@ fun buildPaneHeader(
             }
         }
 
-        splitWrap.appendChild(flyout)
+        document.body?.appendChild(flyout)
         actions.appendChild(splitWrap)
     }
 
@@ -249,6 +262,10 @@ fun buildPaneHeader(
             window.asDynamic().navigator.clipboard.writeText(rel)
         }))
     }
+
+    actions.appendChild(makeIconBtn("Create worktree", ICON_WORKTREE, { _ ->
+        launchCmd(WindowCommand.GetWorktreeDefaults(paneId = paneId))
+    }))
 
     if (!popoutMode && !isPaneFloating(paneId)) {
         val isMaximized = maximizedPaneIds.values.contains(paneId)

@@ -106,7 +106,6 @@ fun initPopoutMode() {
                 }
                 is WindowEnvelope.UiSettings -> {
                     applyAll()
-                    applyPaneStatusClasses()
                 }
                 is WindowEnvelope.State -> {
                     val sid = sessionId; val c = cell
@@ -114,13 +113,7 @@ fun initPopoutMode() {
                         val state = envelope.states[sid]
                         val spinner = c.querySelector(".pane-status-spinner[data-session='$sid']") as? HTMLElement
                         if (spinner != null) {
-                            val base = "pane-status-spinner spinner-header"
-                            spinner.className = if (state == "working") "$base state-working" else base
-                        }
-                        val header = c.querySelector(".terminal-header") as? HTMLElement
-                        if (header != null) {
-                            header.classList.remove("header-waiting")
-                            if (state == "waiting") header.classList.add("header-waiting")
+                            applySpinnerState(spinner, "pane-status-spinner spinner-header", state)
                         }
                     }
                 }

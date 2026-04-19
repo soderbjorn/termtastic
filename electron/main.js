@@ -700,6 +700,14 @@ function registerGlobalShortcut() {
 }
 
 app.whenReady().then(async () => {
+  // Override the Dock icon on macOS so that dev-mode runs show the Termtastic
+  // icon instead of the generic Electron icon. (Packaged builds get this from
+  // the embedded .icns, but the Dock API is the only way to set it at runtime.)
+  // Must run after app.whenReady() — dock APIs are unavailable before that.
+  if (process.platform === "darwin" && app.dock) {
+    app.dock.setIcon(path.join(__dirname, "icons", "icon.png"));
+  }
+
   // Grant notification permissions to the app's own origin. Without this,
   // Electron denies Notification.requestPermission() by default and the
   // renderer never gets the browser permission prompt.
