@@ -84,10 +84,12 @@ internal val gitPaneStates = HashMap<String, GitPaneState>()
 internal val gitPaneViews = HashMap<String, GitPaneView>()
 internal val collapsedGitSections = HashSet<String>()
 
-// Popout / Electron detection
+// Popout / Electron detection / Multi-window
 internal var isElectronClient = false
 internal var isPopoutMode = false
 internal var popoutPaneIdParam: String? = null
+/** Screen index for multi-window support. Parsed from `?screen=N` URL param. */
+internal var screenIndex: Int = 0
 internal var proto = "ws"
 internal var authQueryParam = ""
 internal var clientTypeAtStart = "Web"
@@ -203,6 +205,9 @@ internal fun collectPaneIds(node: dynamic, into: HashSet<String>) {
  * @return the focused pane ID, or null if not set or tab not found
  */
 internal fun savedFocusedPaneId(tabId: String): String? {
+    // Per-screen focusedPaneIds take precedence over the global config value.
+    val screenFocused = appVm.stateFlow.value.screenState?.focusedPaneIds?.get(tabId)
+    if (screenFocused != null) return screenFocused
     // Read from currentConfig (the dynamic config set synchronously by
     // renderConfig) rather than appVm.stateFlow.value.config, which may
     // lag behind because the AppBackingViewModel's coroutine hasn't had a
@@ -234,7 +239,7 @@ internal fun markPaneFocused(cell: HTMLElement) {
     val tabId = tabPane?.id
     val paneId = cell.getAttribute("data-pane")
     if (!tabId.isNullOrEmpty() && !paneId.isNullOrEmpty()) {
-        launchCmd(WindowCommand.SetFocusedPane(tabId = tabId, paneId = paneId))
+        launchCmd(WindowCommand.SetScreenFocusedPane(screenIndex = screenIndex, tabId = tabId, paneId = paneId))
     }
     if (!paneId.isNullOrEmpty()) {
         val sidebar = kotlinx.browser.document.getElementById("sidebar")
@@ -259,7 +264,9 @@ internal fun markPaneFocused(cell: HTMLElement) {
 internal fun focusFirstPaneInActiveTab(): Boolean {
     val wrap = terminalWrapEl ?: return false
     val activePane = wrap.querySelector(".tab-pane.active") as? HTMLElement ?: return false
-    val activeId = (currentConfig?.activeTabId as? String) ?: appVm.stateFlow.value.config?.activeTabId
+    val activeId = appVm.stateFlow.value.screenState?.activeTabId
+        ?: (currentConfig?.activeTabId as? String)
+        ?: appVm.stateFlow.value.config?.activeTabId
     val rememberedPaneId = activeId?.let { savedFocusedPaneId(it) }
     if (rememberedPaneId != null) {
         val entry = terminals[rememberedPaneId]

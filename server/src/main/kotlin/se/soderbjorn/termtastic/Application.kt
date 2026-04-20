@@ -107,6 +107,7 @@ fun main() {
     // discard.
     val repo = SettingsRepository(AppPaths.databaseFile())
     WindowState.initialize(repo)
+    ScreenStateManager.initialize(repo)
 
     // Debounced async saver: every config mutation eventually writes one row
     // to `settings`, but bursts (drag a splitter, retitle a tab) coalesce into
@@ -120,6 +121,17 @@ fun main() {
             .collectLatest { cfg ->
                 runCatching { repo.saveWindowConfig(cfg.withBlankSessionIds()) }
                     .onFailure { LoggerFactory.getLogger("WindowPersistence").warn("Failed to persist window config", it) }
+            }
+    }
+
+    // Debounced saver for per-screen view state: same pattern as window config.
+    persistenceScope.launch {
+        ScreenStateManager.screens
+            .drop(1)
+            .debounce(2_000.milliseconds)
+            .collectLatest { states ->
+                runCatching { repo.saveScreenStates(states) }
+                    .onFailure { LoggerFactory.getLogger("ScreenPersistence").warn("Failed to persist screen states", it) }
             }
     }
 
@@ -192,6 +204,7 @@ fun main() {
         runCatching {
             runBlocking {
                 repo.saveWindowConfig(WindowState.config.value.withBlankSessionIds())
+                repo.saveScreenStates(ScreenStateManager.allScreenStates())
                 saveAllScrollback(force = true)
             }
         }
@@ -309,6 +322,20 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
             }
         }
 
+        // Per-screen view state for multi-window support. Electron fetches
+        // this on startup to decide how many windows to create and where to
+        // position them.
+        get("/api/screen-states") {
+            val token = call.readAuthToken()
+            val info = call.readClientInfo()
+            when (DeviceAuth.authorize(token, info, settingsRepo)) {
+                DeviceAuth.Decision.APPROVED ->
+                    call.respond(ScreenStateManager.allScreenStates())
+                DeviceAuth.Decision.REJECTED,
+                DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
+            }
+        }
+
         webSocket("/pty/{id}") {
             val token = call.readAuthToken()
             val info = call.readClientInfo()
@@ -420,6 +447,11 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
                     return@webSocket
                 }
             }
+            // Parse the optional ?screen=N query parameter for multi-window
+            // support. Defaults to screen 0 (primary window). Popout windows
+            // don't pass a screen param and get screen 0.
+            val screenIndex = call.request.queryParameters["screen"]?.toIntOrNull() ?: 0
+
             // Push the current config and every subsequent change. StateFlow
             // replays its current value to new collectors, so a fresh client
             // sees the latest snapshot immediately.
@@ -428,6 +460,20 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
                     val payload = windowJson.encodeToString<WindowEnvelope>(WindowEnvelope.Config(cfg))
                     send(Frame.Text(payload))
                 }
+            }
+
+            // Push per-screen view state (active tab, focused pane, sidebar,
+            // theme overrides, window bounds) so each screen gets its own
+            // independent view-layer configuration.
+            val screenPushJob = launch {
+                ScreenStateManager.screenStateFlow(screenIndex)
+                    .distinctUntilChanged()
+                    .collect { state ->
+                        val payload = windowJson.encodeToString<WindowEnvelope>(
+                            WindowEnvelope.ScreenStateMsg(state)
+                        )
+                        send(Frame.Text(payload))
+                    }
             }
 
             // Push AI assistant state (working/waiting/idle) for every
@@ -448,9 +494,9 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
                 }
             }
 
-            // Push UI settings (theme, appearance, sidebar width) so every
-            // renderer — including popped-out pane windows — stays in sync
-            // when the user flips dark/light mode in the main window.
+            // Push UI settings (theme, appearance, sidebar width) as a global
+            // fallback. Screens with non-null overrides in their ScreenState
+            // take precedence client-side.
             val uiSettingsPushJob = launch {
                 settingsRepo.uiSettings.collect { s ->
                     val payload = windowJson.encodeToString<WindowEnvelope>(WindowEnvelope.UiSettings(s))
@@ -468,6 +514,7 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
                 scope = this,
                 settingsRepo = settingsRepo,
                 usageMonitor = usageMonitor,
+                screenIndex = screenIndex,
             )
 
             try {
@@ -477,6 +524,7 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
             } finally {
                 ctx.closeAll()
                 pushJob.cancel()
+                screenPushJob.cancel()
                 statePushJob.cancel()
                 usagePushJob.cancel()
                 uiSettingsPushJob.cancel()
@@ -550,6 +598,8 @@ internal class WindowConnectionContext(
     val scope: kotlinx.coroutines.CoroutineScope,
     val settingsRepo: SettingsRepository,
     val usageMonitor: ClaudeUsageMonitor,
+    /** The screen index for this connection, parsed from `?screen=N`. */
+    val screenIndex: Int = 0,
 ) {
     private val gitWatchers = ConcurrentHashMap<String, GitWatchHandle>()
 
@@ -907,8 +957,17 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
         is WindowCommand.PopOut -> WindowState.popOutPane(cmd.paneId)
         is WindowCommand.DockPoppedOut -> WindowState.dockPoppedOut(cmd.paneId)
         is WindowCommand.MovePaneToTab -> WindowState.movePaneToTab(cmd.paneId, cmd.targetTabId)
-        is WindowCommand.SetActiveTab -> WindowState.setActiveTab(cmd.tabId)
-        is WindowCommand.SetFocusedPane -> WindowState.setFocusedPane(cmd.tabId, cmd.paneId)
+        is WindowCommand.SetActiveTab -> {
+            // Legacy command: update both the global config (backward compat)
+            // and the connection's screen state.
+            WindowState.setActiveTab(cmd.tabId)
+            ScreenStateManager.setActiveTab(ctx.screenIndex, cmd.tabId)
+        }
+        is WindowCommand.SetFocusedPane -> {
+            // Legacy command: update both the global config and the screen.
+            WindowState.setFocusedPane(cmd.tabId, cmd.paneId)
+            ScreenStateManager.setFocusedPane(ctx.screenIndex, cmd.tabId, cmd.paneId)
+        }
         is WindowCommand.SetStateOverride -> TerminalSessions.setStateOverride(cmd.sessionId, cmd.mode)
         is WindowCommand.OpenSettings -> SettingsDialog.show(ctx.settingsRepo)
         is WindowCommand.RefreshUsage -> ctx.usageMonitor.requestRefresh()
@@ -1007,6 +1066,22 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             }
             ctx.send(WindowEnvelope.WorktreeCreated(paneId = cmd.paneId, newCwd = newCwd))
         }
+
+        // --- Per-screen commands (multi-window support) ---------------------
+        is WindowCommand.SetScreenActiveTab ->
+            ScreenStateManager.setActiveTab(cmd.screenIndex, cmd.tabId)
+        is WindowCommand.SetScreenFocusedPane ->
+            ScreenStateManager.setFocusedPane(cmd.screenIndex, cmd.tabId, cmd.paneId)
+        is WindowCommand.SetScreenSidebar ->
+            ScreenStateManager.setSidebar(cmd.screenIndex, cmd.collapsed, cmd.width)
+        is WindowCommand.SetScreenBounds ->
+            ScreenStateManager.setBounds(cmd.screenIndex, cmd.bounds)
+        is WindowCommand.SetScreenTheme ->
+            ScreenStateManager.setTheme(cmd.screenIndex, cmd.settings)
+        is WindowCommand.CloseScreen ->
+            ScreenStateManager.closeScreen(cmd.screenIndex)
+        is WindowCommand.OpenScreen ->
+            ScreenStateManager.openScreen(cmd.screenIndex)
     }
 }
 

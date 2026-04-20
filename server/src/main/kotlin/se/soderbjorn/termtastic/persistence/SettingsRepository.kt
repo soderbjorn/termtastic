@@ -33,6 +33,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
+import se.soderbjorn.termtastic.ScreenState
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.db.TermtasticDatabase
 import se.soderbjorn.termtastic.windowJson
@@ -302,6 +303,36 @@ class SettingsRepository(dbFile: File) {
         putString(CLAUDE_USAGE_POLL_KEY, value.toString())
     }
 
+    // --- Per-screen state persistence -----------------------------------------
+
+    /**
+     * Load the persisted list of screen states from SQLite.
+     *
+     * @return the deserialised list, or null if no screen states have been saved
+     * @see saveScreenStates
+     */
+    fun loadScreenStates(): List<ScreenState>? {
+        val raw = getString(SCREEN_STATES_KEY) ?: return null
+        return try {
+            windowJson.decodeFromString<List<ScreenState>>(raw)
+        } catch (t: Throwable) {
+            log.warn("Failed to decode persisted screen states; returning null", t)
+            null
+        }
+    }
+
+    /**
+     * Persist the list of screen states to SQLite. Runs on [Dispatchers.IO] to
+     * avoid blocking the caller.
+     *
+     * @param states the screen states to persist
+     * @see loadScreenStates
+     */
+    suspend fun saveScreenStates(states: List<ScreenState>) = withContext(Dispatchers.IO) {
+        val json = windowJson.encodeToString<List<ScreenState>>(states)
+        database.settingsQueries.upsert(SCREEN_STATES_KEY, json)
+    }
+
     companion object {
         internal const val WINDOW_CONFIG_KEY_V1 = "window.config.v1"
         internal const val WINDOW_CONFIG_KEY_V2 = "window.config.v2"
@@ -310,5 +341,6 @@ class SettingsRepository(dbFile: File) {
         private const val UI_SETTINGS_KEY = "ui.settings.v1"
         private const val ALLOW_REMOTE_KEY = "network.allow_remote.v1"
         private const val CLAUDE_USAGE_POLL_KEY = "claude.usage_poll.v1"
+        private const val SCREEN_STATES_KEY = "screens.v1"
     }
 }

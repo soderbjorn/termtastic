@@ -97,6 +97,7 @@ private fun start() {
     val urlSearch = js("new URLSearchParams(window.location.search)")
     popoutPaneIdParam = (urlSearch.get("popout") as? String)?.takeIf { it.isNotEmpty() }
     isPopoutMode = popoutPaneIdParam != null
+    screenIndex = (urlSearch.get("screen") as? String)?.toIntOrNull() ?: 0
 
     if (isPopoutMode) {
         document.body?.classList?.add("popout-mode")
@@ -111,7 +112,7 @@ private fun start() {
         authToken = authTokenForSending(),
         identity = ClientIdentity(type = clientTypeAtStart),
     )
-    windowSocket = termtasticClient.openWindowSocket()
+    windowSocket = termtasticClient.openWindowSocket(screenIndex = screenIndex)
 
     val webSettingsPersister = object : SettingsPersister {
         private fun postSettings(body: dynamic) {
@@ -394,6 +395,23 @@ private fun start() {
     if (electronApiForPopout?.onPopoutClosed != null) {
         electronApiForPopout.onPopoutClosed { paneId: String ->
             launchCmd(WindowCommand.DockPoppedOut(paneId = paneId))
+        }
+    }
+
+    // Electron window bounds persistence: relay move/resize from main process
+    // to the server so window positions survive restarts.
+    val electronApiForBounds = window.asDynamic().electronApi
+    if (electronApiForBounds?.onWindowBoundsChanged != null) {
+        electronApiForBounds.onWindowBoundsChanged { bounds: dynamic ->
+            val idx = (bounds.screenIndex as? Int) ?: screenIndex
+            val sb = ScreenBounds(
+                x = (bounds.x as? Int) ?: 0,
+                y = (bounds.y as? Int) ?: 0,
+                width = (bounds.width as? Int) ?: 1280,
+                height = (bounds.height as? Int) ?: 800,
+                displayId = bounds.displayId as? String,
+            )
+            launchCmd(WindowCommand.SetScreenBounds(screenIndex = idx, bounds = sb))
         }
     }
 

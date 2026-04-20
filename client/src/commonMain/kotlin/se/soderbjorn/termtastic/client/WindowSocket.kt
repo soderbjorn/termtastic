@@ -57,6 +57,8 @@ import se.soderbjorn.termtastic.WindowEnvelope
 class WindowSocket internal constructor(
     private val client: TermtasticClient,
     private val path: String,
+    /** Screen index for multi-window support, appended to the WS URL. */
+    private val screenIndex: Int = 0,
 ) {
     /**
      * Forwarded from [TermtasticClient.windowState] so existing call sites
@@ -114,7 +116,7 @@ class WindowSocket internal constructor(
             var attempt = 0
             while (!closed) {
                 try {
-                    val url = client.wsUrlWithAuth(path)
+                    val url = client.wsUrlWithAuth(path) + "&screen=$screenIndex"
                     println("WindowSocket: opening $url (attempt ${attempt + 1})")
                     val session = client.httpClient.webSocketSession(url)
                     println("WindowSocket: handshake complete for $url")
@@ -139,6 +141,7 @@ class WindowSocket internal constructor(
                             is WindowEnvelope.GitDiffResult,
                             is WindowEnvelope.GitError,
                             is WindowEnvelope.UiSettings,
+                            is WindowEnvelope.ScreenStateMsg,
                             is WindowEnvelope.WorktreeDefaults,
                             is WindowEnvelope.WorktreeCreated,
                             is WindowEnvelope.WorktreeError -> Unit

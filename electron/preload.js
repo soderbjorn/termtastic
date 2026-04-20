@@ -73,4 +73,27 @@ contextBridge.exposeInMainWorld("electronApi", {
    */
   onPopoutClosed: (callback) =>
     ipcRenderer.on("popout-closed", (_event, paneId) => callback(paneId)),
+
+  // --- Multi-window (screen) support ----------------------------------------
+
+  /**
+   * Returns the screen index assigned to this BrowserWindow by the main
+   * process. Screen 0 is the primary window; higher indices are additional
+   * windows created via "New Window".
+   *
+   * @returns {Promise<number>} The screen index for this window.
+   */
+  getScreenIndex: () => ipcRenderer.invoke("get-screen-index"),
+
+  /**
+   * Registers a callback for when the OS window is moved or resized.
+   *
+   * The renderer uses this to send `SetScreenBounds` commands to the server
+   * so window position/size is persisted across restarts.
+   *
+   * @param {function({ screenIndex: number, x: number, y: number, width: number, height: number, displayId: string|null }): void} callback
+   *   Invoked with the new bounds and display information.
+   */
+  onWindowBoundsChanged: (callback) =>
+    ipcRenderer.on("window-bounds-changed", (_event, bounds) => callback(bounds)),
 });

@@ -49,6 +49,10 @@ if (!app.requestSingleInstanceLock()) {
 }
 app.on("second-instance", () => showAndFocus());
 
+/** @type {Map<number, Electron.BrowserWindow>} screenIndex -> BrowserWindow */
+const screenWindows = new Map();
+/** Legacy alias: screen 0's window. Used in a few places that only care about
+ *  the "primary" window (global shortcut, single-instance refocus). */
 let mainWindow = null;
 
 // --- Embedded server bootstrap ----------------------------------------------
@@ -388,13 +392,72 @@ function buildAppMenu() {
     {
       label: "Window",
       submenu: [
+        {
+          label: "New Window",
+          accelerator: "CmdOrCtrl+Shift+N",
+          click: () => createNewScreen(),
+        },
+        { type: "separator" },
         { role: "minimize" },
         { role: "zoom" },
         ...(isMac ? [{ type: "separator" }, { role: "front" }] : [{ role: "close" }]),
+        ...buildScreenWindowEntries(),
       ],
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+/**
+ * Builds the per-screen-window entries appended to the Window menu.
+ *
+ * macOS normally populates this list automatically via `role: 'windowMenu'`,
+ * but that role can't be combined with our custom "New Window" item — so we
+ * maintain the list by hand. The focused window gets a checkmark; clicking an
+ * entry brings that window forward. {@link rebuildMenuOnWindowChanges} wires
+ * the rebuild triggers so entries stay in sync with `screenWindows`.
+ *
+ * @returns {Array<Electron.MenuItemConstructorOptions>} Menu items to append
+ *   (empty if no screen windows are open). Includes a leading separator when
+ *   non-empty.
+ */
+function buildScreenWindowEntries() {
+  const entries = [];
+  const sorted = [...screenWindows.entries()].sort(([a], [b]) => a - b);
+  for (const [idx, win] of sorted) {
+    if (win.isDestroyed()) continue;
+    const baseTitle = win.getTitle() || APP_NAME;
+    const label = idx === 0 ? baseTitle : `${baseTitle} — Screen ${idx + 1}`;
+    entries.push({
+      label,
+      type: "checkbox",
+      checked: win.isFocused(),
+      click: () => {
+        if (win.isDestroyed()) return;
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+      },
+    });
+  }
+  return entries.length > 0 ? [{ type: "separator" }, ...entries] : [];
+}
+
+/**
+ * Registers listeners on a screen window so the application menu stays in
+ * sync with its title and focus state.
+ *
+ * Called from {@link createScreenWindow} right after a window is added to
+ * `screenWindows`. The window's `closed` handler rebuilds the menu one last
+ * time after the map entry is removed.
+ *
+ * @param {Electron.BrowserWindow} win - The screen window to track.
+ */
+function rebuildMenuOnWindowChanges(win) {
+  const rebuild = () => buildAppMenu();
+  win.on("focus", rebuild);
+  win.on("blur", rebuild);
+  win.webContents.on("page-title-updated", rebuild);
 }
 
 // --- Popout windows ---------------------------------------------------------
@@ -435,11 +498,13 @@ ipcMain.handle("popout-pane", (_event, { paneId, title }) => {
 
   popout.on("closed", () => {
     popoutWindows.delete(paneId);
-    // User hit the red X (or the popout loaded a new URL). Tell the main
-    // window to dock the pane back so the PTY isn't orphaned. If the main
-    // window itself is gone (app quitting), skip the send.
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("popout-closed", paneId);
+    // User hit the red X (or the popout loaded a new URL). Tell all screen
+    // windows to dock the pane back so the PTY isn't orphaned. Broadcast
+    // to all screens since any of them may hold the tab containing this pane.
+    for (const [, win] of screenWindows) {
+      if (!win.isDestroyed()) {
+        win.webContents.send("popout-closed", paneId);
+      }
     }
   });
 });
@@ -452,21 +517,23 @@ ipcMain.handle("close-popout", (_event, paneId) => {
 // ----------------------------------------------------------------------------
 
 /**
- * Creates the main application BrowserWindow and loads the web app.
+ * Creates a BrowserWindow for a given screen index and loads the web app.
  *
  * The window is configured with context isolation and no Node integration
  * for security; renderer-side Electron APIs are exposed exclusively through
  * the preload script. A `did-fail-load` listener is attached to show a
  * user-friendly "server unreachable" page if the backend cannot be reached.
  *
- * Called by {@link ensureServerThenCreateWindow} once the server is confirmed
- * reachable (or on error, to display a diagnostic page), and by
- * {@link showAndFocus} when the window was previously closed on macOS.
+ * @param {number} [screenIndex=0] - The screen index for multi-window support.
+ * @param {{ x?: number, y?: number, width?: number, height?: number, displayId?: string }} [bounds]
+ *   Optional saved window bounds from the server.
+ * @returns {Electron.BrowserWindow} The created window.
  */
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+function createScreenWindow(screenIndex = 0, bounds) {
+  const { screen } = require("electron");
+  const opts = {
+    width: bounds?.width || 1280,
+    height: bounds?.height || 800,
     minWidth: 720,
     minHeight: 480,
     title: "Termtastic",
@@ -476,15 +543,81 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
+  };
 
-  loadApp();
+  // Position the window at its saved location if bounds are provided.
+  if (bounds && bounds.x != null && bounds.y != null) {
+    // Validate that the saved position is within a connected display.
+    const displays = screen.getAllDisplays();
+    const target = bounds.displayId
+      ? displays.find((d) => String(d.id) === String(bounds.displayId))
+      : null;
+    const display = target || screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y });
+    const { x: dx, y: dy, width: dw, height: dh } = display.workArea;
+    // Only apply saved position if it's at least partially on-screen.
+    if (bounds.x + 100 > dx && bounds.x < dx + dw && bounds.y + 50 > dy && bounds.y < dy + dh) {
+      opts.x = bounds.x;
+      opts.y = bounds.y;
+    }
+  }
 
-  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
-    // -3 is ABORTED (e.g. an in-flight load was replaced) — ignore.
+  const win = new BrowserWindow(opts);
+  screenWindows.set(screenIndex, win);
+  if (screenIndex === 0) mainWindow = win;
+  rebuildMenuOnWindowChanges(win);
+  buildAppMenu();
+
+  const url = screenIndex === 0 ? TARGET_URL : `${TARGET_URL}?screen=${screenIndex}`;
+  win.loadURL(url);
+
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     if (errorCode === -3) return;
-    showUnreachable(errorDescription);
+    if (screenIndex === 0) showUnreachable(errorDescription);
   });
+
+  // Debounced window bounds persistence: relay move/resize events to the
+  // renderer so it can send SetScreenBounds to the server via WebSocket.
+  let boundsTimeout = null;
+  const sendBounds = () => {
+    if (win.isDestroyed()) return;
+    const b = win.getBounds();
+    const display = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
+    win.webContents.send("window-bounds-changed", {
+      screenIndex,
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      displayId: display ? String(display.id) : null,
+    });
+  };
+  const debouncedBounds = () => {
+    if (boundsTimeout) clearTimeout(boundsTimeout);
+    boundsTimeout = setTimeout(sendBounds, 1000);
+  };
+  win.on("move", debouncedBounds);
+  win.on("resize", debouncedBounds);
+
+  win.on("closed", () => {
+    screenWindows.delete(screenIndex);
+    if (screenIndex === 0) mainWindow = null;
+    buildAppMenu();
+  });
+
+  return win;
+}
+
+/**
+ * Creates the primary (screen 0) BrowserWindow. Legacy wrapper around
+ * {@link createScreenWindow} for backward compatibility with the startup
+ * flow.
+ *
+ * Called by {@link ensureServerThenCreateWindow} once the server is confirmed
+ * reachable (or on error, to display a diagnostic page), and by
+ * {@link showAndFocus} when the window was previously closed on macOS.
+ */
+function createWindow() {
+  createScreenWindow(0);
 }
 
 /**
@@ -618,6 +751,30 @@ function showUnreachable(errorDescription, hint) {
  *
  * @returns {Promise<void>}
  */
+/**
+ * Fetches persisted screen states from the server and creates BrowserWindows
+ * for any additional screens (index > 0) that were open on the last quit.
+ *
+ * Called after the primary (screen 0) window is created and the server is
+ * confirmed reachable. Errors are silently ignored — the user can always
+ * open additional windows manually.
+ */
+async function restoreAdditionalScreens() {
+  try {
+    const res = await net.fetch(`${TARGET_URL}/api/screen-states`);
+    if (!res.ok) return;
+    const screens = await res.json();
+    if (!Array.isArray(screens)) return;
+    for (const s of screens) {
+      if (s.screenIndex === 0) continue;
+      if (!s.open) continue;
+      createScreenWindow(s.screenIndex, s.bounds || undefined);
+    }
+  } catch (_) {
+    // Best effort — server may not support multi-window yet.
+  }
+}
+
 async function ensureServerThenCreateWindow() {
   buildAppMenu();
 
@@ -625,6 +782,7 @@ async function ensureServerThenCreateWindow() {
   // user-provided URL. Used by `:electron:run` to talk to the dev server.
   if (URL_OVERRIDE) {
     createWindow();
+    restoreAdditionalScreens();
     return;
   }
 
@@ -632,6 +790,7 @@ async function ensureServerThenCreateWindow() {
   // without losing PTY state" work after the first launch.
   if (await isPortListening(PROD_PORT)) {
     createWindow();
+    restoreAdditionalScreens();
     return;
   }
 
@@ -664,6 +823,10 @@ async function ensureServerThenCreateWindow() {
   ]);
 
   createWindow();
+
+  if (result.kind === "port" && result.ok) {
+    restoreAdditionalScreens();
+  }
 
   if (result.kind === "error") {
     showUnreachable(
@@ -698,6 +861,31 @@ function registerGlobalShortcut() {
     console.warn(`Failed to register global shortcut: ${SUMMON_ACCELERATOR}`);
   }
 }
+
+// --- Multi-window (screen) management ----------------------------------------
+
+/**
+ * Creates a new screen window with the next available screen index.
+ *
+ * Finds the lowest unused screen index (starting from 1, since 0 is the
+ * primary window) and creates a BrowserWindow loading the app with
+ * `?screen=N`. The server is notified via the renderer's WebSocket
+ * connection (the renderer sends an OpenScreen command on load).
+ */
+function createNewScreen() {
+  const usedIndices = new Set(screenWindows.keys());
+  let nextIndex = 1;
+  while (usedIndices.has(nextIndex)) nextIndex++;
+  createScreenWindow(nextIndex);
+}
+
+// IPC: renderer asks which screen index its window was assigned.
+ipcMain.handle("get-screen-index", (event) => {
+  for (const [idx, win] of screenWindows) {
+    if (!win.isDestroyed() && win.webContents === event.sender) return idx;
+  }
+  return 0;
+});
 
 app.whenReady().then(async () => {
   // Override the Dock icon on macOS so that dev-mode runs show the Termtastic
@@ -740,5 +928,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
+    restoreAdditionalScreens();
+  }
 });

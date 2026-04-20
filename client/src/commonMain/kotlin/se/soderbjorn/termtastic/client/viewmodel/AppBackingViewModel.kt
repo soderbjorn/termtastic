@@ -27,6 +27,8 @@ import se.soderbjorn.termtastic.Appearance
 import se.soderbjorn.termtastic.ClaudeUsageData
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
 import se.soderbjorn.termtastic.ResolvedPalette
+import se.soderbjorn.termtastic.ScreenBounds
+import se.soderbjorn.termtastic.ScreenState
 import se.soderbjorn.termtastic.SplitDirection
 import se.soderbjorn.termtastic.TerminalTheme
 import se.soderbjorn.termtastic.WindowCommand
@@ -116,6 +118,10 @@ class AppBackingViewModel(
         val chromeTheme: TerminalTheme? = null,
         val windowsTheme: TerminalTheme? = null,
         val activeTheme: TerminalTheme? = null,
+        /** Per-screen view state pushed from the server, or `null` before the
+         *  first push. Used for multi-window: active tab, focused pane, sidebar,
+         *  and theme overrides are per-screen. */
+        val screenState: ScreenState? = null,
     )
 
     /**
@@ -149,6 +155,16 @@ class AppBackingViewModel(
                             val elapsed = lastLocalSettingsChange.elapsedNow()
                             if (elapsed > 2.seconds) {
                                 applyServerUiSettings(envelope.settings)
+                            }
+                        }
+                        is WindowEnvelope.ScreenStateMsg -> {
+                            val elapsed = lastLocalSettingsChange.elapsedNow()
+                            if (elapsed > 2.seconds) {
+                                applyScreenState(envelope.state)
+                            } else {
+                                // Still persist the screenState object so
+                                // non-theme fields (bounds, etc.) update.
+                                emit(_stateFlow.value.copy(screenState = envelope.state))
                             }
                         }
                         else -> Unit
@@ -423,7 +439,109 @@ class AppBackingViewModel(
         windowSocket.send(WindowCommand.OpenSettings)
     }
 
+    // ── Per-screen commands (multi-window support) ───────────────────
+
+    /**
+     * Switch the active tab for this screen only.
+     *
+     * @param screenIndex the screen index
+     * @param tabId the tab to activate
+     */
+    suspend fun setScreenActiveTab(screenIndex: Int, tabId: String) {
+        windowSocket.send(WindowCommand.SetScreenActiveTab(screenIndex = screenIndex, tabId = tabId))
+    }
+
+    /**
+     * Record the focused pane for a tab within this screen.
+     *
+     * @param screenIndex the screen index
+     * @param tabId the tab containing the pane
+     * @param paneId the pane that received focus
+     */
+    suspend fun setScreenFocusedPane(screenIndex: Int, tabId: String, paneId: String) {
+        windowSocket.send(WindowCommand.SetScreenFocusedPane(screenIndex = screenIndex, tabId = tabId, paneId = paneId))
+    }
+
+    /**
+     * Update the sidebar state for this screen.
+     *
+     * @param screenIndex the screen index
+     * @param collapsed whether the sidebar is collapsed
+     * @param width sidebar width in pixels, or null
+     */
+    suspend fun setScreenSidebar(screenIndex: Int, collapsed: Boolean, width: Int? = null) {
+        windowSocket.send(WindowCommand.SetScreenSidebar(screenIndex = screenIndex, collapsed = collapsed, width = width))
+    }
+
+    /**
+     * Persist the window bounds for this screen.
+     *
+     * @param screenIndex the screen index
+     * @param bounds the window geometry
+     */
+    suspend fun setScreenBounds(screenIndex: Int, bounds: ScreenBounds) {
+        windowSocket.send(WindowCommand.SetScreenBounds(screenIndex = screenIndex, bounds = bounds))
+    }
+
+    /**
+     * Open a new screen or reopen a closed one.
+     *
+     * @param screenIndex the screen index to open, or -1 for auto-assign
+     */
+    suspend fun openScreen(screenIndex: Int = -1) {
+        windowSocket.send(WindowCommand.OpenScreen(screenIndex = screenIndex))
+    }
+
+    /**
+     * Mark a screen as closed (preserving its state).
+     *
+     * @param screenIndex the screen to close
+     */
+    suspend fun closeScreen(screenIndex: Int) {
+        windowSocket.send(WindowCommand.CloseScreen(screenIndex = screenIndex))
+    }
+
     // ── Internal ────────────────────────────────────────────────────
+
+    /**
+     * Apply a server-pushed [ScreenState] to the local state. Per-screen
+     * theme/appearance overrides take precedence over global settings when
+     * non-null.
+     *
+     * @param screenState the screen state received from the server
+     */
+    private fun applyScreenState(screenState: ScreenState) {
+        val cur = _stateFlow.value
+        var updated = cur.copy(screenState = screenState)
+
+        // Apply per-screen theme overrides when present.
+        fun resolveTheme(name: String?): TerminalTheme? =
+            name?.takeIf { it.isNotBlank() }
+                ?.let { n -> recommendedThemes.firstOrNull { it.name == n } }
+
+        screenState.themeName?.let { name ->
+            resolveTheme(name)?.let { updated = updated.copy(theme = it) }
+        }
+        screenState.appearance?.let { name ->
+            runCatching { Appearance.valueOf(name) }.getOrNull()
+                ?.let { updated = updated.copy(appearance = it) }
+        }
+        screenState.paneFontSize?.let { updated = updated.copy(paneFontSize = it) }
+        updated = updated.copy(
+            sidebarCollapsed = screenState.sidebarCollapsed,
+            sidebarWidth = screenState.sidebarWidth ?: updated.sidebarWidth,
+            sidebarTheme = resolveTheme(screenState.sidebarThemeName) ?: updated.sidebarTheme,
+            terminalTheme = resolveTheme(screenState.terminalThemeName) ?: updated.terminalTheme,
+            diffTheme = resolveTheme(screenState.diffThemeName) ?: updated.diffTheme,
+            fileBrowserTheme = resolveTheme(screenState.fileBrowserThemeName) ?: updated.fileBrowserTheme,
+            tabsTheme = resolveTheme(screenState.tabsThemeName) ?: updated.tabsTheme,
+            chromeTheme = resolveTheme(screenState.chromeThemeName) ?: updated.chromeTheme,
+            windowsTheme = resolveTheme(screenState.windowsThemeName) ?: updated.windowsTheme,
+            activeTheme = resolveTheme(screenState.activeThemeName) ?: updated.activeTheme,
+        )
+
+        emit(updated)
+    }
 
     /**
      * Apply a server-pushed UI settings JSON object to the local state.

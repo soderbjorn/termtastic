@@ -113,8 +113,8 @@ class TermtasticClient(
      * server pushes the first envelopes. Call [WindowSocket.close] to tear
      * down the socket and its coroutine.
      */
-    fun openWindowSocket(): WindowSocket =
-        WindowSocket(client = this, path = "/window")
+    fun openWindowSocket(screenIndex: Int = 0): WindowSocket =
+        WindowSocket(client = this, path = "/window", screenIndex = screenIndex)
 
     /**
      * Open a websocket to `/pty/{sessionId}`. Emits the 64 KB ring-buffer

@@ -217,6 +217,22 @@ sealed class WindowEnvelope {
         val paneId: String,
         val message: String,
     ) : WindowEnvelope()
+
+    /**
+     * Pushes per-screen view state to the client. Each screen (OS window)
+     * receives its own [ScreenState] containing the active tab, focused panes,
+     * sidebar configuration, theme overrides, and window bounds for that screen.
+     * Sent on initial connection and after any mutation that changes this
+     * screen's state.
+     *
+     * @param state the complete view state for the requesting screen
+     * @see ScreenState
+     * @see WindowCommand.SetScreenActiveTab
+     * @see WindowCommand.SetScreenBounds
+     */
+    @Serializable
+    @SerialName("screenState")
+    data class ScreenStateMsg(val state: ScreenState) : WindowEnvelope()
 }
 
 /**

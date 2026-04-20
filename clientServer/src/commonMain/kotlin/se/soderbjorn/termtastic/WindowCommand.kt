@@ -13,6 +13,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Mutation commands sent client → server over the `/window` websocket as
@@ -540,6 +541,108 @@ sealed class WindowCommand {
         val worktreePath: String,
         val migrateChanges: Boolean,
     ) : WindowCommand()
+
+    // --- Per-screen commands (multi-window support) -------------------------
+
+    /**
+     * Switch the active tab for a specific screen. Each screen maintains its
+     * own active tab independently so multiple windows can show different tabs.
+     *
+     * @param screenIndex the screen whose active tab should change
+     * @param tabId the id of the tab to activate
+     * @see ScreenState.activeTabId
+     */
+    @Serializable
+    @SerialName("setScreenActiveTab")
+    data class SetScreenActiveTab(val screenIndex: Int, val tabId: String) : WindowCommand()
+
+    /**
+     * Record which pane has keyboard focus within a tab for a specific screen.
+     * Each screen tracks focus independently so switching back to a tab restores
+     * the correct pane for that particular window.
+     *
+     * @param screenIndex the screen where focus changed
+     * @param tabId the tab containing the pane
+     * @param paneId the pane that received focus
+     * @see ScreenState.focusedPaneIds
+     */
+    @Serializable
+    @SerialName("setScreenFocusedPane")
+    data class SetScreenFocusedPane(
+        val screenIndex: Int,
+        val tabId: String,
+        val paneId: String,
+    ) : WindowCommand()
+
+    /**
+     * Update the sidebar collapsed/width state for a specific screen.
+     *
+     * @param screenIndex the screen whose sidebar state should change
+     * @param collapsed whether the sidebar is collapsed
+     * @param width sidebar width in pixels, or `null` to keep the current value
+     * @see ScreenState.sidebarCollapsed
+     * @see ScreenState.sidebarWidth
+     */
+    @Serializable
+    @SerialName("setScreenSidebar")
+    data class SetScreenSidebar(
+        val screenIndex: Int,
+        val collapsed: Boolean,
+        val width: Int? = null,
+    ) : WindowCommand()
+
+    /**
+     * Persist the OS window position, size, and display for a specific screen.
+     * Sent by the Electron shell when the user moves or resizes a window.
+     *
+     * @param screenIndex the screen whose bounds changed
+     * @param bounds the new window geometry and target display
+     * @see ScreenBounds
+     */
+    @Serializable
+    @SerialName("setScreenBounds")
+    data class SetScreenBounds(val screenIndex: Int, val bounds: ScreenBounds) : WindowCommand()
+
+    /**
+     * Batch-update theme and appearance overrides for a specific screen.
+     * The JSON object may contain any subset of the theme-related fields
+     * from [ScreenState] (e.g. `"themeName"`, `"appearance"`,
+     * `"sidebarThemeName"`, etc.). Keys with empty-string values clear
+     * the override (falling back to global settings).
+     *
+     * @param screenIndex the screen whose theme should change
+     * @param settings JSON object with the theme fields to update
+     * @see ScreenState
+     */
+    @Serializable
+    @SerialName("setScreenTheme")
+    data class SetScreenTheme(val screenIndex: Int, val settings: JsonObject) : WindowCommand()
+
+    /**
+     * Mark a screen as closed. The screen's persisted state is preserved
+     * (with [ScreenState.open] set to `false`) so it can be restored later
+     * via [OpenScreen]. Screen 0 cannot be closed.
+     *
+     * @param screenIndex the screen to close (must be > 0)
+     * @see ScreenState.open
+     */
+    @Serializable
+    @SerialName("closeScreen")
+    data class CloseScreen(val screenIndex: Int) : WindowCommand()
+
+    /**
+     * Open a new screen or reopen a previously closed one. If a screen with
+     * the given index exists and is closed, it is reopened with its preserved
+     * state. If no screen with that index exists, a new one is created with
+     * default settings. Pass [screenIndex] = -1 to let the server assign the
+     * next available index.
+     *
+     * @param screenIndex the screen index to open, or -1 for auto-assign
+     * @see ScreenState
+     */
+    @Serializable
+    @SerialName("openScreen")
+    data class OpenScreen(val screenIndex: Int = -1) : WindowCommand()
 }
 
 /**

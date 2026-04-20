@@ -233,8 +233,11 @@ fun renderConfig(config: dynamic) {
     updateAggregateStatus()
 
     val tabIds = tabsArr.map { it.id as String }
+    // Per-screen activeTabId takes precedence over the global config value.
+    val screenActive = appVm.stateFlow.value.screenState?.activeTabId
     val serverActive = config.activeTabId as? String
     val active = activeTabId.takeIf { it != null && tabIds.contains(it) }
+        ?: screenActive?.takeIf { tabIds.contains(it) }
         ?: serverActive?.takeIf { tabIds.contains(it) }
         ?: tabIds.first()
     activeTabId = active

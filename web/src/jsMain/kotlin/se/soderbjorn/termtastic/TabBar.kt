@@ -84,7 +84,7 @@ fun scrollActiveTabIntoView() {
 fun setActiveTab(tabId: String) {
     if (activeTabId == tabId) return
     activeTabId = tabId
-    launchCmd(WindowCommand.SetActiveTab(tabId = tabId))
+    launchCmd(WindowCommand.SetScreenActiveTab(screenIndex = screenIndex, tabId = tabId))
     val tabBar = tabBarEl ?: return
     val wrap = terminalWrapEl ?: return
     val buttons = tabBar.querySelectorAll(".tab-button")
