@@ -957,9 +957,19 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
                 ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "Invalid branch name: ${cmd.branchName}"))
                 return
             }
-            val worktreePath = java.nio.file.Paths.get(cmd.worktreePath)
+            // Resolve relative paths against repoRoot so ProcessBuilder.directory()
+            // calls later (stashPop, existence check, cd command) don't accidentally
+            // resolve against the server JVM's cwd. This matches `git worktree add`'s
+            // own behavior, which resolves relative paths against the cwd of the git
+            // process we spawn (which is repoRoot).
+            val rawWorktreePath = java.nio.file.Paths.get(cmd.worktreePath)
+            val worktreePath = if (rawWorktreePath.isAbsolute) {
+                rawWorktreePath.normalize()
+            } else {
+                repoRoot.resolve(rawWorktreePath).normalize()
+            }
             if (java.nio.file.Files.exists(worktreePath)) {
-                ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "Path already exists: ${cmd.worktreePath}"))
+                ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "Path already exists: $worktreePath"))
                 return
             }
 
@@ -995,16 +1005,17 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
                 }
             }
 
-            // Switch the pane's cwd to the new worktree.
+            // Split the originating pane and spawn a fresh terminal rooted
+            // directly in the new worktree. Avoids writing `cd` to an existing
+            // PTY, which would be silently swallowed whenever a TUI (claude,
+            // vim, less, …) holds the foreground because the keystrokes go to
+            // the TUI's stdin instead of the shell sitting behind it.
             val newCwd = worktreePath.toAbsolutePath().toString()
-            if (leaf.sessionId != null) {
-                // Terminal pane: write cd command to the PTY shell.
-                val cdCmd = "cd '${newCwd.replace("'", "'\\''")}'\n"
-                TerminalSessions.get(leaf.sessionId)?.write(cdCmd.toByteArray())
-            } else {
-                // File browser / git pane: update cwd directly.
-                WindowState.updateLeafCwd(cmd.paneId, newCwd)
-            }
+            WindowState.splitTerminal(
+                paneId = cmd.paneId,
+                direction = SplitDirection.Right,
+                initialCwd = newCwd,
+            )
             ctx.send(WindowEnvelope.WorktreeCreated(paneId = cmd.paneId, newCwd = newCwd))
         }
     }

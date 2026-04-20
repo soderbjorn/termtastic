@@ -429,10 +429,18 @@ object WindowState {
 
     /**
      * Split [paneId] and create a new terminal pane in the given [direction].
-     * The new pane inherits the cwd of the anchor pane and gets a fresh PTY.
+     * The new pane inherits the cwd of the anchor pane unless [initialCwd] is
+     * provided (used by the worktree flow to root the new pane directly in
+     * the freshly-created worktree path). Gets a fresh PTY regardless.
      * Returns the newly created [LeafNode], or null if [paneId] wasn't found.
+     *
+     * @param paneId the anchor pane to split
+     * @param direction side of the anchor the new pane should appear on
+     * @param initialCwd override for the new shell's starting cwd; null means
+     *                   inherit from the anchor pane
+     * @return the newly created leaf, or null if [paneId] is unknown
      */
-    fun splitTerminal(paneId: String, direction: SplitDirection): LeafNode? = synchronized(this) {
+    fun splitTerminal(paneId: String, direction: SplitDirection, initialCwd: String? = null): LeafNode? = synchronized(this) {
         val cfg = _config.value
         val orientation = directionToOrientation(direction)
         val newLeafFirst = direction == SplitDirection.Left || direction == SplitDirection.Up
@@ -441,14 +449,14 @@ object WindowState {
             tabs = cfg.tabs.map { tab ->
                 val root = tab.root ?: return@map tab
                 tab.copy(root = transformLeaf(root, paneId) { leaf ->
-                    val inheritedCwd = leaf.cwd
-                    val newSession = TerminalSessions.create(initialCwd = inheritedCwd)
+                    val startCwd = initialCwd ?: leaf.cwd
+                    val newSession = TerminalSessions.create(initialCwd = startCwd)
                     val fallbackTitle = "Session ${newSession.removePrefix("s")}"
                     val newLeaf = LeafNode(
                         id = newNodeId(),
                         sessionId = newSession,
-                        cwd = inheritedCwd,
-                        title = computeLeafTitle(null, inheritedCwd, fallbackTitle),
+                        cwd = startCwd,
+                        title = computeLeafTitle(null, startCwd, fallbackTitle),
                         content = TerminalContent(newSession),
                     )
                     created = newLeaf
@@ -942,6 +950,14 @@ object WindowState {
         if (changed) _config.value = newCfg
     }
 
+    private fun transformAllLeaves(node: PaneNode, f: (LeafNode) -> LeafNode): PaneNode = when (node) {
+        is LeafNode -> f(node)
+        is SplitNode -> node.copy(
+            first = transformAllLeaves(node.first, f),
+            second = transformAllLeaves(node.second, f)
+        )
+    }
+
     /**
      * Push a freshly-detected working directory for the pane backed by
      * [sessionId]. No-ops if the cwd hasn't changed; recomputes [LeafNode.title]
@@ -967,46 +983,6 @@ object WindowState {
             }
         )
         if (changed) _config.value = newCfg
-    }
-
-    /**
-     * Directly set the working directory of a leaf identified by [paneId].
-     * Unlike [updatePaneCwd] which matches by session id, this matches by pane
-     * id — needed for file-browser and git panes that have no PTY session.
-     * Recomputes the leaf title so the header reflects the new directory.
-     *
-     * @param paneId the id of the leaf pane to update
-     * @param cwd the new working directory path
-     * @see updatePaneCwd
-     */
-    fun updateLeafCwd(paneId: String, cwd: String) = synchronized(this) {
-        if (cwd.isBlank()) return@synchronized
-        val cfg = _config.value
-        var changed = false
-        fun maybeUpdate(leaf: LeafNode): LeafNode {
-            if (leaf.id != paneId || leaf.cwd == cwd) return leaf
-            changed = true
-            val newTitle = computeLeafTitle(leaf.customName, cwd, leaf.title)
-            return leaf.copy(cwd = cwd, title = newTitle)
-        }
-        val newCfg = cfg.copy(
-            tabs = cfg.tabs.map { tab ->
-                tab.copy(
-                    root = tab.root?.let { transformAllLeaves(it, ::maybeUpdate) },
-                    floating = tab.floating.map { fp -> fp.copy(leaf = maybeUpdate(fp.leaf)) },
-                    poppedOut = tab.poppedOut.map { po -> po.copy(leaf = maybeUpdate(po.leaf)) },
-                )
-            }
-        )
-        if (changed) _config.value = newCfg
-    }
-
-    private fun transformAllLeaves(node: PaneNode, f: (LeafNode) -> LeafNode): PaneNode = when (node) {
-        is LeafNode -> f(node)
-        is SplitNode -> node.copy(
-            first = transformAllLeaves(node.first, f),
-            second = transformAllLeaves(node.second, f)
-        )
     }
 
     /**

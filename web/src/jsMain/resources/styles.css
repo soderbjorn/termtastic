@@ -2430,9 +2430,8 @@ body.appearance-light .confirm-ok {
 
 /* ── Worktree dialog ── */
 .pane-modal.worktree-modal {
-    width: auto;
-    min-width: 420px;
-    max-width: 540px;
+    width: 560px;
+    max-width: 90vw;
     padding: 18px 20px 20px;
 }
 .pane-modal.worktree-modal .pane-modal-title {
