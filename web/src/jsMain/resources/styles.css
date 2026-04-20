@@ -825,6 +825,26 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     min-height: 0;
     display: flex;
     flex-direction: column;
+    /* Chrome frame: the cell fills with the titlebar's chrome colour
+       and the content-body children (.terminal / .md-view / .git-view)
+       are inset via their own margin so a 4px chrome strip shows on
+       their left/right/bottom. The titlebar needs no inset — it sits
+       flush at cell.top and spans cell.width, so its bg paints the
+       same pixels as the cell and there's nothing for the eye to
+       compare against. border-radius + overflow:hidden give subtle
+       rounded corners. Floating panes override the background below
+       to avoid a double frame. */
+    background: var(--t-chrome-titlebar, var(--surface));
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+/* Inset each body kind by 4px on sides/bottom to reveal the cell's
+   chrome-titlebar frame around it. Header stays flush at the top. */
+.terminal-cell > .terminal,
+.terminal-cell > .md-view,
+.terminal-cell > .git-view {
+    margin: 0 4px 4px;
 }
 
 .terminal-header {
@@ -834,16 +854,11 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     padding: 6px 10px;
     flex-shrink: 0;
     overflow: hidden;
-    /* Gradient titlebar: slightly lighter at the top edge, fading down to
-       the chrome surface colour. Gives the pane header a polished, lit-
-       from-above look like native macOS window chrome. */
-    background: linear-gradient(
-        180deg,
-        color-mix(in oklab, var(--t-chrome-titlebar, var(--surface)), var(--t-text-primary, #fff) 12%) 0%,
-        var(--t-chrome-titlebar, var(--surface)) 100%
-    );
-    border-bottom: 1px solid var(--t-chrome-border, var(--separator));
-    margin: 0 0 -1px 0;
+    /* Flat titlebar colour so it matches the cell's chrome frame below
+       and on the sides exactly. A gradient here would make the average
+       titlebar hue read as "different" from the flat frame even when
+       the pixel-level boundary matches. */
+    background: var(--t-chrome-titlebar, var(--surface));
 }
 
 /* Docked pane headers are HTML5-draggable so they can be dropped on a tab
@@ -1291,9 +1306,13 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     flex: 1;
     min-height: 0;
     background: var(--t-terminal-bg, var(--terminal-bg));
-    border-radius: 8px;
+    /* Fully rectangular: the .terminal-cell frame paints the rounded
+       outer window via its own border-radius + overflow:hidden and the
+       chrome-coloured frame sits between this rectangle and the cell
+       edge. Any radius here would expose tiny curved slivers of chrome
+       through the arc, which reads as a corner artefact. */
+    border-radius: 0;
     overflow: hidden;
-    box-shadow: 0 0 0 1px var(--t-chrome-border, var(--separator));
     /* Inner breathing room so text isn't flush with the rounded edge. The
        .xterm-viewport inside fills the content area; for this padding strip
        to be invisible (no second border), the .xterm-viewport's bg must
@@ -1303,25 +1322,19 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     padding: 10px 12px 12px;
 }
 
-/* Focused pane: orange ring wraps the entire cell (header + content).
-   Uses a ::after overlay so the ring sits on top of opaque child
-   backgrounds and is never clipped by parent overflow. */
+/* Focused pane: accent ring wraps the entire cell (header + content).
+   Uses `outline` + `outline-offset` rather than an inset ::after so the
+   ring paints outside the cell's box and isn't clipped by the cell's
+   own `overflow: hidden` (needed to round the chrome frame's corners).
+   outline naturally follows the element's border-radius. */
 .terminal-cell {
     position: relative;
+    outline: 2px solid transparent;
+    outline-offset: 4px;
+    transition: outline-color 120ms ease-in-out;
 }
-.terminal-cell::after {
-    content: "";
-    position: absolute;
-    inset: -4px;
-    border: 2px solid var(--t-active-accent, var(--t-accent-primary, var(--termtastic-orange)));
-    border-radius: 10px;
-    pointer-events: none;
-    z-index: 10;
-    opacity: 0;
-    transition: opacity 120ms ease-in-out;
-}
-.terminal-cell.focused::after {
-    opacity: 1;
+.terminal-cell.focused {
+    outline-color: var(--t-active-accent, var(--t-accent-primary, var(--termtastic-orange)));
 }
 
 .terminal-cell.focused .terminal-title {
@@ -1603,8 +1616,19 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     box-shadow: none;
 }
 
-.floating-pane .terminal-cell.focused::after {
-    display: none;
+/* Floating panes use their own outer border + background as the window
+   chrome, so the cell's chrome-frame insets aren't wanted inside. */
+.floating-pane .terminal-cell > .terminal,
+.floating-pane .terminal-cell > .md-view,
+.floating-pane .terminal-cell > .git-view {
+    margin: 0;
+}
+
+/* Floating panes draw their own focus indicator on the pane border, so the
+   cell's outline ring would just stack a second ring on top. Disable it. */
+.floating-pane .terminal-cell,
+.floating-pane .terminal-cell.focused {
+    outline: none;
 }
 
 .floating-pane > .terminal-cell {
@@ -1615,6 +1639,10 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
        padding here would just create a band of .floating-pane background
        around it. */
     padding: 0;
+    /* Floating panes already round their outer border and clip via
+       overflow:hidden; don't double-round the cell inside. */
+    border-radius: 0;
+    background: none;
     box-sizing: border-box;
 }
 
