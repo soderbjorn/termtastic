@@ -42,7 +42,10 @@ fun closeSettingsPanel() {
     val panel = settingsPanel ?: return
     panel.classList.remove("open")
     panel.addEventListener("transitionend", {
-        if (!panel.classList.contains("open")) panel.remove()
+        if (!panel.classList.contains("open")) {
+            panel.remove()
+            fitVisible()
+        }
     })
     settingsEscHandler?.let { document.removeEventListener("keydown", it) }
     settingsEscHandler = null
@@ -592,6 +595,7 @@ fun openSettingsPanel() {
     }
 
     window.requestAnimationFrame { panel.classList.add("open") }
+    panel.addEventListener("transitionend", { fitVisible() }, js("({once:true})"))
 
     val escHandler: (Event) -> Unit = { ev ->
         val kev = ev as? KeyboardEvent
