@@ -854,11 +854,18 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     padding: 6px 10px;
     flex-shrink: 0;
     overflow: hidden;
-    /* Flat titlebar colour so it matches the cell's chrome frame below
-       and on the sides exactly. A gradient here would make the average
-       titlebar hue read as "different" from the flat frame even when
-       the pixel-level boundary matches. */
-    background: var(--t-chrome-titlebar, var(--surface));
+    /* Gradient titlebar: slightly lighter at the top edge, fading down
+       to the chrome surface colour. Gives the pane header a polished,
+       lit-from-above look like native macOS window chrome. The gradient
+       ends on `var(--t-chrome-titlebar)` at its bottom, which is the
+       exact colour the .terminal-cell paints around the content body
+       on the sides and bottom — so the titlebar blends seamlessly into
+       the chrome frame with no visible seam. */
+    background: linear-gradient(
+        180deg,
+        color-mix(in oklab, var(--t-chrome-titlebar, var(--surface)), var(--t-text-primary, #fff) 12%) 0%,
+        var(--t-chrome-titlebar, var(--surface)) 100%
+    );
 }
 
 /* Docked pane headers are HTML5-draggable so they can be dropped on a tab
