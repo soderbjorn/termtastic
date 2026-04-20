@@ -127,9 +127,9 @@ fun TerminalTheme.resolve(isDark: Boolean): ResolvedPalette {
     val chromeBorder = overrideFor(ovr, "chrome.border", isDark) ?: borderSubtle
     val chromeShadow = overrideFor(ovr, "chrome.shadow", isDark)
         ?: if (isDark) withAlpha(BLACK, 0.55) else withAlpha(0xFF141E19L, 0.15)
-    val chromeCloseDot = 0xFFFF5F57L
-    val chromeMinDot = 0xFFFEBC2EL
-    val chromeMaxDot = 0xFF28C840L
+    val chromeCloseDot = overrideFor(ovr, "chrome.closeDot", isDark) ?: 0xFFFF5F57L
+    val chromeMinDot = overrideFor(ovr, "chrome.minDot", isDark) ?: 0xFFFEBC2EL
+    val chromeMaxDot = overrideFor(ovr, "chrome.maxDot", isDark) ?: 0xFF28C840L
 
     // ── Sidebar ────────────────────────────────────────────────────
     val sidebarBg = overrideFor(ovr, "sidebar.bg", isDark)

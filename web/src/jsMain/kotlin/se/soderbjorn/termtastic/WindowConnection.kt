@@ -465,14 +465,28 @@ fun renderConfig(config: dynamic) {
     }
 
     window.setTimeout({
-        fitVisible(); focusFirstPaneInActiveTab()
+        focusFirstPaneInActiveTab()
         if (firstRender) {
             document.querySelector(".terminal-wrap.booting")?.let { (it as HTMLElement).classList.remove("booting") }
             document.querySelector(".app-header.booting")?.let { (it as HTMLElement).classList.remove("booting") }
         }
         firstRender = false
     }, 0)
-    window.setTimeout({ fitVisible() }, 80)
+
+    // Double-rAF ensures flex layout is fully computed before fitting.
+    // A single rAF can fire before the browser finalises layout for
+    // elements that were detached and reattached (wrap.innerHTML = "").
+    // The second rAF runs in the next frame when geometry is stable,
+    // then forceReassert syncs each terminal's PTY size with the server.
+    window.requestAnimationFrame {
+        window.requestAnimationFrame {
+            fitVisible()
+            for (entry in terminals.values) {
+                val parent = (entry.term.asDynamic().element as? HTMLElement)?.offsetParent
+                if (parent != null) forceReassert(entry)
+            }
+        }
+    }
 }
 
 /**

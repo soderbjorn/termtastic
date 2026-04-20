@@ -30,6 +30,45 @@ import kotlin.js.json
 /** Key used inside the `ui.settings.v1` JSON blob to store theme configs. */
 private const val THEME_CONFIGS_KEY = "themeConfigs"
 
+/**
+ * Marker key stored inside a default theme configuration's server-side
+ * entry to indicate that it is a built-in preset whose actual theme data
+ * lives in [defaultThemeConfigs], not in the stored JSON.
+ */
+private const val DEFAULT_MARKER_KEY = "__default"
+
+/**
+ * Convert a [ThemeConfigPreset] to the same dynamic JS object format used
+ * by [applyThemeConfig], so built-in presets can be applied through the
+ * same code path as user-created configurations.
+ *
+ * @return a plain JS object with `"theme"` and `"theme.<section>"` keys
+ * @see applyThemeConfig
+ */
+fun ThemeConfigPreset.toDynamic(): dynamic {
+    val obj: dynamic = js("({})")
+    obj["theme"] = theme
+    obj["theme.sidebar"] = sidebar
+    obj["theme.terminal"] = terminal
+    obj["theme.diff"] = diff
+    obj["theme.fileBrowser"] = fileBrowser
+    obj["theme.tabs"] = tabs
+    obj["theme.chrome"] = chrome
+    obj["theme.windows"] = windows
+    obj["theme.active"] = active
+    return obj
+}
+
+/**
+ * Check whether a stored configuration entry is a default-preset sentinel.
+ *
+ * @param config the stored JS object to inspect
+ * @return `true` if the entry has the `__default` marker
+ */
+fun isDefaultConfig(config: dynamic): Boolean {
+    return config[DEFAULT_MARKER_KEY] == true
+}
+
 /** Section keys matching [AppBackingViewModel.State] section theme properties. */
 private val SECTION_KEYS = listOf(
     "sidebar", "terminal", "diff", "fileBrowser", "tabs", "chrome", "windows", "active"

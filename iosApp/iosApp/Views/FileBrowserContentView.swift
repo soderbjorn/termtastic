@@ -13,7 +13,7 @@ struct FileBrowserContentView: View {
     @State private var html: String?
     @State private var kind: Client.FileContentKind?
     @State private var errorMessage: String?
-    @State private var fileTheme: Client.TerminalTheme?
+    @State private var uiSettings: Client.UiSettings?
 
     private var fileName: String {
         relPath.components(separatedBy: "/").last ?? relPath
@@ -26,7 +26,7 @@ struct FileBrowserContentView: View {
                     .foregroundStyle(.gray)
                     .padding()
             } else if let currentHtml = html, let currentKind = kind {
-                FileWebView(html: wrapFileHtml(currentHtml, kind: currentKind, theme: fileTheme))
+                FileWebView(html: wrapFileHtml(currentHtml, kind: currentKind, settings: uiSettings, section: "fileBrowser"))
             } else if let error = errorMessage {
                 Text(error)
                     .foregroundStyle(.gray)
@@ -40,9 +40,11 @@ struct FileBrowserContentView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadContent() }
         .task {
-            if let client = ConnectionHolder.shared.client,
+            if let central = Palette.settings {
+                uiSettings = central
+            } else if let client = ConnectionHolder.shared.client,
                let settings = try? await client.fetchUiSettings() {
-                fileTheme = settings.sectionTheme(section: "fileBrowser")
+                uiSettings = settings
             }
         }
     }
@@ -119,16 +121,51 @@ private func paletteVars(_ pal: Client.ResolvedPalette) -> String {
     """
 }
 
-private func wrapFileHtml(_ bodyHtml: String, kind: Client.FileContentKind, theme: Client.TerminalTheme? = nil) -> String {
+private func wrapFileHtml(_ bodyHtml: String, kind: Client.FileContentKind, settings: Client.UiSettings? = nil, section: String = "fileBrowser") -> String {
     let effectiveTheme: Client.TerminalTheme
-    if let theme = theme {
-        effectiveTheme = theme
+    if let s = settings {
+        effectiveTheme = s.sectionTheme(section: section)
     } else {
         let themes = Client.ThemesKt.recommendedThemes
         effectiveTheme = themes.first { ($0 as! Client.TerminalTheme).name == Client.ThemesKt.DEFAULT_THEME_NAME } as! Client.TerminalTheme
     }
-    let darkPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: true)
-    let lightPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: false)
+
+    // When the user has explicitly chosen Dark or Light, emit only that
+    // palette's CSS vars. When Auto, use media queries for both modes.
+    let appearance = settings?.appearance ?? Client.Appearance.auto
+    let cssVarsBlock: String
+    switch appearance {
+    case .dark:
+        let pal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: true)
+        cssVarsBlock = """
+          :root {
+            color-scheme: dark;
+            \(paletteVars(pal))
+          }
+        """
+    case .light:
+        let pal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: false)
+        cssVarsBlock = """
+          :root {
+            color-scheme: light;
+            \(paletteVars(pal))
+          }
+        """
+    default:
+        let darkPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: true)
+        let lightPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: false)
+        cssVarsBlock = """
+          :root {
+            color-scheme: light dark;
+            \(paletteVars(darkPal))
+          }
+          @media (prefers-color-scheme: light) {
+            :root {
+              \(paletteVars(lightPal))
+            }
+          }
+        """
+    }
 
     let body: String
     if kind == Client.FileContentKind.text {
@@ -142,15 +179,7 @@ private func wrapFileHtml(_ bodyHtml: String, kind: Client.FileContentKind, them
     <head>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <style>
-      :root {
-        color-scheme: light dark;
-        \(paletteVars(darkPal))
-      }
-      @media (prefers-color-scheme: light) {
-        :root {
-          \(paletteVars(lightPal))
-        }
-      }
+      \(cssVarsBlock)
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
         background: var(--background);

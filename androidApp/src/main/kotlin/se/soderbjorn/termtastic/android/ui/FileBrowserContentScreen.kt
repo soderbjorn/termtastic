@@ -41,10 +41,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import se.soderbjorn.termtastic.Appearance
+import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
 import se.soderbjorn.termtastic.FileContentKind
 import se.soderbjorn.termtastic.WindowEnvelope
-import se.soderbjorn.termtastic.client.fetchUiSettings
+import se.soderbjorn.termtastic.recommendedThemes
 import se.soderbjorn.termtastic.resolve
+import se.soderbjorn.termtastic.client.fetchUiSettings
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 
 /**
@@ -76,15 +79,19 @@ fun FileBrowserContentScreen(
     var kind by remember { mutableStateOf<FileContentKind?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isDark = isSystemInDarkTheme()
-    var uiSettings by remember { mutableStateOf<se.soderbjorn.termtastic.client.UiSettings?>(null) }
+    val centralSettings = LocalUiSettings.current
+    var localSettings by remember { mutableStateOf<se.soderbjorn.termtastic.client.UiSettings?>(null) }
     LaunchedEffect(Unit) {
-        uiSettings = ConnectionHolder.client()?.fetchUiSettings()
+        if (centralSettings == null) {
+            localSettings = ConnectionHolder.client()?.fetchUiSettings()
+        }
     }
+    val uiSettings = centralSettings ?: localSettings
     val palette = remember(isDark, uiSettings) {
         val theme = uiSettings?.sectionTheme("fileBrowser")
-            ?: se.soderbjorn.termtastic.recommendedThemes
-                .first { it.name == se.soderbjorn.termtastic.DEFAULT_THEME_NAME }
-        theme.resolve(isDark)
+            ?: recommendedThemes.first { it.name == DEFAULT_THEME_NAME }
+        val appearance = uiSettings?.appearance ?: Appearance.Auto
+        theme.resolve(appearance, isDark)
     }
 
     LaunchedEffect(paneId, relPath) {

@@ -44,8 +44,11 @@ import se.soderbjorn.termtastic.DiffHunk
 import se.soderbjorn.termtastic.DiffLine
 import se.soderbjorn.termtastic.DiffLineType
 import se.soderbjorn.termtastic.WindowEnvelope
-import se.soderbjorn.termtastic.client.fetchUiSettings
+import se.soderbjorn.termtastic.Appearance
+import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
+import se.soderbjorn.termtastic.recommendedThemes
 import se.soderbjorn.termtastic.resolve
+import se.soderbjorn.termtastic.client.fetchUiSettings
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 
 /**
@@ -76,15 +79,19 @@ fun GitDiffScreen(
     var hunks by remember { mutableStateOf<List<DiffHunk>?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isDark = isSystemInDarkTheme()
-    var uiSettings by remember { mutableStateOf<se.soderbjorn.termtastic.client.UiSettings?>(null) }
+    val centralSettings = LocalUiSettings.current
+    var localSettings by remember { mutableStateOf<se.soderbjorn.termtastic.client.UiSettings?>(null) }
     LaunchedEffect(Unit) {
-        uiSettings = ConnectionHolder.client()?.fetchUiSettings()
+        if (centralSettings == null) {
+            localSettings = ConnectionHolder.client()?.fetchUiSettings()
+        }
     }
+    val uiSettings = centralSettings ?: localSettings
     val palette = remember(isDark, uiSettings) {
         val theme = uiSettings?.sectionTheme("diff")
-            ?: se.soderbjorn.termtastic.recommendedThemes
-                .first { it.name == se.soderbjorn.termtastic.DEFAULT_THEME_NAME }
-        theme.resolve(isDark)
+            ?: recommendedThemes.first { it.name == DEFAULT_THEME_NAME }
+        val appearance = uiSettings?.appearance ?: Appearance.Auto
+        theme.resolve(appearance, isDark)
     }
 
     LaunchedEffect(paneId, filePath) {
@@ -188,6 +195,13 @@ private fun buildDiffHtml(hunks: List<DiffHunk>, palette: se.soderbjorn.termtast
     --del-border: ${c(palette.diff.removeGutter)};
     --ctx-bg: transparent;
     --separator: ${c(palette.border.subtle)};
+    --hl-keyword: ${c(palette.syntax.keyword)};
+    --hl-string: ${c(palette.syntax.string)};
+    --hl-comment: ${c(palette.syntax.comment)};
+    --hl-number: ${c(palette.syntax.number)};
+    --hl-type: ${c(palette.syntax.type)};
+    --hl-function: ${c(palette.syntax.function)};
+    --hl-operator: ${c(palette.syntax.operator)};
     """.trimIndent()
 
     val body = buildString {
@@ -273,13 +287,13 @@ private fun buildDiffHtml(hunks: List<DiffHunk>, palette: se.soderbjorn.termtast
     padding: 0 8px;
   }
   /* Syntax highlighting classes matching server output */
-  .hl-keyword  { color: #FF79C6; }
-  .hl-string   { color: #F1FA8C; }
-  .hl-comment  { color: #6272A4; font-style: italic; }
-  .hl-number   { color: #BD93F9; }
-  .hl-type     { color: #8BE9FD; }
-  .hl-function { color: #50FA7B; }
-  .hl-operator { color: #FF79C6; }
+  .hl-keyword  { color: var(--hl-keyword); }
+  .hl-string   { color: var(--hl-string); }
+  .hl-comment  { color: var(--hl-comment); font-style: italic; }
+  .hl-number   { color: var(--hl-number); }
+  .hl-type     { color: var(--hl-type); }
+  .hl-function { color: var(--hl-function); }
+  .hl-operator { color: var(--hl-operator); }
   .hl-punctuation { color: var(--text-secondary); }
 </style>
 </head>

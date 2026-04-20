@@ -186,9 +186,11 @@ private fun start() {
         windowSocket.connected.collect { connected ->
             if (connected) {
                 wasConnected = true
-                hideDisconnectedModal()
+                windowSocketConnected = true
+                updateAggregateStatus()
             } else if (wasConnected) {
-                showDisconnectedModal()
+                windowSocketConnected = false
+                updateAggregateStatus()
             }
         }
     }

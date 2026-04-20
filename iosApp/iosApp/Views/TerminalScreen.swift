@@ -171,11 +171,15 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
         currentFontSize = 12
         view.font = UIFont.monospacedSystemFont(ofSize: currentFontSize, weight: .regular)
 
-        // Apply theme
-        Task {
-            if let settings = try? await client.fetchUiSettings() {
-                DispatchQueue.main.async {
-                    self.applyTheme(settings)
+        // Apply theme from centrally-fetched settings, or fetch independently
+        if let settings = Palette.settings {
+            applyTheme(settings)
+        } else {
+            Task {
+                if let settings = try? await client.fetchUiSettings() {
+                    DispatchQueue.main.async {
+                        self.applyTheme(settings)
+                    }
                 }
             }
         }
@@ -284,12 +288,14 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
     }
 
     private func applyTheme(_ settings: Client.UiSettings) {
-        // Apply theme colors to the terminal if available
-        let colors = settings.sectionTheme(section: "terminal").effectiveColors(appearance: settings.appearance, systemIsDark: true)
-        let fg = colors.first! as String
-        let bg = colors.second! as String
-        terminalView?.nativeForegroundColor = UIColor(hexString: fg)
-        terminalView?.nativeBackgroundColor = UIColor(hexString: bg)
+        let isDark = UITraitCollection.current.userInterfaceStyle == .dark
+        let palette = Client.ThemeResolverKt.resolve(
+            settings.sectionTheme(section: "terminal"),
+            appearance: settings.appearance,
+            systemIsDark: isDark
+        )
+        terminalView?.nativeForegroundColor = UIColor(Color(argb: palette.terminal.fg))
+        terminalView?.nativeBackgroundColor = UIColor(Color(argb: palette.terminal.bg))
     }
 
     private static func findLeafTitle(config: Client.WindowConfig, sessionId: String) -> String? {

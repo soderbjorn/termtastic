@@ -11,7 +11,7 @@ struct GitDiffView: View {
 
     @State private var diffHtml: String?
     @State private var errorMessage: String?
-    @State private var diffTheme: Client.TerminalTheme?
+    @State private var uiSettings: Client.UiSettings?
 
     private var fileName: String {
         filePath.components(separatedBy: "/").last ?? filePath
@@ -34,9 +34,11 @@ struct GitDiffView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadDiff() }
         .task {
-            if let client = ConnectionHolder.shared.client,
+            if let central = Palette.settings {
+                uiSettings = central
+            } else if let client = ConnectionHolder.shared.client,
                let settings = try? await client.fetchUiSettings() {
-                diffTheme = settings.sectionTheme(section: "diff")
+                uiSettings = settings
             }
         }
     }
@@ -49,7 +51,7 @@ struct GitDiffView: View {
         do {
             let reply = try await socket.gitDiff(paneId: paneId, filePath: filePath, timeoutMs: 10_000)
             if let result = reply as? Client.WindowEnvelope.GitDiffResult {
-                diffHtml = buildDiffHtml(result, theme: diffTheme)
+                diffHtml = buildDiffHtml(result, settings: uiSettings)
             } else if let error = reply as? Client.WindowEnvelope.GitError {
                 errorMessage = error.message
             } else {
@@ -82,7 +84,7 @@ private struct DiffWebView: UIViewRepresentable {
 
 // MARK: - Diff HTML builder
 
-private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult, theme: Client.TerminalTheme? = nil) -> String {
+private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult, settings: Client.UiSettings? = nil) -> String {
     var body = ""
     for hunk in result.hunks {
         for line in hunk.lines {
@@ -111,14 +113,12 @@ private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult, theme:
     }
 
     let effectiveTheme: Client.TerminalTheme
-    if let theme = theme {
-        effectiveTheme = theme
+    if let s = settings {
+        effectiveTheme = s.sectionTheme(section: "diff")
     } else {
         let themes = Client.ThemesKt.recommendedThemes
         effectiveTheme = themes.first { ($0 as! Client.TerminalTheme).name == Client.ThemesKt.DEFAULT_THEME_NAME } as! Client.TerminalTheme
     }
-    let darkPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: true)
-    let lightPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: false)
     let c = { (v: Int64) -> String in Client.ColorMathKt.argbToCss(argb: v) }
 
     func diffVars(_ pal: Client.ResolvedPalette) -> String {
@@ -147,21 +147,56 @@ private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult, theme:
         """
     }
 
+    // When the user has explicitly chosen Dark or Light, emit only that
+    // palette's CSS vars. When Auto, use media queries for both modes.
+    let appearance = settings?.appearance ?? Client.Appearance.auto
+    let cssBlock: String
+    switch appearance {
+    case .dark:
+        let pal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: true)
+        cssBlock = """
+          :root {
+            color-scheme: dark;
+            \(diffVars(pal))
+          }
+          \(syntaxVars(pal))
+        """
+    case .light:
+        let pal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: false)
+        cssBlock = """
+          :root {
+            color-scheme: light;
+            \(diffVars(pal))
+          }
+          \(syntaxVars(pal))
+        """
+    default:
+        let darkPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: true)
+        let lightPal = Client.ThemeResolverKt.resolve(effectiveTheme, isDark: false)
+        cssBlock = """
+          :root {
+            color-scheme: light dark;
+            \(diffVars(darkPal))
+          }
+          @media (prefers-color-scheme: light) {
+            :root {
+              \(diffVars(lightPal))
+            }
+          }
+          \(syntaxVars(darkPal))
+          @media (prefers-color-scheme: light) {
+            \(syntaxVars(lightPal))
+          }
+        """
+    }
+
     return """
     <!DOCTYPE html>
     <html>
     <head>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <style>
-      :root {
-        color-scheme: light dark;
-        \(diffVars(darkPal))
-      }
-      @media (prefers-color-scheme: light) {
-        :root {
-          \(diffVars(lightPal))
-        }
-      }
+      \(cssBlock)
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
         background: var(--background);
@@ -197,13 +232,6 @@ private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult, theme:
       .code {
         flex: 1;
         overflow-x: auto;
-      }
-
-      /* Syntax highlighting — derived from the semantic palette */
-      \(syntaxVars(darkPal))
-
-      @media (prefers-color-scheme: light) {
-        \(syntaxVars(lightPal))
       }
     </style>
     </head>

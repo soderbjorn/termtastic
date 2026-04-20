@@ -105,10 +105,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import se.soderbjorn.termtastic.Appearance
+import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
+import se.soderbjorn.termtastic.ResolvedPalette
+import se.soderbjorn.termtastic.recommendedThemes
+import se.soderbjorn.termtastic.resolve
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 import se.soderbjorn.termtastic.client.PtySocket
 import se.soderbjorn.termtastic.client.UiSettings
-import se.soderbjorn.termtastic.client.effectiveColors
 import se.soderbjorn.termtastic.client.fetchUiSettings
 
 // Accent colour for the terminal screen top bar. Previously hardcoded as
@@ -223,15 +227,22 @@ fun TerminalScreen(
     // Mirror Electron's theme + dark/light preference, fetched once per
     // connect from the shared /api/ui-settings endpoint. Until it arrives we
     // leave the emulator on Termux's default palette.
-    var uiSettings by remember(sessionId) { mutableStateOf<UiSettings?>(null) }
+    val centralSettings = LocalUiSettings.current
+    var localSettings by remember(sessionId) { mutableStateOf<UiSettings?>(null) }
     LaunchedEffect(client, sessionId) {
-        uiSettings = client.fetchUiSettings()
+        if (centralSettings == null) {
+            localSettings = client.fetchUiSettings()
+        }
     }
+    val uiSettings = centralSettings ?: localSettings
     val systemIsDark = isSystemInDarkTheme()
-    val effectiveColors = uiSettings?.let { it.sectionTheme("terminal").effectiveColors(it.appearance, systemIsDark) }
-    val bgComposeColor = effectiveColors
-        ?.let { runCatching { Color(android.graphics.Color.parseColor(it.second)) }.getOrNull() }
-        ?: Color.Black
+    val defaultTheme = remember { recommendedThemes.first { it.name == DEFAULT_THEME_NAME } }
+    val terminalPalette = remember(uiSettings, systemIsDark) {
+        val theme = uiSettings?.sectionTheme("terminal") ?: defaultTheme
+        val appearance = uiSettings?.appearance ?: Appearance.Auto
+        theme.resolve(appearance, systemIsDark)
+    }
+    val bgComposeColor = Color(terminalPalette.terminal.bg)
 
     // A TerminalSession subclass that bypasses the JNI pty path: all user
     // input the view writes is forwarded to our ptySocket, and the view
@@ -573,16 +584,12 @@ fun TerminalScreen(
                         field.set(view, emulator)
                     } catch (_: Throwable) {
                     }
-                    effectiveColors?.let { (fgHex, bgHex) ->
-                        applyTerminalColors(view, emulator, fgHex, bgHex)
-                    }
+                    applyTerminalColors(view, emulator, terminalPalette)
                     terminalViewRef.value = view
                     view
                 },
                 update = { view ->
-                    effectiveColors?.let { (fgHex, bgHex) ->
-                        applyTerminalColors(view, emulator, fgHex, bgHex)
-                    }
+                    applyTerminalColors(view, emulator, terminalPalette)
                     view.onScreenUpdated()
                 },
             )
@@ -600,6 +607,7 @@ fun TerminalScreen(
                             swipeText = ""
                         }
                     },
+                    palette = terminalPalette,
                 )
             }
 
@@ -611,6 +619,7 @@ fun TerminalScreen(
                 onSend = { bytes ->
                     scope.launch { ptySocket.send(bytes) }
                 },
+                palette = terminalPalette,
             )
         }
     }
@@ -623,6 +632,8 @@ fun TerminalScreen(
  * modifiers — tap to arm, tap again to unarm — which the next
  * [TerminalView] key event can read via [TerminalViewClient.readControlKey]
  * and [TerminalViewClient.readShiftKey].
+ *
+ * @param palette the resolved theme palette for deriving toolbar colours.
  */
 @Composable
 private fun ImeHelperToolbar(
@@ -631,30 +642,33 @@ private fun ImeHelperToolbar(
     shiftSticky: Boolean,
     onShiftToggle: () -> Unit,
     onSend: (ByteArray) -> Unit,
+    palette: ResolvedPalette,
 ) {
+    val toolbarBg = Color(palette.surface.sunken)
+    val dividerColor = Color(palette.border.subtle)
     val scroll = rememberScrollState()
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(44.dp)
-            .background(Color(0xFF1E1E1E))
+            .background(toolbarBg)
             .horizontalScroll(scroll),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Spacer(modifier = Modifier.width(4.dp))
-        ToolbarKey("Ctrl", sticky = true, active = ctrlSticky) { onCtrlToggle() }
-        ToolbarKey("Shift", sticky = true, active = shiftSticky) { onShiftToggle() }
+        ToolbarKey("Ctrl", sticky = true, active = ctrlSticky, palette = palette) { onCtrlToggle() }
+        ToolbarKey("Shift", sticky = true, active = shiftSticky, palette = palette) { onShiftToggle() }
         Box(
             modifier = Modifier
                 .width(1.dp)
                 .fillMaxHeight()
                 .padding(vertical = 10.dp)
-                .background(Color(0xFF3A3A3A)),
+                .background(dividerColor),
         )
-        ToolbarKey("Enter") { onSend(byteArrayOf(0x0d)) }
-        ToolbarKey("Esc") { onSend(byteArrayOf(0x1b)) }
-        ToolbarKey("Tab") {
+        ToolbarKey("Enter", palette = palette) { onSend(byteArrayOf(0x0d)) }
+        ToolbarKey("Esc", palette = palette) { onSend(byteArrayOf(0x1b)) }
+        ToolbarKey("Tab", palette = palette) {
             if (shiftSticky) {
                 onSend("\u001b[Z".toByteArray(Charsets.UTF_8))
                 onShiftToggle()
@@ -662,14 +676,14 @@ private fun ImeHelperToolbar(
                 onSend(byteArrayOf(0x09))
             }
         }
-        ToolbarKey("↑") { onSend("\u001b[A".toByteArray(Charsets.UTF_8)) }
-        ToolbarKey("↓") { onSend("\u001b[B".toByteArray(Charsets.UTF_8)) }
-        ToolbarKey("→") { onSend("\u001b[C".toByteArray(Charsets.UTF_8)) }
-        ToolbarKey("←") { onSend("\u001b[D".toByteArray(Charsets.UTF_8)) }
-        ToolbarKey("Home") { onSend("\u001b[H".toByteArray(Charsets.UTF_8)) }
-        ToolbarKey("End") { onSend("\u001b[F".toByteArray(Charsets.UTF_8)) }
-        ToolbarKey("PgUp") { onSend("\u001b[5~".toByteArray(Charsets.UTF_8)) }
-        ToolbarKey("PgDn") { onSend("\u001b[6~".toByteArray(Charsets.UTF_8)) }
+        ToolbarKey("↑", palette = palette) { onSend("\u001b[A".toByteArray(Charsets.UTF_8)) }
+        ToolbarKey("↓", palette = palette) { onSend("\u001b[B".toByteArray(Charsets.UTF_8)) }
+        ToolbarKey("→", palette = palette) { onSend("\u001b[C".toByteArray(Charsets.UTF_8)) }
+        ToolbarKey("←", palette = palette) { onSend("\u001b[D".toByteArray(Charsets.UTF_8)) }
+        ToolbarKey("Home", palette = palette) { onSend("\u001b[H".toByteArray(Charsets.UTF_8)) }
+        ToolbarKey("End", palette = palette) { onSend("\u001b[F".toByteArray(Charsets.UTF_8)) }
+        ToolbarKey("PgUp", palette = palette) { onSend("\u001b[5~".toByteArray(Charsets.UTF_8)) }
+        ToolbarKey("PgDn", palette = palette) { onSend("\u001b[6~".toByteArray(Charsets.UTF_8)) }
         Spacer(modifier = Modifier.width(4.dp))
     }
 }
@@ -679,18 +693,27 @@ private fun ImeHelperToolbar(
  * between the terminal and the IME toolbar when active. A standard TextField
  * allows the keyboard to offer swipe suggestions, unlike Termux's raw key
  * capture in TerminalView.
+ *
+ * @param palette the resolved theme palette for deriving input bar colours.
  */
 @Composable
 private fun SwipeInputBar(
     text: String,
     onTextChange: (String) -> Unit,
     onSubmit: () -> Unit,
+    palette: ResolvedPalette,
 ) {
+    val barBg = Color(palette.surface.raised)
+    val inputBg = Color(palette.surface.sunken)
+    val accentColor = Color(palette.accent.primary)
+    val textColor = Color(palette.text.primary)
+    val placeholderColor = Color(palette.text.tertiary)
+    val onAccentColor = Color(palette.accent.onPrimary)
     val focusRequester = remember { FocusRequester() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF2C2C2E))
+            .background(barBg)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -704,23 +727,23 @@ private fun SwipeInputBar(
             placeholder = {
                 Text(
                     "Type or swipe here\u2026",
-                    color = Color(0xFF8E8E93),
+                    color = placeholderColor,
                     fontSize = 14.sp,
                 )
             },
             textStyle = androidx.compose.ui.text.TextStyle(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
-                color = Color(0xFFF5F5F5),
+                color = textColor,
             ),
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { onSubmit() }),
             colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color(0xFF1C1C1E),
-                unfocusedContainerColor = Color(0xFF1C1C1E),
-                cursorColor = Color(0xFFF4B869),
-                focusedIndicatorColor = Color(0xFFF4B869),
+                focusedContainerColor = inputBg,
+                unfocusedContainerColor = inputBg,
+                cursorColor = accentColor,
+                focusedIndicatorColor = accentColor,
                 unfocusedIndicatorColor = Color.Transparent,
             ),
             shape = RoundedCornerShape(6.dp),
@@ -729,14 +752,14 @@ private fun SwipeInputBar(
             modifier = Modifier
                 .size(36.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .background(Color(0xFFF4B869))
+                .background(accentColor)
                 .clickable { onSubmit() },
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 "\u23CE",
                 fontSize = 18.sp,
-                color = Color(0xFF1C1C1E),
+                color = onAccentColor,
             )
         }
     }
@@ -744,21 +767,27 @@ private fun SwipeInputBar(
 }
 
 /**
- * Paint the terminal with the shared theme. Mutates the emulator's default
- * foreground/background indices (what SGR 0 / "default" resolves to) so
- * existing rows repaint on the next onScreenUpdated(), and sets the view's
- * own background so the letterbox around the text grid matches.
+ * Paint the terminal with the resolved theme palette. Mutates the emulator's
+ * default foreground/background and cursor colour indices (what SGR 0 /
+ * "default" resolves to) so existing rows repaint on the next
+ * onScreenUpdated(), and sets the view's own background so the letterbox
+ * around the text grid matches.
+ *
+ * @param view     the Termux [TerminalView] to update.
+ * @param emulator the [TerminalEmulator] whose colour table is mutated.
+ * @param palette  the fully resolved semantic palette for the terminal section.
  */
 private fun applyTerminalColors(
     view: TerminalView,
     emulator: TerminalEmulator,
-    fgHex: String,
-    bgHex: String,
+    palette: ResolvedPalette,
 ) {
-    val fg = runCatching { android.graphics.Color.parseColor(fgHex) }.getOrNull() ?: return
-    val bg = runCatching { android.graphics.Color.parseColor(bgHex) }.getOrNull() ?: return
+    val fg = palette.terminal.fg.toInt()
+    val bg = palette.terminal.bg.toInt()
+    val cursor = palette.terminal.cursor.toInt()
     emulator.mColors.mCurrentColors[TextStyle.COLOR_INDEX_FOREGROUND] = fg
     emulator.mColors.mCurrentColors[TextStyle.COLOR_INDEX_BACKGROUND] = bg
+    emulator.mColors.mCurrentColors[TextStyle.COLOR_INDEX_CURSOR] = cursor
     view.setBackgroundColor(bg)
 }
 
@@ -771,6 +800,7 @@ private fun applyTerminalColors(
  * @param label the text displayed on the key.
  * @param sticky true for modifier keys that toggle on/off.
  * @param active true when a sticky modifier is currently armed.
+ * @param palette the resolved theme palette for deriving key colours.
  * @param onClick callback invoked when the key is tapped.
  */
 @Composable
@@ -778,19 +808,24 @@ private fun ToolbarKey(
     label: String,
     sticky: Boolean = false,
     active: Boolean = false,
+    palette: ResolvedPalette,
     onClick: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     val shape = RoundedCornerShape(6.dp)
+    val accentColor = Color(palette.accent.primary)
+    val keyBg = Color(palette.surface.raised)
+    val stickyBg = Color(palette.surface.sunken)
+    val borderColor = Color(palette.border.`default`)
     val bg = when {
-        sticky && active -> Color(0xFF0A84FF)
-        sticky -> Color(0xFF1E1E1E)
-        else -> Color(0xFF2E2E2E)
+        sticky && active -> accentColor
+        sticky -> stickyBg
+        else -> keyBg
     }
     val textColor = when {
-        sticky && active -> Color.White
-        sticky -> Color(0xFFB8B8B8)
-        else -> Color.White
+        sticky && active -> Color(palette.accent.onPrimary)
+        sticky -> Color(palette.text.secondary)
+        else -> Color(palette.text.primary)
     }
     val baseModifier = Modifier
         .padding(vertical = 6.dp)
@@ -798,7 +833,7 @@ private fun ToolbarKey(
         .clip(shape)
         .background(bg, shape)
     val borderedModifier = if (sticky && !active) {
-        baseModifier.border(1.dp, Color(0xFF5A5A5A), shape)
+        baseModifier.border(1.dp, borderColor, shape)
     } else {
         baseModifier
     }

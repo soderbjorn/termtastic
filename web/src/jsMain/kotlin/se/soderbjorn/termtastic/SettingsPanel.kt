@@ -194,63 +194,66 @@ fun openSettingsPanel() {
     // ─── Theme configurations ──────────────────────────────────────
     val configSection = document.createElement("div") as HTMLElement
     configSection.className = "settings-section"
-    val configLabel = document.createElement("div") as HTMLElement
-    configLabel.className = "settings-label"
-    configLabel.textContent = "Theme configurations"
-    configSection.appendChild(configLabel)
 
     val configList = document.createElement("div") as HTMLElement
     configList.className = "settings-theme-configs-list"
     configSection.appendChild(configList)
 
-    // Local cache of fetched configs, used for name collision checks and deletes.
-    var cachedConfigs = mutableMapOf<String, dynamic>()
+    // Local cache of user-created (custom) configs.
+    var cachedCustomConfigs = linkedMapOf<String, dynamic>()
 
-    /** Name of the config currently being dragged, if any. */
+    /** Name of the config card currently being dragged, if any. */
     var draggedConfigName: String? = null
 
     /**
-     * Render the list of saved theme configurations with drag-and-drop
-     * reordering support.
+     * Build a theme configuration card (silhouette + name underneath) that
+     * can be clicked to apply and optionally dragged to reorder.
      *
-     * Each row has a drag handle (grip icon) on the left. Dragging a row
-     * over another row shows a drop indicator line, and dropping reorders
-     * the [cachedConfigs] map and persists the new order to the server.
-     *
-     * @see fetchThemeConfigs
-     * @see persistThemeConfigs
+     * @param name         display name
+     * @param configData   the dynamic JS config object for rendering and applying
+     * @param isDefault    whether this is a built-in preset
+     * @param container    the parent grid element (used for drag indicator cleanup)
+     * @param onReorder    callback invoked with (sourceName, targetName, insertBefore) on drop
+     * @param onDelete     callback invoked to delete this config, or null if not deletable
      */
-    fun renderConfigList() {
-        configList.innerHTML = ""
-        if (cachedConfigs.isEmpty()) {
-            val empty = document.createElement("div") as HTMLElement
-            empty.className = "settings-theme-configs-empty"
-            empty.textContent = "No saved configurations"
-            configList.appendChild(empty)
-            return
+    fun buildConfigCard(
+        name: String,
+        configData: dynamic,
+        isDefault: Boolean,
+        container: HTMLElement,
+        onReorder: ((source: String, target: String, before: Boolean) -> Unit)?,
+        onDelete: (() -> Unit)?,
+    ): HTMLElement {
+        val card = document.createElement("div") as HTMLElement
+        card.className = "settings-config-card" +
+            if (isDefault) " settings-config-card-default" else ""
+        card.setAttribute("data-config-name", name)
+
+        if (onReorder != null) {
+            card.setAttribute("draggable", "true")
         }
-        for ((name, config) in cachedConfigs) {
-            val row = document.createElement("div") as HTMLElement
-            row.className = "settings-theme-config-row"
-            row.setAttribute("draggable", "true")
-            row.setAttribute("data-config-name", name)
 
-            val grip = document.createElement("span") as HTMLElement
-            grip.className = "settings-theme-config-grip"
-            grip.innerHTML = "&#x2630;"
-            row.appendChild(grip)
+        fun activateConfig() {
+            applyThemeConfig(configData)
+            renderThemeGrid()
+        }
 
-            val nameEl = document.createElement("span") as HTMLElement
-            nameEl.className = "settings-theme-config-name"
-            nameEl.textContent = name
-            nameEl.addEventListener("click", {
-                applyThemeConfig(config)
-                renderThemeGrid()
-            })
-            row.appendChild(nameEl)
+        val silhouette = document.createElement("span") as HTMLElement
+        silhouette.innerHTML = renderConfigSilhouette(configData)
+        silhouette.firstElementChild?.let { el ->
+            el.addEventListener("click", { activateConfig() })
+            card.appendChild(el)
+        }
 
+        val nameEl = document.createElement("span") as HTMLElement
+        nameEl.className = "settings-config-card-name"
+        nameEl.textContent = name
+        nameEl.addEventListener("click", { activateConfig() })
+        card.appendChild(nameEl)
+
+        if (onDelete != null) {
             val deleteBtn = document.createElement("button") as HTMLElement
-            deleteBtn.className = "settings-theme-config-delete"
+            deleteBtn.className = "settings-config-card-delete"
             deleteBtn.innerHTML = "&times;"
             deleteBtn.title = "Delete"
             deleteBtn.addEventListener("click", { ev: Event ->
@@ -259,89 +262,161 @@ fun openSettingsPanel() {
                     title = "Delete configuration",
                     message = "Delete theme configuration <b>$name</b>?",
                     confirmLabel = "Delete",
-                ) {
-                    cachedConfigs.remove(name)
-                    persistThemeConfigs(cachedConfigs) { renderConfigList() }
-                    renderConfigList()
-                }
+                ) { onDelete() }
             })
-            row.appendChild(deleteBtn)
+            card.appendChild(deleteBtn)
+        }
 
-            // ── Drag-and-drop event handlers ──
+        // ── Drag-and-drop event handlers ──
 
-            row.addEventListener("dragstart", { ev: Event ->
+        if (onReorder != null) {
+            card.addEventListener("dragstart", { ev: Event ->
                 val dt = ev.asDynamic().dataTransfer ?: return@addEventListener
                 draggedConfigName = name
                 dt.effectAllowed = "move"
                 dt.setData("text/plain", name)
-                row.classList.add("dragging")
+                card.classList.add("dragging")
             })
 
-            row.addEventListener("dragend", { _: Event ->
+            card.addEventListener("dragend", { _: Event ->
                 draggedConfigName = null
-                row.classList.remove("dragging")
-                // Clear all drop indicators
-                val allRows = configList.querySelectorAll(".settings-theme-config-row")
-                for (i in 0 until allRows.length) {
-                    (allRows.item(i) as? HTMLElement)?.classList?.remove("drop-above", "drop-below")
+                card.classList.remove("dragging")
+                val allCards = container.querySelectorAll(".settings-config-card")
+                for (i in 0 until allCards.length) {
+                    (allCards.item(i) as? HTMLElement)?.classList?.remove("drop-before", "drop-after")
                 }
             })
 
-            row.addEventListener("dragover", { ev: Event ->
+            card.addEventListener("dragover", { ev: Event ->
                 if (draggedConfigName == null || draggedConfigName == name) return@addEventListener
                 ev.preventDefault()
                 val dt = ev.asDynamic().dataTransfer
                 if (dt != null) dt.dropEffect = "move"
-                // Determine if the cursor is in the upper or lower half of the row
-                val rect = row.getBoundingClientRect()
-                val midY = rect.top + rect.height / 2
-                val clientY = ev.asDynamic().clientY as Double
-                if (clientY < midY) {
-                    row.classList.add("drop-above")
-                    row.classList.remove("drop-below")
+                val rect = card.getBoundingClientRect()
+                val midX = rect.left + rect.width / 2
+                val clientX = ev.asDynamic().clientX as Double
+                if (clientX < midX) {
+                    card.classList.add("drop-before")
+                    card.classList.remove("drop-after")
                 } else {
-                    row.classList.add("drop-below")
-                    row.classList.remove("drop-above")
+                    card.classList.add("drop-after")
+                    card.classList.remove("drop-before")
                 }
             })
 
-            row.addEventListener("dragleave", { _: Event ->
-                row.classList.remove("drop-above", "drop-below")
+            card.addEventListener("dragleave", { _: Event ->
+                card.classList.remove("drop-before", "drop-after")
             })
 
-            row.addEventListener("drop", { ev: Event ->
+            card.addEventListener("drop", { ev: Event ->
                 ev.preventDefault()
-                row.classList.remove("drop-above", "drop-below")
+                card.classList.remove("drop-before", "drop-after")
                 val sourceName = draggedConfigName ?: return@addEventListener
                 if (sourceName == name) return@addEventListener
-
-                // Determine insertion position
-                val rect = row.getBoundingClientRect()
-                val midY = rect.top + rect.height / 2
-                val clientY = ev.asDynamic().clientY as Double
-                val insertBefore = clientY < midY
-
-                // Rebuild the map in the new order
-                val entries = cachedConfigs.entries.toMutableList()
-                val sourceIndex = entries.indexOfFirst { it.key == sourceName }
-                if (sourceIndex < 0) return@addEventListener
-                val sourceEntry = entries.removeAt(sourceIndex)
-                var targetIndex = entries.indexOfFirst { it.key == name }
-                if (!insertBefore) targetIndex++
-                entries.add(targetIndex, sourceEntry)
-
-                cachedConfigs = linkedMapOf(*entries.map { it.key to it.value }.toTypedArray())
-                persistThemeConfigs(cachedConfigs) {}
-                renderConfigList()
+                val rect = card.getBoundingClientRect()
+                val midX = rect.left + rect.width / 2
+                val clientX = ev.asDynamic().clientX as Double
+                onReorder(sourceName, name, clientX < midX)
             })
-
-            configList.appendChild(row)
         }
+
+        return card
     }
 
-    // Fetch configs when panel opens
+    /**
+     * Render the full theme configurations section with category headers
+     * and card grids.
+     */
+    fun renderConfigList() {
+        configList.innerHTML = ""
+
+        // ── Default presets by category ──
+        val darkPresets = defaultThemeConfigs.filter { it.mode == ConfigMode.Dark }
+        val lightPresets = defaultThemeConfigs.filter { it.mode == ConfigMode.Light }
+        val bothPresets = defaultThemeConfigs.filter { it.mode == ConfigMode.Both }
+
+        fun addCategory(label: String, presets: List<ThemeConfigPreset>) {
+            if (presets.isEmpty()) return
+            val header = document.createElement("div") as HTMLElement
+            header.className = "settings-config-category"
+            header.textContent = label
+            configList.appendChild(header)
+
+            val grid = document.createElement("div") as HTMLElement
+            grid.className = "settings-config-grid"
+            for (preset in presets) {
+                val card = buildConfigCard(
+                    name = preset.name,
+                    configData = preset.toDynamic(),
+                    isDefault = true,
+                    container = grid,
+                    onReorder = null,
+                    onDelete = null,
+                )
+                grid.appendChild(card)
+            }
+            configList.appendChild(grid)
+        }
+
+        // ── Custom (user-created) configs — shown first ──
+        val customHeader = document.createElement("div") as HTMLElement
+        customHeader.className = "settings-config-category"
+        customHeader.textContent = "Custom"
+        configList.appendChild(customHeader)
+
+        val customGrid = document.createElement("div") as HTMLElement
+        customGrid.className = "settings-config-grid"
+
+        if (cachedCustomConfigs.isEmpty()) {
+            val empty = document.createElement("div") as HTMLElement
+            empty.className = "settings-theme-configs-empty"
+            empty.textContent = "No saved configurations"
+            configList.appendChild(empty)
+        } else {
+            for ((name, config) in cachedCustomConfigs) {
+                val card = buildConfigCard(
+                    name = name,
+                    configData = config,
+                    isDefault = false,
+                    container = customGrid,
+                    onReorder = { sourceName, targetName, insertBefore ->
+                        val entries = cachedCustomConfigs.entries.toMutableList()
+                        val sourceIndex = entries.indexOfFirst { it.key == sourceName }
+                        if (sourceIndex < 0) return@buildConfigCard
+                        val sourceEntry = entries.removeAt(sourceIndex)
+                        var targetIndex = entries.indexOfFirst { it.key == targetName }
+                        if (!insertBefore) targetIndex++
+                        entries.add(targetIndex, sourceEntry)
+                        cachedCustomConfigs = linkedMapOf(*entries.map { it.key to it.value }.toTypedArray())
+                        persistThemeConfigs(cachedCustomConfigs) {}
+                        renderConfigList()
+                    },
+                    onDelete = {
+                        cachedCustomConfigs.remove(name)
+                        persistThemeConfigs(cachedCustomConfigs) { renderConfigList() }
+                        renderConfigList()
+                    },
+                )
+                customGrid.appendChild(card)
+            }
+            configList.appendChild(customGrid)
+        }
+
+        // ── Default presets by category ──
+        addCategory("Dark mode", darkPresets)
+        addCategory("Light mode", lightPresets)
+        addCategory("Both dark and light modes", bothPresets)
+    }
+
+    // Fetch custom configs when panel opens
     fetchThemeConfigs { configs ->
-        cachedConfigs = configs.toMutableMap()
+        // Filter out any default sentinel entries — only keep actual custom configs
+        cachedCustomConfigs = linkedMapOf<String, dynamic>()
+        for ((name, config) in configs) {
+            if (!isDefaultConfig(config)) {
+                cachedCustomConfigs[name] = config
+            }
+        }
         renderConfigList()
     }
 
@@ -349,10 +424,13 @@ fun openSettingsPanel() {
     saveBtn.className = "settings-choice-btn settings-save-config-btn"
     saveBtn.textContent = "Save current\u2026"
     saveBtn.addEventListener("click", {
-        showSaveThemeConfigDialog(cachedConfigs.keys) { savedName ->
+        showSaveThemeConfigDialog(cachedCustomConfigs.keys + defaultThemeConfigNames) { savedName ->
             // Re-fetch to pick up the just-saved entry
             fetchThemeConfigs { configs ->
-                cachedConfigs = configs.toMutableMap()
+                cachedCustomConfigs = linkedMapOf<String, dynamic>()
+                for ((n, c) in configs) {
+                    if (!isDefaultConfig(c)) cachedCustomConfigs[n] = c
+                }
                 renderConfigList()
             }
         }
@@ -389,7 +467,11 @@ fun openSettingsPanel() {
         }
     }
     renderAppearanceRow()
-    settingsAppearanceRefresh = ::renderAppearanceRow
+    settingsAppearanceRefresh = {
+        renderAppearanceRow()
+        renderConfigList()
+        renderThemeGrid()
+    }
     appSection.appendChild(appRow)
     body.appendChild(appSection)
 

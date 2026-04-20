@@ -4,20 +4,48 @@ import Client
 
 /// Adaptive colour palette derived from the Termtastic semantic theme system.
 ///
-/// Resolves the default theme (Tron) for the current system appearance.
-/// Screens with access to the shared ViewModel should resolve from the
-/// user's actual selected theme instead.
+/// Resolves colours from the user's selected theme via ``settings``. When
+/// settings have not been loaded yet (e.g. before the first server fetch),
+/// falls back to the default Tron theme. Sidebar-specific overrides are
+/// respected via `sectionTheme(section: "sidebar")`.
+///
+/// ``settings`` is set at connect time (in `HostsView`) so that all views
+/// pick up the user's theme from the start.
+///
+/// - SeeAlso: `Client.ThemeResolverKt.resolve`
+/// - SeeAlso: `Client.UiSettings`
 enum Palette {
-    /// Resolves the default Tron palette for the given appearance.
-    private static func defaultPalette(isDark: Bool) -> Client.ResolvedPalette {
-        let themes = Client.ThemesKt.recommendedThemes
-        let tron = themes.first { ($0 as! Client.TerminalTheme).name == Client.ThemesKt.DEFAULT_THEME_NAME } as! Client.TerminalTheme
-        return Client.ThemeResolverKt.resolve(tron, isDark: isDark)
+    /// The user's UI settings fetched from the server after connection.
+    /// Set by `HostsView` before navigating to the tree. All colour
+    /// accessors read from this when non-nil.
+    static var settings: Client.UiSettings?
+
+    /// Resolves the sidebar palette for the given appearance, using the
+    /// user's selected theme if available, falling back to Tron.
+    private static func sidebarPalette(isDark: Bool) -> Client.ResolvedPalette {
+        let theme: Client.TerminalTheme
+        if let s = settings {
+            theme = s.sectionTheme(section: "sidebar")
+        } else {
+            let themes = Client.ThemesKt.recommendedThemes
+            theme = themes.first { ($0 as! Client.TerminalTheme).name == Client.ThemesKt.DEFAULT_THEME_NAME } as! Client.TerminalTheme
+        }
+        let effectiveIsDark: Bool
+        if let appearance = settings?.appearance {
+            switch appearance {
+            case .dark: effectiveIsDark = true
+            case .light: effectiveIsDark = false
+            default: effectiveIsDark = isDark
+            }
+        } else {
+            effectiveIsDark = isDark
+        }
+        return Client.ThemeResolverKt.resolve(theme, isDark: effectiveIsDark)
     }
 
     /// Theme accent colour derived from the terminal foreground.
     static var headerAccent: Color {
-        let pal = defaultPalette(isDark: UITraitCollection.current.userInterfaceStyle == .dark)
+        let pal = sidebarPalette(isDark: UITraitCollection.current.userInterfaceStyle == .dark)
         return Color(argb: pal.accent.primary).opacity(0.75)
     }
 
@@ -25,28 +53,28 @@ enum Palette {
     static var background: Color {
         Color(UIColor { traitCollection in
             let isDark = traitCollection.userInterfaceStyle == .dark
-            let pal = defaultPalette(isDark: isDark)
+            let pal = sidebarPalette(isDark: isDark)
             return UIColor(Color(argb: pal.sidebar.bg))
         })
     }
     static var surface: Color {
         Color(UIColor { traitCollection in
             let isDark = traitCollection.userInterfaceStyle == .dark
-            let pal = defaultPalette(isDark: isDark)
+            let pal = sidebarPalette(isDark: isDark)
             return UIColor(Color(argb: pal.surface.raised))
         })
     }
     static var textPrimary: Color {
         Color(UIColor { traitCollection in
             let isDark = traitCollection.userInterfaceStyle == .dark
-            let pal = defaultPalette(isDark: isDark)
+            let pal = sidebarPalette(isDark: isDark)
             return UIColor(Color(argb: pal.sidebar.text))
         })
     }
     static var textSecondary: Color {
         Color(UIColor { traitCollection in
             let isDark = traitCollection.userInterfaceStyle == .dark
-            let pal = defaultPalette(isDark: isDark)
+            let pal = sidebarPalette(isDark: isDark)
             return UIColor(Color(argb: pal.sidebar.textDim))
         })
     }

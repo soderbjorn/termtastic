@@ -1099,7 +1099,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 }
 
 .pane-action-btn.close:hover {
-    background: #c94b4b;
+    background: var(--t-chrome-closeDot, #c94b4b);
     color: #ffffff;
 }
 
@@ -3312,8 +3312,8 @@ body.appearance-light .hl-punctuation { color: #6e7781; }
 }
 
 .settings-sidebar.open {
-    width: 450px;
-    min-width: 360px;
+    width: 680px;
+    min-width: 500px;
 }
 
 .settings-sidebar-body {
@@ -3423,7 +3423,7 @@ body.appearance-light .settings-theme-card.selected {
 .settings-theme-config-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 8px;
     padding: 5px 8px;
     border-radius: 5px;
     cursor: pointer;
@@ -3499,6 +3499,215 @@ body.appearance-light .settings-theme-config-name {
 
 .settings-theme-config-row.drop-below {
     box-shadow: 0 2px 0 0 var(--t-accent-primary, var(--accent, #61afef));
+}
+
+/* ─── Default (built-in) theme configuration styling ─────────────── */
+
+.settings-theme-config-badge {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--t-text-tertiary, var(--text-secondary, #888));
+    border: 1px solid var(--t-border-subtle, var(--separator, #444));
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: auto;
+    margin-right: 4px;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+body.appearance-light .settings-theme-config-badge {
+    color: #999;
+    border-color: #ccc;
+}
+
+/* ─── Config category headers and card grid ──────────────────────── */
+
+.settings-config-category {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--t-text-tertiary, var(--text-secondary, #888));
+    padding: 12px 0 4px;
+}
+
+.settings-config-category:first-child {
+    padding-top: 0;
+}
+
+.settings-config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+    padding: 2px;
+}
+
+.settings-config-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 80ms ease, border-color 80ms ease;
+    position: relative;
+}
+
+.settings-config-card:hover {
+    background: var(--t-border-subtle, var(--separator, #333));
+}
+
+body.appearance-light .settings-config-card:hover {
+    background: var(--t-border-subtle, rgba(0, 0, 0, 0.06));
+}
+
+.settings-config-card-name {
+    font-size: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+    color: var(--t-text-secondary, var(--text-secondary));
+    cursor: pointer;
+}
+
+.settings-config-card-delete {
+    appearance: none;
+    background: none;
+    border: none;
+    color: var(--t-text-tertiary, var(--text-secondary, #666));
+    font-size: 14px;
+    cursor: pointer;
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 80ms ease;
+}
+
+.settings-config-card:hover .settings-config-card-delete {
+    opacity: 1;
+}
+
+.settings-config-card-delete:hover {
+    color: #e06c75;
+    background: rgba(224, 108, 117, 0.1);
+}
+
+/* Drag-and-drop indicators for config cards */
+.settings-config-card.dragging {
+    opacity: 0.4;
+}
+
+.settings-config-card.drop-before {
+    box-shadow: -3px 0 0 0 var(--t-accent-primary, var(--accent, #61afef));
+}
+
+.settings-config-card.drop-after {
+    box-shadow: 3px 0 0 0 var(--t-accent-primary, var(--accent, #61afef));
+}
+
+/* ─── Config silhouette (mini app layout preview) ────────────────── */
+
+.config-silhouette {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+    box-shadow: 0 0 0 1px var(--t-border-subtle, var(--separator, rgba(255,255,255,0.08)));
+}
+
+.cs-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 5px;
+    height: 10px;
+    flex-shrink: 0;
+}
+
+.cs-tab-dot {
+    width: 8px;
+    height: 4px;
+    border-radius: 2px;
+    opacity: 0.9;
+}
+
+.cs-tab-dot-dim {
+    opacity: 0.25;
+}
+
+.cs-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.cs-sidebar {
+    width: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 5px 3px;
+    flex-shrink: 0;
+}
+
+.cs-sidebar-line {
+    height: 2px;
+    border-radius: 1px;
+    opacity: 0.5;
+}
+
+.cs-sidebar-line.cs-short {
+    width: 60%;
+}
+
+.cs-main {
+    flex: 1;
+    padding: 2px;
+    display: flex;
+}
+
+.cs-terminal {
+    flex: 1;
+    border-radius: 3px;
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 5px 5px;
+}
+
+.cs-prompt {
+    width: 5px;
+    height: 5px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.cs-text {
+    height: 3px;
+    width: 20px;
+    border-radius: 1px;
+    opacity: 0.4;
+    margin-top: 1px;
+}
+
+.cs-accent {
+    height: 2px;
+    flex-shrink: 0;
+    opacity: 0.7;
 }
 
 .settings-save-config-btn {

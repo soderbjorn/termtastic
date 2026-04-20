@@ -47,6 +47,7 @@ internal var usageBar: HTMLElement? = null
 // ── Terminal registry (xterm.js instances, imperative) ──────────────
 internal val terminals = HashMap<String, TerminalEntry>()
 internal val connectionState = HashMap<String, String>()
+internal var windowSocketConnected = false
 
 // ── Per-pane VM registries ──────────────────────────────────────────
 internal val fileBrowserVms = HashMap<String, Pair<FileBrowserBackingViewModel, Job>>()
@@ -112,8 +113,8 @@ internal fun launchCmd(cmd: WindowCommand) {
  * @see hideDisconnectedModal
  */
 internal fun updateAggregateStatus() {
-    val states = connectionState.values
-    if (states.isNotEmpty() && states.any { it == "disconnected" }) showDisconnectedModal()
+    val ptyDisconnected = connectionState.values.any { it == "disconnected" }
+    if (!windowSocketConnected || ptyDisconnected) showDisconnectedModal()
     else hideDisconnectedModal()
 }
 
@@ -493,6 +494,77 @@ internal fun renderThemeSwatch(t: TerminalTheme): String {
             <span class="swatch-prompt" style="color:$accent">❯</span> ls
         </span>
         <span class="swatch-syntax-row">$syntaxDots</span>
+    </span>"""
+}
+
+/**
+ * Renders a miniature app-layout silhouette for a theme configuration,
+ * showing coloured zones that mirror the real UI: a tab strip along the
+ * top, a sidebar column on the left, a large terminal area in the centre,
+ * and an active-indicator accent line at the bottom.
+ *
+ * Each zone is filled with the background colour of the section's theme
+ * (or the main theme when no override is set). This gives an at-a-glance
+ * spatial preview of the whole configuration.
+ *
+ * @param config a dynamic JS object with `"theme"` and `"theme.<section>"`
+ *   keys, as produced by [buildCurrentThemeConfigJson] or
+ *   [ThemeConfigPreset.toDynamic]
+ * @return an HTML string with the mini layout preview
+ * @see renderThemeSwatch
+ */
+internal fun renderConfigSilhouette(config: dynamic): String {
+    val isDark = !isLightActive(appVm.stateFlow.value.appearance)
+
+    fun themeFor(key: String): TerminalTheme? {
+        val name = config[key] as? String
+        if (name.isNullOrEmpty()) return null
+        return recommendedThemes.firstOrNull { it.name == name }
+    }
+
+    val mainTheme = themeFor("theme") ?: return ""
+
+    fun paletteFor(section: String): ResolvedPalette {
+        val t = themeFor("theme.$section") ?: mainTheme
+        return t.resolve(isDark)
+    }
+
+    val tabsP    = paletteFor("tabs")
+    val sidebarP = paletteFor("sidebar")
+    val termP    = paletteFor("terminal")
+    val windowsP = paletteFor("windows")
+    val activeP  = (themeFor("theme.active") ?: mainTheme).resolve(isDark)
+
+    val tabsBg      = argbToHex(tabsP.surface.base)
+    val tabsAccent  = argbToHex(tabsP.accent.primary)
+    val tabsFg      = argbToHex(tabsP.text.tertiary)
+    val sidebarBg   = argbToHex(sidebarP.surface.base)
+    val sidebarFg   = argbToHex(sidebarP.text.tertiary)
+    val sidebarHi   = argbToHex(sidebarP.accent.primary)
+    val termBg      = argbToHex(termP.terminal.bg)
+    val termFg      = argbToHex(termP.terminal.fg)
+    val windowsBg   = argbToHex(windowsP.surface.raised)
+    val activeBg    = argbToHex(activeP.accent.primary)
+
+    return """<span class="config-silhouette">
+        <span class="cs-tabs" style="background:$tabsBg">
+            <span class="cs-tab-dot" style="background:$tabsAccent"></span>
+            <span class="cs-tab-dot cs-tab-dot-dim" style="background:$tabsFg"></span>
+        </span>
+        <span class="cs-body">
+            <span class="cs-sidebar" style="background:$sidebarBg">
+                <span class="cs-sidebar-line" style="background:$sidebarHi"></span>
+                <span class="cs-sidebar-line cs-short" style="background:$sidebarFg"></span>
+                <span class="cs-sidebar-line" style="background:$sidebarFg"></span>
+            </span>
+            <span class="cs-main" style="background:$windowsBg">
+                <span class="cs-terminal" style="background:$termBg">
+                    <span class="cs-prompt" style="background:$activeBg"></span>
+                    <span class="cs-text" style="background:$termFg"></span>
+                </span>
+            </span>
+        </span>
+        <span class="cs-accent" style="background:$activeBg"></span>
     </span>"""
 }
 

@@ -19,6 +19,12 @@ final class HostsViewModel {
                 let token = Client.AuthTokenKt.getOrCreateToken(store: KeychainAuthTokenStore.shared)
                 let serverUrl = Client.ServerUrl(host: entry.host, port: entry.port, useTls: false)
                 try await ConnectionHolder.shared.connect(serverUrl: serverUrl, authToken: token)
+                // Fetch the user's theme settings so all views use the
+                // selected theme from the start. Palette.settings is a
+                // static var read by all colour accessors.
+                if let client = ConnectionHolder.shared.client {
+                    Palette.settings = try? await client.fetchUiSettings()
+                }
                 await MainActor.run {
                     connectingId = nil
                 }
