@@ -192,6 +192,33 @@ object GitCatalog {
     }
 
     /**
+     * Return the repository name derived from the `origin` remote URL — the
+     * last path segment with any `.git` suffix stripped. Returns null if
+     * there is no `origin` remote or the URL can't be parsed.
+     *
+     * Handles the common URL forms:
+     *  - `git@host:owner/repo.git`
+     *  - `https://host/owner/repo.git`
+     *  - `/local/path/repo.git`
+     *
+     * Used by the worktree dialog to derive a suggested folder-name prefix
+     * that reflects the project ("termtastic") rather than the active
+     * checkout directory ("main"), which would otherwise produce misleading
+     * sibling paths when the repo is laid out as `<parent>/<repo>/<branch>`.
+     *
+     * @param cwd any directory inside the repository
+     * @return the repo slug from the remote, or null
+     * @see handleWindowCommand
+     */
+    fun getRepoNameFromRemote(cwd: Path): String? {
+        val url = runGit(cwd, "remote", "get-url", "origin")?.trim().orEmpty()
+        if (url.isEmpty()) return null
+        val afterColonOrSlash = url.substringAfterLast(':').substringAfterLast('/')
+        val stripped = afterColonOrSlash.removeSuffix(".git").trim()
+        return stripped.ifEmpty { null }
+    }
+
+    /**
      * Check whether the working tree at [cwd] has any uncommitted changes
      * (staged, unstaged, or untracked files).
      *

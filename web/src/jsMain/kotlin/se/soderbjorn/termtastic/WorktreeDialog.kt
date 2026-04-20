@@ -138,6 +138,14 @@ fun showWorktreeDialog(
         radio.addEventListener("change", { _: Event ->
             selectedMode = value
             customInput.disabled = (value != "custom")
+            // Seed the custom path with the sibling suggestion the first time
+            // the user switches to "custom", so they can tweak instead of
+            // typing the full path. Don't clobber a value they already typed.
+            if (value == "custom" && customInput.value.isEmpty()) {
+                val branch = branchInput.value.trim()
+                val safeBranch = branch.replace("/", "-").replace("\\", "-")
+                customInput.value = "$siblingBase$safeBranch"
+            }
             updatePreview()
             updateCreateEnabled()
         })

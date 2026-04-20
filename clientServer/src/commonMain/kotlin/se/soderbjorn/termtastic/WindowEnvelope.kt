@@ -176,7 +176,7 @@ sealed class WindowEnvelope {
      * and conditionally show the "migrate changes" checkbox.
      *
      * @param paneId the pane that requested the defaults
-     * @param repoName the basename of the git repository root directory
+     * @param repoName the repository name (from the `origin` remote URL, falling back to the repo-root basename)
      * @param siblingPath default worktree path as a sibling of the repo (e.g. `../repo-branch`)
      * @param dotWorktreesPath default worktree path under a `.worktrees/` directory
      * @param hasUncommittedChanges `true` if the working directory has staged, unstaged, or untracked changes

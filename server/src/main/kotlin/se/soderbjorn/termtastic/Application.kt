@@ -925,7 +925,9 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
                 ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "Not inside a git repository"))
                 return
             }
-            val repoName = repoRoot.fileName?.toString() ?: "repo"
+            val repoName = GitCatalog.getRepoNameFromRemote(cwdPath)
+                ?: repoRoot.fileName?.toString()
+                ?: "repo"
             val parentDir = repoRoot.parent?.toString() ?: cwd
             val siblingPath = "$parentDir/$repoName-"
             val dotWorktreesPath = "$parentDir/.worktrees/$repoName-"
