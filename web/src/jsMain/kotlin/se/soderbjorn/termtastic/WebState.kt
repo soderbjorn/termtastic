@@ -76,8 +76,12 @@ internal val previousSessionStates = HashMap<String, String?>()
 // Settings panel DOM state
 internal var settingsPanel: HTMLElement? = null
 internal var settingsEscHandler: ((Event) -> Unit)? = null
-/** Callback to refresh the settings panel's appearance row when appearance changes externally. */
-internal var settingsAppearanceRefresh: (() -> Unit)? = null
+
+// Theme manager (right-sidebar) DOM state. Only one right sidebar —
+// settings OR theme manager — is visible at a time; opening either closes
+// the other via closeSettingsPanel / closeThemeManager.
+internal var themeManagerPanel: HTMLElement? = null
+internal var themeManagerEscHandler: ((Event) -> Unit)? = null
 
 // Pane type modal DOM state
 internal val previewEntries = mutableListOf<dynamic>()
@@ -365,6 +369,7 @@ internal fun applyAppearanceClass() {
         val sidebarEls = buildList {
             (kotlinx.browser.document.getElementById("sidebar") as? HTMLElement)?.let { add(it) }
             (kotlinx.browser.document.querySelector(".settings-sidebar") as? HTMLElement)?.let { add(it) }
+            (kotlinx.browser.document.querySelector(".theme-manager-sidebar") as? HTMLElement)?.let { add(it) }
         }
         if (sidebarEls.isNotEmpty()) put("sidebar", sidebarEls)
         // Tabs section covers the entire top bar (app-header + tab-bar)
@@ -501,8 +506,7 @@ internal fun renderThemeSwatch(t: TerminalTheme): String {
  * spatial preview of the whole configuration.
  *
  * @param config a dynamic JS object with `"theme"` and `"theme.<section>"`
- *   keys, as produced by [buildCurrentThemeConfigJson] or
- *   [ThemeConfigPreset.toDynamic]
+ *   keys, as produced by [ThemeConfigPreset.toDynamic]
  * @return an HTML string with the mini layout preview
  * @see renderThemeSwatch
  */

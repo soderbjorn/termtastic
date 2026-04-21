@@ -10,6 +10,9 @@
  */
 package se.soderbjorn.termtastic.client.viewmodel
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+
 /**
  * Functional interface for persisting a single UI setting to the server.
  *
@@ -46,4 +49,33 @@ interface SettingsPersister {
      * @param settings map of setting keys to values.
      */
     fun fireAndForgetPutSettings(settings: Map<String, String>) {}
+
+    /**
+     * Send nested JSON setting updates to the server in a single request.
+     * Used by settings whose values are structured (arrays of favorites,
+     * maps of custom color schemes, maps of custom themes).
+     *
+     * The default implementation downgrades values to strings where
+     * possible and delegates to [putSettings]; platforms that want to
+     * preserve nested JSON should override this. Called by
+     * [AppBackingViewModel] for any setting that cannot be round-tripped
+     * as a plain string.
+     *
+     * @param settings JSON object whose top-level keys are the setting
+     *   keys to merge into the server's `ui.settings.v1` blob.
+     */
+    suspend fun putJsonSettings(settings: JsonObject) {
+        val flat = buildMap<String, String> {
+            for ((k, v) in settings) {
+                if (v is JsonPrimitive && v.isString) {
+                    put(k, v.content)
+                } else if (v is JsonPrimitive) {
+                    put(k, v.content)
+                } else {
+                    put(k, v.toString())
+                }
+            }
+        }
+        putSettings(flat)
+    }
 }

@@ -2,13 +2,15 @@
  * Settings panel UI component for the Termtastic web frontend.
  *
  * Builds and manages a slide-in sidebar panel with controls for:
- * - Theme selection (grid of theme swatches)
- * - Appearance mode (Light / Dark / Auto)
  * - Text size (font size presets from 10px to 24px)
- * - Pane status indicator display mode (dots, glow, both, none)
+ * - Font family (monospace preset picker; uninstalled fonts are omitted)
  * - Desktop notifications toggle
+ * - Custom title bar toggle (Electron only)
  * - Hidden developer tools (activated by 5 rapid clicks on "Settings" title)
  * - A link to server-side settings
+ *
+ * Theme selection lives in the dedicated Theme Manager sidebar (see
+ * [ThemeManager.kt]), opened via the toolbar palette button.
  *
  * All settings are persisted to the server via the [AppBackingViewModel] and
  * the [SettingsPersister] REST endpoint.
@@ -36,20 +38,28 @@ private val fontSizePresets = listOf(10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
  *
  * Removes the Escape key handler and cleans up the [settingsPanel] reference.
  *
+ * @param onClosed optional callback invoked once the slide-out transition has
+ *                 finished and the panel's DOM node has been detached. Used by
+ *                 [showThemeManager] to sequence a settings→theme-manager
+ *                 handoff so the two sidebars don't overlap mid-animation.
+ *                 Invoked immediately (synchronously) when the panel was not
+ *                 open to begin with.
  * @see openSettingsPanel
  */
-fun closeSettingsPanel() {
-    val panel = settingsPanel ?: return
+fun closeSettingsPanel(onClosed: (() -> Unit)? = null) {
+    val panel = settingsPanel ?: run { onClosed?.invoke(); return }
+    var done = false
     panel.classList.remove("open")
     panel.addEventListener("transitionend", {
-        if (!panel.classList.contains("open")) {
+        if (!done && !panel.classList.contains("open")) {
+            done = true
             panel.remove()
             fitVisible()
+            onClosed?.invoke()
         }
     })
     settingsEscHandler?.let { document.removeEventListener("keydown", it) }
     settingsEscHandler = null
-    settingsAppearanceRefresh = null
     settingsPanel = null
 }
 
@@ -63,6 +73,13 @@ fun closeSettingsPanel() {
  */
 fun openSettingsPanel() {
     if (settingsPanel != null) { closeSettingsPanel(); return }
+    // Mutual exclusion: only one right-side sidebar visible at a time.
+    // If the theme manager is open, wait for its close animation to complete
+    // before opening settings so the two sidebars don't overlap mid-slide.
+    if (themeManagerPanel != null) {
+        closeThemeManager(onClosed = { openSettingsPanel() })
+        return
+    }
 
     val appBody = document.querySelector(".app-body") as? HTMLElement ?: return
     val panel = document.createElement("aside") as HTMLElement
@@ -96,388 +113,6 @@ fun openSettingsPanel() {
     val body = document.createElement("div") as HTMLElement
     body.className = "settings-sidebar-body"
 
-    // ─── Theme ──────────────────────────────────────────────────────
-    val themeSection = document.createElement("div") as HTMLElement
-    themeSection.className = "settings-section"
-    val themeTitle = document.createElement("div") as HTMLElement
-    themeTitle.className = "settings-label"
-    themeTitle.textContent = "Color themes"
-    themeSection.appendChild(themeTitle)
-
-    val slotEntries = listOf(
-        "" to "Main theme",
-        "tabs" to "Tab strip",
-        "windows" to "Windows",
-        "active" to "Active indicators",
-        "sidebar" to "Sidebar",
-        "terminal" to "Terminal",
-        "diff" to "Diff",
-        "fileBrowser" to "File browser",
-    )
-
-    var activeSlot = ""
-
-    fun currentSectionTheme(section: String): TerminalTheme? {
-        val state = appVm.stateFlow.value
-        return when (section) {
-            "sidebar" -> state.sidebarTheme
-            "terminal" -> state.terminalTheme
-            "diff" -> state.diffTheme
-            "fileBrowser" -> state.fileBrowserTheme
-            "tabs" -> state.tabsTheme
-            "chrome" -> state.chromeTheme
-            "windows" -> state.windowsTheme
-            "active" -> state.activeTheme
-            else -> null
-        }
-    }
-
-    val slotSelect = document.createElement("select") as org.w3c.dom.HTMLSelectElement
-    slotSelect.className = "settings-section-select settings-slot-select"
-    for ((key, label) in slotEntries) {
-        val opt = document.createElement("option") as org.w3c.dom.HTMLOptionElement
-        opt.value = key
-        opt.textContent = label
-        slotSelect.appendChild(opt)
-    }
-    themeSection.appendChild(slotSelect)
-
-    val themeGrid = document.createElement("div") as HTMLElement
-    themeGrid.className = "settings-theme-grid"
-
-    fun renderThemeGrid() {
-        themeGrid.innerHTML = ""
-        val isMainSlot = activeSlot.isEmpty()
-        val currentTheme = if (isMainSlot) appVm.stateFlow.value.theme
-            else currentSectionTheme(activeSlot)
-
-        if (!isMainSlot) {
-            val defaultCard = document.createElement("div") as HTMLElement
-            defaultCard.className = "settings-theme-card settings-theme-default" +
-                if (currentTheme == null) " selected" else ""
-            defaultCard.innerHTML = """<div class="theme-swatch theme-swatch-default"></div><span class="settings-theme-name">Default</span>"""
-            defaultCard.addEventListener("click", {
-                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                    appVm.setSectionTheme(activeSlot, null)
-                }
-                applyAll()
-                renderThemeGrid()
-            })
-            themeGrid.appendChild(defaultCard)
-        }
-
-        for (t in recommendedThemes) {
-            val card = document.createElement("div") as HTMLElement
-            card.className = "settings-theme-card" +
-                if (currentTheme != null && t.name == currentTheme.name) " selected" else ""
-            card.innerHTML = """${renderThemeSwatch(t)}<span class="settings-theme-name">${t.name}</span>"""
-            card.addEventListener("click", {
-                if (isMainSlot) {
-                    GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setTheme(t) }
-                } else {
-                    GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                        appVm.setSectionTheme(activeSlot, t)
-                    }
-                }
-                applyAll()
-                renderThemeGrid()
-            })
-            themeGrid.appendChild(card)
-        }
-    }
-    renderThemeGrid()
-
-    slotSelect.addEventListener("change", {
-        activeSlot = slotSelect.value
-        renderThemeGrid()
-    })
-
-    themeSection.appendChild(themeGrid)
-
-    // ─── Theme configurations ──────────────────────────────────────
-    val configSection = document.createElement("div") as HTMLElement
-    configSection.className = "settings-section"
-
-    val configList = document.createElement("div") as HTMLElement
-    configList.className = "settings-theme-configs-list"
-    configSection.appendChild(configList)
-
-    // Local cache of user-created (custom) configs.
-    var cachedCustomConfigs = linkedMapOf<String, dynamic>()
-
-    /** Name of the config card currently being dragged, if any. */
-    var draggedConfigName: String? = null
-
-    /**
-     * Build a theme configuration card (silhouette + name underneath) that
-     * can be clicked to apply and optionally dragged to reorder.
-     *
-     * @param name         display name
-     * @param configData   the dynamic JS config object for rendering and applying
-     * @param isDefault    whether this is a built-in preset
-     * @param container    the parent grid element (used for drag indicator cleanup)
-     * @param onReorder    callback invoked with (sourceName, targetName, insertBefore) on drop
-     * @param onDelete     callback invoked to delete this config, or null if not deletable
-     */
-    fun buildConfigCard(
-        name: String,
-        configData: dynamic,
-        isDefault: Boolean,
-        container: HTMLElement,
-        onReorder: ((source: String, target: String, before: Boolean) -> Unit)?,
-        onDelete: (() -> Unit)?,
-    ): HTMLElement {
-        val card = document.createElement("div") as HTMLElement
-        card.className = "settings-config-card" +
-            if (isDefault) " settings-config-card-default" else ""
-        card.setAttribute("data-config-name", name)
-
-        if (onReorder != null) {
-            card.setAttribute("draggable", "true")
-        }
-
-        fun activateConfig() {
-            applyThemeConfig(configData)
-            renderThemeGrid()
-        }
-
-        val silhouette = document.createElement("span") as HTMLElement
-        silhouette.innerHTML = renderConfigSilhouette(configData)
-        silhouette.firstElementChild?.let { el ->
-            el.addEventListener("click", { activateConfig() })
-            card.appendChild(el)
-        }
-
-        val nameEl = document.createElement("span") as HTMLElement
-        nameEl.className = "settings-config-card-name"
-        nameEl.textContent = name
-        nameEl.addEventListener("click", { activateConfig() })
-        card.appendChild(nameEl)
-
-        if (onDelete != null) {
-            val deleteBtn = document.createElement("button") as HTMLElement
-            deleteBtn.className = "settings-config-card-delete"
-            deleteBtn.innerHTML = "&times;"
-            deleteBtn.title = "Delete"
-            deleteBtn.addEventListener("click", { ev: Event ->
-                ev.stopPropagation()
-                showConfirmDialog(
-                    title = "Delete configuration",
-                    message = "Delete theme configuration <b>$name</b>?",
-                    confirmLabel = "Delete",
-                ) { onDelete() }
-            })
-            card.appendChild(deleteBtn)
-        }
-
-        // ── Drag-and-drop event handlers ──
-
-        if (onReorder != null) {
-            card.addEventListener("dragstart", { ev: Event ->
-                val dt = ev.asDynamic().dataTransfer ?: return@addEventListener
-                draggedConfigName = name
-                dt.effectAllowed = "move"
-                dt.setData("text/plain", name)
-                card.classList.add("dragging")
-            })
-
-            card.addEventListener("dragend", { _: Event ->
-                draggedConfigName = null
-                card.classList.remove("dragging")
-                val allCards = container.querySelectorAll(".settings-config-card")
-                for (i in 0 until allCards.length) {
-                    (allCards.item(i) as? HTMLElement)?.classList?.remove("drop-before", "drop-after")
-                }
-            })
-
-            card.addEventListener("dragover", { ev: Event ->
-                if (draggedConfigName == null || draggedConfigName == name) return@addEventListener
-                ev.preventDefault()
-                val dt = ev.asDynamic().dataTransfer
-                if (dt != null) dt.dropEffect = "move"
-                val rect = card.getBoundingClientRect()
-                val midX = rect.left + rect.width / 2
-                val clientX = ev.asDynamic().clientX as Double
-                if (clientX < midX) {
-                    card.classList.add("drop-before")
-                    card.classList.remove("drop-after")
-                } else {
-                    card.classList.add("drop-after")
-                    card.classList.remove("drop-before")
-                }
-            })
-
-            card.addEventListener("dragleave", { _: Event ->
-                card.classList.remove("drop-before", "drop-after")
-            })
-
-            card.addEventListener("drop", { ev: Event ->
-                ev.preventDefault()
-                card.classList.remove("drop-before", "drop-after")
-                val sourceName = draggedConfigName ?: return@addEventListener
-                if (sourceName == name) return@addEventListener
-                val rect = card.getBoundingClientRect()
-                val midX = rect.left + rect.width / 2
-                val clientX = ev.asDynamic().clientX as Double
-                onReorder(sourceName, name, clientX < midX)
-            })
-        }
-
-        return card
-    }
-
-    /**
-     * Render the full theme configurations section with category headers
-     * and card grids.
-     */
-    fun renderConfigList() {
-        configList.innerHTML = ""
-
-        // ── Default presets by category ──
-        val darkPresets = defaultThemeConfigs.filter { it.mode == ConfigMode.Dark }
-        val lightPresets = defaultThemeConfigs.filter { it.mode == ConfigMode.Light }
-        val bothPresets = defaultThemeConfigs.filter { it.mode == ConfigMode.Both }
-
-        fun addCategory(label: String, presets: List<ThemeConfigPreset>) {
-            if (presets.isEmpty()) return
-            val header = document.createElement("div") as HTMLElement
-            header.className = "settings-config-category"
-            header.textContent = label
-            configList.appendChild(header)
-
-            val grid = document.createElement("div") as HTMLElement
-            grid.className = "settings-config-grid"
-            for (preset in presets) {
-                val card = buildConfigCard(
-                    name = preset.name,
-                    configData = preset.toDynamic(),
-                    isDefault = true,
-                    container = grid,
-                    onReorder = null,
-                    onDelete = null,
-                )
-                grid.appendChild(card)
-            }
-            configList.appendChild(grid)
-        }
-
-        // ── Custom (user-created) configs — shown first ──
-        val customHeader = document.createElement("div") as HTMLElement
-        customHeader.className = "settings-config-category"
-        customHeader.textContent = "Custom"
-        configList.appendChild(customHeader)
-
-        val customGrid = document.createElement("div") as HTMLElement
-        customGrid.className = "settings-config-grid"
-
-        if (cachedCustomConfigs.isEmpty()) {
-            val empty = document.createElement("div") as HTMLElement
-            empty.className = "settings-theme-configs-empty"
-            empty.textContent = "No saved configurations"
-            configList.appendChild(empty)
-        } else {
-            for ((name, config) in cachedCustomConfigs) {
-                val card = buildConfigCard(
-                    name = name,
-                    configData = config,
-                    isDefault = false,
-                    container = customGrid,
-                    onReorder = { sourceName, targetName, insertBefore ->
-                        val entries = cachedCustomConfigs.entries.toMutableList()
-                        val sourceIndex = entries.indexOfFirst { it.key == sourceName }
-                        if (sourceIndex < 0) return@buildConfigCard
-                        val sourceEntry = entries.removeAt(sourceIndex)
-                        var targetIndex = entries.indexOfFirst { it.key == targetName }
-                        if (!insertBefore) targetIndex++
-                        entries.add(targetIndex, sourceEntry)
-                        cachedCustomConfigs = linkedMapOf(*entries.map { it.key to it.value }.toTypedArray())
-                        persistThemeConfigs(cachedCustomConfigs) {}
-                        renderConfigList()
-                    },
-                    onDelete = {
-                        cachedCustomConfigs.remove(name)
-                        persistThemeConfigs(cachedCustomConfigs) { renderConfigList() }
-                        renderConfigList()
-                    },
-                )
-                customGrid.appendChild(card)
-            }
-            configList.appendChild(customGrid)
-        }
-
-        // ── Default presets by category ──
-        addCategory("Dark mode", darkPresets)
-        addCategory("Light mode", lightPresets)
-        addCategory("Both dark and light modes", bothPresets)
-    }
-
-    // Fetch custom configs when panel opens
-    fetchThemeConfigs { configs ->
-        // Filter out any default sentinel entries — only keep actual custom configs
-        cachedCustomConfigs = linkedMapOf<String, dynamic>()
-        for ((name, config) in configs) {
-            if (!isDefaultConfig(config)) {
-                cachedCustomConfigs[name] = config
-            }
-        }
-        renderConfigList()
-    }
-
-    val saveBtn = document.createElement("button") as HTMLElement
-    saveBtn.className = "settings-choice-btn settings-save-config-btn"
-    saveBtn.textContent = "Save current\u2026"
-    saveBtn.addEventListener("click", {
-        showSaveThemeConfigDialog(cachedCustomConfigs.keys + defaultThemeConfigNames) { savedName ->
-            // Re-fetch to pick up the just-saved entry
-            fetchThemeConfigs { configs ->
-                cachedCustomConfigs = linkedMapOf<String, dynamic>()
-                for ((n, c) in configs) {
-                    if (!isDefaultConfig(c)) cachedCustomConfigs[n] = c
-                }
-                renderConfigList()
-            }
-        }
-    })
-    configSection.appendChild(saveBtn)
-
-    body.appendChild(configSection)
-    body.appendChild(themeSection)
-
-    // ─── Appearance ─────────────────────────────────────────────────
-    val appSection = document.createElement("div") as HTMLElement
-    appSection.className = "settings-section"
-    val appLabel = document.createElement("div") as HTMLElement
-    appLabel.className = "settings-label"
-    appLabel.textContent = "Appearance"
-    appSection.appendChild(appLabel)
-
-    val appRow = document.createElement("div") as HTMLElement
-    appRow.className = "settings-button-row"
-    fun renderAppearanceRow() {
-        appRow.innerHTML = ""
-        val currentAppearance = appVm.stateFlow.value.appearance
-        for (a in Appearance.values()) {
-            val btn = document.createElement("button") as HTMLElement
-            btn.className = "settings-choice-btn" + if (a == currentAppearance) " selected" else ""
-            btn.textContent = a.name
-            btn.addEventListener("click", {
-                GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setAppearance(a) }
-                applyAll()
-                renderAppearanceRow()
-                updateAppearanceToggle()
-            })
-            appRow.appendChild(btn)
-        }
-    }
-    renderAppearanceRow()
-    settingsAppearanceRefresh = {
-        renderAppearanceRow()
-        renderConfigList()
-        renderThemeGrid()
-    }
-    appSection.appendChild(appRow)
-    body.appendChild(appSection)
-
     // ─── Text size ──────────────────────────────────────────────────
     val sizeSection = document.createElement("div") as HTMLElement
     sizeSection.className = "settings-section"
@@ -508,6 +143,43 @@ fun openSettingsPanel() {
     renderSizeRow()
     sizeSection.appendChild(sizeRow)
     body.appendChild(sizeSection)
+
+    // ─── Font ──────────────────────────────────────────────────────
+    val fontSection = document.createElement("div") as HTMLElement
+    fontSection.className = "settings-section"
+    val fontLabel = document.createElement("div") as HTMLElement
+    fontLabel.className = "settings-label"
+    fontLabel.textContent = "Font"
+    fontSection.appendChild(fontLabel)
+
+    val fontRow = document.createElement("div") as HTMLElement
+    fontRow.className = "settings-button-row settings-font-row"
+    fun renderFontRow() {
+        fontRow.innerHTML = ""
+        val currentKey = appVm.stateFlow.value.paneFontFamily ?: "system"
+        val installed = detectInstalledFonts()
+        for (preset in fontPresets) {
+            if (preset.key !in installed) continue
+            val btn = document.createElement("button") as HTMLElement
+            val isSelected = preset.key == currentKey
+            btn.className = "settings-choice-btn" + if (isSelected) " selected" else ""
+            btn.textContent = preset.displayName
+            btn.style.fontFamily = preset.cssStack
+            btn.addEventListener("click", {
+                if (preset.key != currentKey) {
+                    GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        appVm.setPaneFontFamily(preset.key)
+                    }
+                    applyGlobalFontFamily(preset.key)
+                }
+                renderFontRow()
+            })
+            fontRow.appendChild(btn)
+        }
+    }
+    renderFontRow()
+    fontSection.appendChild(fontRow)
+    body.appendChild(fontSection)
 
     // ─── Desktop notifications ─────────────────────────────────────
     val notifSection = document.createElement("div") as HTMLElement

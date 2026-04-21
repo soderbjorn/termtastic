@@ -169,7 +169,7 @@ fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
 
     val term = Terminal(kotlin.js.json(
         "cursorBlink" to true,
-        "fontFamily" to "Menlo, Monaco, 'Courier New', monospace",
+        "fontFamily" to resolveFontFamilyCss(appVm.stateFlow.value.paneFontFamily),
         "fontSize" to 13,
         "minimumContrastRatio" to 4.5,
         "theme" to buildXtermTheme()
@@ -239,8 +239,7 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false, maximized: Boolean
             val fbIcon = document.createElement("span") as HTMLElement
             fbIcon.className = "pane-header-icon"
             fbIcon.innerHTML = """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M2 4.5 a0.5 0.5 0 0 1 0.5 -0.5 h3.5 l1.25 1.75 h6.25 a0.5 0.5 0 0 1 0.5 0.5 v7.25 a0.5 0.5 0 0 1 -0.5 0.5 H2.5 a0.5 0.5 0 0 1 -0.5 -0.5 Z"/></svg>"""
-            val fbTitleEl = header.querySelector(".terminal-title") as? HTMLElement
-            if (fbTitleEl != null) header.insertBefore(fbIcon, fbTitleEl)
+            header.insertBefore(fbIcon, header.firstChild)
             cell.appendChild(header)
             val fbView = buildFileBrowserView(paneId, leaf, header)
             cell.appendChild(fbView)
@@ -258,8 +257,7 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false, maximized: Boolean
             val gitIcon = document.createElement("span") as HTMLElement
             gitIcon.className = "pane-header-icon"
             gitIcon.innerHTML = """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="5" cy="4" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="8" r="1.5"/><line x1="5" y1="5.5" x2="5" y2="10.5"/><path d="M5 5.5 C5 8 8 8 9.5 8"/></svg>"""
-            val gitTitleEl = header.querySelector(".terminal-title") as? HTMLElement
-            if (gitTitleEl != null) header.insertBefore(gitIcon, gitTitleEl)
+            header.insertBefore(gitIcon, header.firstChild)
             cell.appendChild(header)
             cell.appendChild(buildGitView(paneId, leaf, header))
             header.addEventListener("mousedown", { _ -> markPaneFocused(cell) })
@@ -276,12 +274,12 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false, maximized: Boolean
             } else {
                 headerIcon.innerHTML = """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><rect x="1" y="2" width="14" height="12" rx="1.5"/><polyline points="4,7 6,5 4,3"/><line x1="7" y1="7" x2="11" y2="7" stroke-linecap="round"/></svg>"""
             }
-            val headerTitleEl = header.querySelector(".terminal-title") as? HTMLElement
-            if (headerTitleEl != null) header.insertBefore(headerIcon, headerTitleEl)
+            header.insertBefore(headerIcon, header.firstChild)
             cell.appendChild(header)
             header.addEventListener("mousedown", { _ -> markPaneFocused(cell) })
             val entry = ensureTerminal(paneId, sessionId)
             entry.term.options.fontSize = (appVm.stateFlow.value.paneFontSize ?: 14)
+            entry.term.options.fontFamily = resolveFontFamilyCss(appVm.stateFlow.value.paneFontFamily)
             try { safeFit(entry.term, entry.fit) } catch (_: Throwable) {}
             cell.appendChild(entry.container)
         }
@@ -361,11 +359,11 @@ fun attachPaneTabDrag(cell: HTMLElement, paneId: String) {
 }
 
 /**
- * Builds a placeholder element shown when a tab has no panes.
+ * Builds a placeholder element shown when a tab has no windows.
  *
- * Displays a message and a "New pane" button that opens the [showPaneTypeModal].
+ * Displays a heading and a "New window" button that opens the [showPaneTypeModal].
  *
- * @param tabId the tab identifier to create a new pane in
+ * @param tabId the tab identifier to create a new window in
  * @return the placeholder HTMLElement
  */
 fun buildEmptyTabPlaceholder(tabId: String): HTMLElement {
@@ -373,11 +371,11 @@ fun buildEmptyTabPlaceholder(tabId: String): HTMLElement {
     wrap.className = "empty-tab"
     val message = document.createElement("div") as HTMLElement
     message.className = "empty-tab-message"
-    message.textContent = "This tab has no panes."
+    message.textContent = "This tab has no windows."
     val btn = document.createElement("button") as HTMLElement
     btn.className = "empty-tab-button"
     btn.setAttribute("type", "button")
-    btn.textContent = "New pane"
+    btn.textContent = "New window"
     btn.addEventListener("click", { ev: org.w3c.dom.events.Event ->
         ev.stopPropagation()
         showPaneTypeModal(emptyTabId = tabId)

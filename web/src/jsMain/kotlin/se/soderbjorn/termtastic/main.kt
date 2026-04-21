@@ -53,6 +53,45 @@ private const val MOON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="1
 private const val AUTO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18" fill="currentColor"/></svg>"""
 
 /**
+ * Returns whether the host reports a dark system colour-scheme preference.
+ * Consulted only when the user's [Appearance] is [Appearance.Auto] — in
+ * [Appearance.Dark] / [Appearance.Light] the explicit choice always wins.
+ *
+ * @return `true` when `prefers-color-scheme: dark` matches.
+ */
+internal fun isSystemDark(): Boolean {
+    val mql = window.matchMedia("(prefers-color-scheme: dark)")
+    return mql.matches
+}
+
+/**
+ * Recompute the active theme (main + per-section overrides) from the
+ * ViewModel's current light/dark slot selection and appearance, then
+ * apply the derived palette to the DOM and xterm.js instances.
+ *
+ * Called from every code path that changes which slot is live or what
+ * that slot points at: appearance toggle, media-query change, theme
+ * selection in the Theme Manager, scheme edits, etc.
+ *
+ * @see AppBackingViewModel.refreshActiveTheme
+ */
+internal fun refreshAndApplyActiveTheme() {
+    appVm.refreshActiveTheme(isSystemDark())
+    val s = appVm.stateFlow.value
+    console.log(
+        "[theme] refresh done — main=${s.theme.name}" +
+            " light=${s.lightThemeName} dark=${s.darkThemeName}" +
+            " appearance=${s.appearance}" +
+            " sections: sidebar=${s.sidebarTheme?.name} terminal=${s.terminalTheme?.name}" +
+            " diff=${s.diffTheme?.name} fileBrowser=${s.fileBrowserTheme?.name}" +
+            " tabs=${s.tabsTheme?.name} chrome=${s.chromeTheme?.name}" +
+            " windows=${s.windowsTheme?.name} active=${s.activeTheme?.name}"
+    )
+    applyAll()
+    refreshThemeManager()
+}
+
+/**
  * Updates the appearance toggle button in the header to reflect the current
  * [Appearance] mode. Sets the button's SVG icon and tooltip.
  *
@@ -159,6 +198,14 @@ private fun start() {
             for ((k, v) in settings) { obj[k] = v }
             postSettings(obj)
         }
+
+        override suspend fun putJsonSettings(settings: kotlinx.serialization.json.JsonObject) {
+            // Round-trip through the runtime JSON parser so nested
+            // objects/arrays reach the server as real JSON — not the
+            // stringified-blob fallback from the default implementation.
+            val body = js("JSON.parse")(settings.toString())
+            postSettings(body)
+        }
     }
     appVm = AppBackingViewModel(windowSocket, termtasticClient.windowState, webSettingsPersister)
 
@@ -182,7 +229,7 @@ private fun start() {
             val jsonObj = kotlinx.serialization.json.Json.parseToJsonElement(jsonStr)
                 as kotlinx.serialization.json.JsonObject
             appVm.applyServerUiSettings(jsonObj)
-            applyAll()
+            refreshAndApplyActiveTheme()
             applySidebarState()
         }
     }
@@ -214,15 +261,53 @@ private fun start() {
     }
 
     // Reactively apply visual changes when the VM's appearance/theme state changes.
+    // We track the derived `theme` plus the light/dark slot names and the
+    // custom maps so any upstream change that could affect which palette is
+    // live triggers a refresh. `refreshActiveTheme` is cheap (just recomputes
+    // theme + section fields from the current state + systemIsDark), and
+    // applyAll() downstream repaints the DOM.
     GlobalScope.launch {
         var prevTheme = appVm.stateFlow.value.theme.name
         var prevAppearance = appVm.stateFlow.value.appearance
+        var prevLight = appVm.stateFlow.value.lightThemeName
+        var prevDark = appVm.stateFlow.value.darkThemeName
+        var prevCustomSchemes = appVm.stateFlow.value.customSchemes
+        var prevCustomThemes = appVm.stateFlow.value.customThemes
         appVm.stateFlow.collect { state ->
-            if (state.theme.name != prevTheme || state.appearance != prevAppearance) {
-                prevTheme = state.theme.name
+            val slotChanged = state.lightThemeName != prevLight || state.darkThemeName != prevDark
+            val customChanged = state.customSchemes !== prevCustomSchemes || state.customThemes !== prevCustomThemes
+            val appearanceChanged = state.appearance != prevAppearance
+            val themeChanged = state.theme.name != prevTheme
+            if (slotChanged || appearanceChanged || customChanged) {
+                prevLight = state.lightThemeName
+                prevDark = state.darkThemeName
+                prevCustomSchemes = state.customSchemes
+                prevCustomThemes = state.customThemes
                 prevAppearance = state.appearance
+                refreshAndApplyActiveTheme()
+                prevTheme = appVm.stateFlow.value.theme.name
+                updateAppearanceToggle()
+            } else if (themeChanged) {
+                prevTheme = state.theme.name
                 applyAll()
                 updateAppearanceToggle()
+            }
+        }
+    }
+
+    // Reactively push the persisted font family into xterm.js instances and
+    // the `--t-font-mono` CSS var whenever it changes — covers initial
+    // hydration (null → server value) and cross-tab sync through the
+    // UiSettings envelope. Per-pane terminals also pick up the setting at
+    // creation time via LayoutBuilder, but that doesn't set the CSS var that
+    // drives git diff panes and markdown code blocks.
+    GlobalScope.launch {
+        var prevFontFamily: String? = appVm.stateFlow.value.paneFontFamily
+        applyGlobalFontFamily(prevFontFamily)
+        appVm.stateFlow.collect { state ->
+            if (state.paneFontFamily != prevFontFamily) {
+                prevFontFamily = state.paneFontFamily
+                applyGlobalFontFamily(prevFontFamily)
             }
         }
     }
@@ -262,7 +347,7 @@ private fun start() {
     // React to system color scheme changes when in Auto.
     val mql = window.matchMedia("(prefers-color-scheme: dark)")
     mql.asDynamic().addEventListener("change", {
-        if (appVm.stateFlow.value.appearance == Appearance.Auto) applyAll()
+        if (appVm.stateFlow.value.appearance == Appearance.Auto) refreshAndApplyActiveTheme()
     })
 
     // Close dropdowns on outside click.
@@ -289,11 +374,14 @@ private fun start() {
             Appearance.Light -> Appearance.Auto
         }
         GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) { appVm.setAppearance(next) }
-        applyAll()
+        refreshAndApplyActiveTheme()
         updateAppearanceToggle()
-        settingsAppearanceRefresh?.invoke()
     })
     updateAppearanceToggle()
+
+    // Toolbar theme button. Tooltip reflects the active theme; click
+    // opens the Theme Manager sidebar.
+    initToolbarThemeButton()
 
     // New window button. Opens the pane-type modal scoped to the active
     // tab. When that tab has a persisted focused pane, it is passed as the

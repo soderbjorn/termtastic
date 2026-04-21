@@ -805,22 +805,12 @@ object WindowState {
             val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
             if (idx < 0) return@map tab
             val current = tab.panes[idx]
-            // Moving or resizing a pane also bumps it to the top of the
-            // stacking order — conceptually the user just interacted with
-            // it, so it should come to the front. Folding this into the
-            // same config push avoids a separate RaisePane round-trip that
-            // would otherwise rebuild the DOM mid-drag and detach the
-            // element the browser is still tracking pointer events on.
-            val maxZ = tab.panes.maxOf { it.z }
-            val alreadyTop = current.z == maxZ && tab.panes.count { it.z == maxZ } == 1
-            val newZ = if (alreadyTop) current.z else maxZ + 1
             if (current.x == box.x && current.y == box.y &&
-                current.width == box.width && current.height == box.height &&
-                current.z == newZ
+                current.width == box.width && current.height == box.height
             ) return@map tab
             changed = true
             val newPanes = tab.panes.toMutableList()
-            newPanes[idx] = current.copy(x = box.x, y = box.y, width = box.width, height = box.height, z = newZ)
+            newPanes[idx] = current.copy(x = box.x, y = box.y, width = box.width, height = box.height)
             tab.copy(panes = newPanes)
         }
         if (changed) _config.value = cfg.copy(tabs = newTabs)

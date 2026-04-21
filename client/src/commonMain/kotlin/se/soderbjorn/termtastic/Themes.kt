@@ -218,7 +218,63 @@ val recommendedThemes: List<TerminalTheme> = listOf(
 const val DEFAULT_THEME_NAME = "Tron"
 
 /**
+ * Name of the default theme bundle used for the light slot on fresh
+ * installs. Resolves to a light-optimised preset in [defaultThemeConfigs].
+ */
+const val DEFAULT_LIGHT_THEME_NAME = "Paper & Ink"
+
+/**
+ * Name of the default theme bundle used for the dark slot on fresh
+ * installs. Resolves to a dark-optimised preset in [defaultThemeConfigs].
+ */
+const val DEFAULT_DARK_THEME_NAME = "Neon Circuit"
+
+/**
  * User preference for light/dark appearance. [Auto] defers to the host
  * platform's system setting.
  */
 enum class Appearance { Auto, Dark, Light }
+
+/**
+ * A user-defined custom colour scheme. Unlike [recommendedThemes] which are
+ * hard-coded at compile time, these are persisted server-side as part of the
+ * UI settings blob and may be freely edited by the user.
+ *
+ * A [CustomScheme] materialises into a [TerminalTheme] at apply time via
+ * [toTerminalTheme]. The user may edit every semantic override token
+ * independently for dark and light appearance; default [recommendedThemes]
+ * remain read-only and must be cloned into a [CustomScheme] before editing.
+ *
+ * @property name      Human-readable scheme name; unique across custom schemes.
+ * @property darkFg    Hex foreground colour used in dark mode.
+ * @property lightFg   Hex foreground colour used in light mode.
+ * @property darkBg    Hex background colour used in dark mode.
+ * @property lightBg   Hex background colour used in light mode.
+ * @property overrides Hand-tuned ARGB override values keyed by
+ *   `"group.token.mode"` (e.g. `"syntax.keyword.dark"`). Mirrors
+ *   [TerminalTheme.overrides]; empty map by default.
+ */
+data class CustomScheme(
+    val name: String,
+    val darkFg: String,
+    val lightFg: String,
+    val darkBg: String,
+    val lightBg: String,
+    val overrides: Map<String, Long> = emptyMap(),
+) {
+    /**
+     * Materialise this custom scheme into a [TerminalTheme] suitable for
+     * passing to [resolve] / the theme pipeline. Called whenever a custom
+     * scheme is referenced from a theme slot (main or per-section).
+     *
+     * @return a [TerminalTheme] with the same name and colours.
+     */
+    fun toTerminalTheme(): TerminalTheme = TerminalTheme(
+        name = name,
+        darkFg = darkFg,
+        lightFg = lightFg,
+        darkBg = darkBg,
+        lightBg = lightBg,
+        overrides = overrides.ifEmpty { null },
+    )
+}

@@ -19,20 +19,33 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import se.soderbjorn.termtastic.Appearance
 import se.soderbjorn.termtastic.ClaudeUsageData
+import se.soderbjorn.termtastic.ConfigMode
+import se.soderbjorn.termtastic.CustomScheme
+import se.soderbjorn.termtastic.DEFAULT_DARK_THEME_NAME
+import se.soderbjorn.termtastic.DEFAULT_LIGHT_THEME_NAME
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
 import se.soderbjorn.termtastic.ResolvedPalette
 import se.soderbjorn.termtastic.TerminalTheme
+import se.soderbjorn.termtastic.ThemeConfigPreset
 import se.soderbjorn.termtastic.WindowCommand
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.WindowEnvelope
 import se.soderbjorn.termtastic.client.WindowSocket
 import se.soderbjorn.termtastic.client.WindowStateRepository
+import se.soderbjorn.termtastic.defaultThemeConfigs
 import se.soderbjorn.termtastic.recommendedThemes
 import se.soderbjorn.termtastic.resolve
 import kotlin.time.Duration.Companion.seconds
@@ -77,6 +90,11 @@ class AppBackingViewModel(
      * @property theme              the active terminal colour theme (global default).
      * @property appearance         the user's light/dark mode preference.
      * @property paneFontSize       per-pane font size override, or `null` for default.
+     * @property paneFontFamily     preset key for the terminal/code font family
+     *   (e.g. `"menlo"`, `"jetbrainsMono"`), or `null` to use the system default
+     *   monospace stack. Applied to xterm.js terminals and CSS-based monospace
+     *   surfaces (git diff, markdown code blocks) on the web client. Other
+     *   clients ignore the value.
      * @property sidebarWidth       persisted sidebar width in pixels, or `null`.
      * @property sidebarCollapsed    whether the sidebar is currently collapsed.
      * @property desktopNotifications whether desktop notifications are enabled.
@@ -114,6 +132,7 @@ class AppBackingViewModel(
         val theme: TerminalTheme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME },
         val appearance: Appearance = Appearance.Auto,
         val paneFontSize: Int? = null,
+        val paneFontFamily: String? = null,
         val sidebarWidth: Int? = null,
         val sidebarCollapsed: Boolean = false,
         val desktopNotifications: Boolean = true,
@@ -127,6 +146,38 @@ class AppBackingViewModel(
         val windowsTheme: TerminalTheme? = null,
         val activeTheme: TerminalTheme? = null,
         val uiSettingsHydrated: Boolean = false,
+        /**
+         * Name of the theme (default or custom) to apply when the resolved
+         * appearance is Light. Resolved via [lookupThemeByName]. When absent
+         * (migration from older settings) this seeds from [theme] on hydrate.
+         */
+        val lightThemeName: String = DEFAULT_LIGHT_THEME_NAME,
+        /**
+         * Name of the theme (default or custom) to apply when the resolved
+         * appearance is Dark. Resolved via [lookupThemeByName].
+         */
+        val darkThemeName: String = DEFAULT_DARK_THEME_NAME,
+        /**
+         * Ordered list of favourited theme names. May mix default and
+         * custom themes. Used by the toolbar theme picker and the settings
+         * favourites strip; names that no longer resolve are silently
+         * dropped on next save.
+         */
+        val favoriteThemes: List<String> = emptyList(),
+        /**
+         * User-defined custom colour schemes, keyed by name. Schemes in
+         * this map take precedence over same-named [recommendedThemes]
+         * during lookup — giving users a way to override built-ins by
+         * cloning under the original name.
+         */
+        val customSchemes: Map<String, CustomScheme> = emptyMap(),
+        /**
+         * User-defined custom themes, keyed by name. Same precedence
+         * rule as [customSchemes]. Stored under the `themeConfigs` key
+         * on the server for backwards compatibility with saved user
+         * content from earlier versions.
+         */
+        val customThemes: Map<String, ThemeConfigPreset> = emptyMap(),
     )
 
     /**
@@ -211,6 +262,21 @@ class AppBackingViewModel(
     suspend fun setPaneFontSize(size: Int) {
         emit(_stateFlow.value.copy(paneFontSize = size))
         persistSetting("paneFontSize", size.toString())
+    }
+
+    /**
+     * Update the terminal/code font-family preset and persist it to the server.
+     *
+     * The value is a short preset key (e.g. `"menlo"`, `"jetbrainsMono"`) that
+     * the web client maps to a CSS font-family stack. Other clients currently
+     * ignore the setting.
+     *
+     * @param key the preset key to store, or the empty string to clear and
+     *   fall back to the system default.
+     */
+    suspend fun setPaneFontFamily(key: String) {
+        emit(_stateFlow.value.copy(paneFontFamily = key.ifEmpty { null }))
+        persistSetting("paneFontFamily", key)
     }
 
     /**
@@ -430,8 +496,19 @@ class AppBackingViewModel(
      */
     fun applyServerUiSettings(settings: kotlinx.serialization.json.JsonObject) {
         val cur = _stateFlow.value
+
+        // ── Custom schemes / themes: parse first so theme lookups see them ──
+        val customSchemes = parseCustomSchemes(settings["customSchemes"]) ?: cur.customSchemes
+        val customThemes = parseCustomThemes(settings["themeConfigs"]) ?: cur.customThemes
+
+        fun themeByName(name: String?): TerminalTheme? {
+            if (name.isNullOrEmpty()) return null
+            customSchemes[name]?.let { return it.toTerminalTheme() }
+            return recommendedThemes.firstOrNull { it.name == name }
+        }
+
         val themeName = settings["theme"]?.jsonPrimitive?.contentOrNull
-        val theme = themeName?.let { n -> recommendedThemes.firstOrNull { it.name == n } } ?: cur.theme
+        val theme = themeByName(themeName) ?: cur.theme
 
         val appearanceName = settings["appearance"]?.jsonPrimitive?.contentOrNull
         val appearance = appearanceName
@@ -439,39 +516,382 @@ class AppBackingViewModel(
             ?: cur.appearance
 
         val fontSize = settings["paneFontSize"]?.jsonPrimitive?.intOrNull ?: cur.paneFontSize
+        val fontFamily = settings["paneFontFamily"]?.jsonPrimitive?.contentOrNull
+            ?.ifEmpty { null } ?: cur.paneFontFamily
         val sidebarW = settings["sidebarWidth"]?.jsonPrimitive?.intOrNull ?: cur.sidebarWidth
         val sidebarCol = settings["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: cur.sidebarCollapsed
         val desktopNotif = settings["desktopNotifications"]?.jsonPrimitive?.booleanOrNull ?: cur.desktopNotifications
         val electronCustom = settings["electronCustomTitleBar"]?.jsonPrimitive?.booleanOrNull ?: cur.electronCustomTitleBar
 
-        fun sectionTheme(key: String, current: TerminalTheme?): TerminalTheme? {
-            val name = settings[key]?.jsonPrimitive?.contentOrNull ?: return current
-            if (name.isEmpty()) return null
-            return recommendedThemes.firstOrNull { it.name == name } ?: current
+        // Section overrides used to be top-level `theme.<section>` keys on the
+        // server, selected independently of the main theme. After the
+        // 2026-04 rearchitecture they live inside each theme bundle
+        // ([ThemeConfigPreset]); section fields on [State] are therefore
+        // **derived** by [refreshActiveTheme] and must not be overwritten
+        // here. Ignoring the legacy keys also keeps a stray server echo
+        // from reimposing a long-dead override after startup.
+
+        // ── Light / dark theme slot names ─────────────────────────────
+        val storedLight = settings["theme.light"]?.jsonPrimitive?.contentOrNull
+        val storedDark = settings["theme.dark"]?.jsonPrimitive?.contentOrNull
+        // Migration: if the new per-mode keys are absent, seed both slots
+        // from the legacy top-level `theme` key (or keep current values).
+        val lightName = storedLight?.takeIf { it.isNotEmpty() }
+            ?: themeName?.takeIf { it.isNotEmpty() } ?: cur.lightThemeName
+        val darkName = storedDark?.takeIf { it.isNotEmpty() }
+            ?: themeName?.takeIf { it.isNotEmpty() } ?: cur.darkThemeName
+
+        // If this is a first-load migration (no per-mode slot keys on the
+        // server yet) AND the server still has legacy top-level
+        // `theme.<section>` overrides, proactively clear them. Nothing on
+        // this client reads them anymore, but an older mobile build still
+        // does — so leaving them in place cross-pollutes state across
+        // devices. Persist the new slot names + empty section keys in a
+        // single fire-and-forget POST; the server's merge semantics
+        // accept blanks without complaint.
+        val firstLoadMigration = storedLight == null && storedDark == null
+        val hasLegacySectionKey = listOf(
+            "theme.sidebar", "theme.terminal", "theme.diff", "theme.fileBrowser",
+            "theme.tabs", "theme.chrome", "theme.windows", "theme.active",
+        ).any { (settings[it]?.jsonPrimitive?.contentOrNull).orEmpty().isNotEmpty() }
+        if (firstLoadMigration || hasLegacySectionKey) {
+            settingsPersister?.fireAndForgetPutSettings(buildMap {
+                put("theme.light", lightName)
+                put("theme.dark", darkName)
+                put("theme.sidebar", "")
+                put("theme.terminal", "")
+                put("theme.diff", "")
+                put("theme.fileBrowser", "")
+                put("theme.tabs", "")
+                put("theme.chrome", "")
+                put("theme.windows", "")
+                put("theme.active", "")
+            })
+            lastLocalSettingsChange = TimeSource.Monotonic.markNow()
         }
+
+        // ── Favourites ────────────────────────────────────────────────
+        val favorites = parseStringList(settings["favorites.themes"]) ?: cur.favoriteThemes
 
         emit(cur.copy(
             theme = theme,
             appearance = appearance,
             paneFontSize = fontSize,
+            paneFontFamily = fontFamily,
             sidebarWidth = sidebarW,
             sidebarCollapsed = sidebarCol,
             desktopNotifications = desktopNotif,
             electronCustomTitleBar = electronCustom,
-            sidebarTheme = sectionTheme("theme.sidebar", cur.sidebarTheme),
-            terminalTheme = sectionTheme("theme.terminal", cur.terminalTheme),
-            diffTheme = sectionTheme("theme.diff", cur.diffTheme),
-            fileBrowserTheme = sectionTheme("theme.fileBrowser", cur.fileBrowserTheme),
-            tabsTheme = sectionTheme("theme.tabs", cur.tabsTheme),
-            chromeTheme = sectionTheme("theme.chrome", cur.chromeTheme),
-            windowsTheme = sectionTheme("theme.windows", cur.windowsTheme),
-            activeTheme = sectionTheme("theme.active", cur.activeTheme),
+            // Section overrides are intentionally untouched — they are
+            // derived from the active theme bundle by [refreshActiveTheme]
+            // and get recomputed whenever slots / custom maps change.
+            // Writing them from legacy server keys (what the old
+            // per-section APIs did) would reimpose dead overrides on
+            // every hydrate / envelope echo.
             uiSettingsHydrated = true,
+            lightThemeName = lightName,
+            darkThemeName = darkName,
+            favoriteThemes = favorites,
+            customSchemes = customSchemes,
+            customThemes = customThemes,
         ))
+    }
+
+    /**
+     * Parse a `customSchemes` JsonElement into a typed map. Returns `null`
+     * when the element is absent or malformed so callers can keep the
+     * current state; returns an empty map when the element is an empty
+     * object (explicit clear).
+     */
+    private fun parseCustomSchemes(el: kotlinx.serialization.json.JsonElement?): Map<String, CustomScheme>? {
+        val obj = (el as? JsonObject) ?: return null
+        val out = linkedMapOf<String, CustomScheme>()
+        for ((name, value) in obj) {
+            val o = value as? JsonObject ?: continue
+            val darkFg = o["darkFg"]?.jsonPrimitive?.contentOrNull ?: continue
+            val lightFg = o["lightFg"]?.jsonPrimitive?.contentOrNull ?: continue
+            val darkBg = o["darkBg"]?.jsonPrimitive?.contentOrNull ?: continue
+            val lightBg = o["lightBg"]?.jsonPrimitive?.contentOrNull ?: continue
+            val ovr = (o["overrides"] as? JsonObject)?.let { om ->
+                om.mapNotNull { (k, v) ->
+                    val p = v as? JsonPrimitive ?: return@mapNotNull null
+                    val l = p.longOrNull ?: p.contentOrNull?.toLongOrNull()
+                    l?.let { k to it }
+                }.toMap()
+            } ?: emptyMap()
+            out[name] = CustomScheme(name, darkFg, lightFg, darkBg, lightBg, ovr)
+        }
+        return out
+    }
+
+    /**
+     * Parse the `themeConfigs` JsonElement into typed user-defined
+     * [ThemeConfigPreset]s. Legacy entries without a `mode` field default
+     * to [ConfigMode.Both]; legacy default-marker sentinels (`__default`)
+     * are ignored — defaults live in [defaultThemeConfigs].
+     */
+    private fun parseCustomThemes(el: kotlinx.serialization.json.JsonElement?): Map<String, ThemeConfigPreset>? {
+        val obj = (el as? JsonObject) ?: return null
+        val out = linkedMapOf<String, ThemeConfigPreset>()
+        for ((name, value) in obj) {
+            val o = value as? JsonObject ?: continue
+            if (o["__default"]?.jsonPrimitive?.booleanOrNull == true) continue
+            val theme = o["theme"]?.jsonPrimitive?.contentOrNull ?: continue
+            val modeStr = o["mode"]?.jsonPrimitive?.contentOrNull
+            val mode = modeStr?.let { runCatching { ConfigMode.valueOf(it) }.getOrNull() } ?: ConfigMode.Both
+            out[name] = ThemeConfigPreset(
+                name = name,
+                mode = mode,
+                theme = theme,
+                sidebar = o["theme.sidebar"]?.jsonPrimitive?.contentOrNull ?: "",
+                terminal = o["theme.terminal"]?.jsonPrimitive?.contentOrNull ?: "",
+                diff = o["theme.diff"]?.jsonPrimitive?.contentOrNull ?: "",
+                fileBrowser = o["theme.fileBrowser"]?.jsonPrimitive?.contentOrNull ?: "",
+                tabs = o["theme.tabs"]?.jsonPrimitive?.contentOrNull ?: "",
+                chrome = o["theme.chrome"]?.jsonPrimitive?.contentOrNull ?: "",
+                windows = o["theme.windows"]?.jsonPrimitive?.contentOrNull ?: "",
+                active = o["theme.active"]?.jsonPrimitive?.contentOrNull ?: "",
+            )
+        }
+        return out
+    }
+
+    /** Parse a JsonArray-of-strings element into a Kotlin list. */
+    private fun parseStringList(el: kotlinx.serialization.json.JsonElement?): List<String>? {
+        val arr = (el as? JsonArray) ?: return null
+        return arr.mapNotNull { it.jsonPrimitive.contentOrNull }
     }
 
     private fun emit(state: State) {
         _stateFlow.value = state
+    }
+
+    // ── Theme / scheme registries and resolution ────────────────────
+
+    /**
+     * Look up a theme (bundle of per-section scheme assignments) by name.
+     * Checks custom themes first then built-in [defaultThemeConfigs], so
+     * a user may override a default by cloning under the same name.
+     *
+     * @param name the theme name to look up
+     * @return the matching [ThemeConfigPreset], or `null` if none exists
+     */
+    fun lookupTheme(name: String): ThemeConfigPreset? {
+        if (name.isEmpty()) return null
+        val cur = _stateFlow.value
+        cur.customThemes[name]?.let { return it }
+        return defaultThemeConfigs.firstOrNull { it.name == name }
+    }
+
+    /**
+     * Look up a colour scheme by name. Custom schemes take precedence
+     * over built-in [recommendedThemes].
+     *
+     * @param name the scheme name; empty returns `null`
+     * @return the matching [TerminalTheme] or `null` when not found
+     */
+    fun lookupScheme(name: String): TerminalTheme? {
+        if (name.isEmpty()) return null
+        val cur = _stateFlow.value
+        cur.customSchemes[name]?.let { return it.toTerminalTheme() }
+        return recommendedThemes.firstOrNull { it.name == name }
+    }
+
+    /**
+     * Apply the currently-active theme (chosen by [Appearance] +
+     * [systemIsDark] via the user's light / dark slot selection) to
+     * [State.theme] and all per-section override fields. Called by the
+     * web client on appearance changes, system-preference changes, and
+     * any mutation that affects which theme should be live.
+     *
+     * @param systemIsDark whether the host reports dark mode; only
+     *   consulted when appearance is [Appearance.Auto].
+     */
+    fun refreshActiveTheme(systemIsDark: Boolean) {
+        val cur = _stateFlow.value
+        val effectiveDark = when (cur.appearance) {
+            Appearance.Dark -> true
+            Appearance.Light -> false
+            Appearance.Auto -> systemIsDark
+        }
+        val selectedName = if (effectiveDark) cur.darkThemeName else cur.lightThemeName
+        // If no theme bundle exists with this name, treat [selectedName] as a
+        // bare scheme choice: the main scheme is [selectedName] and every
+        // section falls through to it. Do NOT hunt for an arbitrary preset
+        // that happens to use [selectedName] as its main scheme — those
+        // presets usually carry deliberate per-section overrides (e.g.
+        // Neon Circuit uses Tron as main but pairs it with Vapor Pink
+        // sidebar + Cyber Teal terminal), which would produce a visibly
+        // mixed look when the user just wants a uniform theme.
+        val preset = lookupTheme(selectedName)
+            ?: ThemeConfigPreset(name = selectedName, theme = selectedName)
+        val main = lookupScheme(preset.theme)
+            ?: lookupScheme(DEFAULT_THEME_NAME)
+            ?: recommendedThemes.first()
+        fun sec(s: String): TerminalTheme? = lookupScheme(s)
+        emit(cur.copy(
+            theme = main,
+            sidebarTheme = sec(preset.sidebar),
+            terminalTheme = sec(preset.terminal),
+            diffTheme = sec(preset.diff),
+            fileBrowserTheme = sec(preset.fileBrowser),
+            tabsTheme = sec(preset.tabs),
+            chromeTheme = sec(preset.chrome),
+            windowsTheme = sec(preset.windows),
+            activeTheme = sec(preset.active),
+        ))
+    }
+
+    // ── New mutators: light/dark slots, favourites, custom entities ─
+
+    /**
+     * Persist the chosen theme for the Light slot. Does not change the
+     * active appearance, but the web client should call
+     * [refreshActiveTheme] afterwards so the derived fields update if
+     * the light slot happens to be live.
+     */
+    suspend fun setLightThemeName(name: String) {
+        emit(_stateFlow.value.copy(lightThemeName = name))
+        persistSetting("theme.light", name)
+    }
+
+    /**
+     * Persist the chosen theme for the Dark slot. See [setLightThemeName].
+     */
+    suspend fun setDarkThemeName(name: String) {
+        emit(_stateFlow.value.copy(darkThemeName = name))
+        persistSetting("theme.dark", name)
+    }
+
+    /**
+     * Toggle the favourite status of [name]. Adds to the end if absent;
+     * removes if present. Persists the full ordered list as a JSON
+     * array under `favorites.themes`.
+     */
+    suspend fun toggleFavoriteTheme(name: String) {
+        val cur = _stateFlow.value
+        val next = if (name in cur.favoriteThemes)
+            cur.favoriteThemes - name
+        else
+            cur.favoriteThemes + name
+        emit(cur.copy(favoriteThemes = next))
+        persistFavorites(next)
+    }
+
+    /**
+     * Reorder favourites by replacing the full list. Used when the user
+     * drags to reorder within the manager or settings panel.
+     */
+    suspend fun setFavoriteThemes(ordered: List<String>) {
+        emit(_stateFlow.value.copy(favoriteThemes = ordered))
+        persistFavorites(ordered)
+    }
+
+    private suspend fun persistFavorites(list: List<String>) {
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        val obj = buildJsonObject {
+            put("favorites.themes", JsonArray(list.map { JsonPrimitive(it) }))
+        }
+        settingsPersister?.putJsonSettings(obj)
+    }
+
+    /**
+     * Insert or replace a custom colour scheme by name, and persist the
+     * full [State.customSchemes] map.
+     */
+    suspend fun saveCustomScheme(scheme: CustomScheme) {
+        val cur = _stateFlow.value
+        val next = cur.customSchemes.toMutableMap().apply { put(scheme.name, scheme) }
+        emit(cur.copy(customSchemes = next))
+        persistCustomSchemes(next)
+    }
+
+    /**
+     * Remove a custom scheme. Does not touch themes that still reference
+     * it — those will transparently fall back to built-in lookup and
+     * render as the default theme if the name has no built-in either.
+     */
+    suspend fun deleteCustomScheme(name: String) {
+        val cur = _stateFlow.value
+        val next = cur.customSchemes.toMutableMap().apply { remove(name) }
+        emit(cur.copy(customSchemes = next))
+        persistCustomSchemes(next)
+    }
+
+    private suspend fun persistCustomSchemes(schemes: Map<String, CustomScheme>) {
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        val obj = buildJsonObject {
+            put("customSchemes", JsonObject(schemes.mapValues { (_, s) ->
+                buildJsonObject {
+                    put("darkFg", JsonPrimitive(s.darkFg))
+                    put("lightFg", JsonPrimitive(s.lightFg))
+                    put("darkBg", JsonPrimitive(s.darkBg))
+                    put("lightBg", JsonPrimitive(s.lightBg))
+                    if (s.overrides.isNotEmpty()) {
+                        put("overrides", JsonObject(s.overrides.mapValues { JsonPrimitive(it.value) }))
+                    }
+                }
+            }))
+        }
+        settingsPersister?.putJsonSettings(obj)
+    }
+
+    /**
+     * Insert or replace a custom theme (bundle). Persisted under the
+     * legacy `themeConfigs` key so pre-existing server data survives.
+     */
+    suspend fun saveCustomTheme(theme: ThemeConfigPreset) {
+        val cur = _stateFlow.value
+        val next = cur.customThemes.toMutableMap().apply { put(theme.name, theme) }
+        emit(cur.copy(customThemes = next))
+        persistCustomThemes(next)
+    }
+
+    /**
+     * Delete a custom theme by name. Drops it from [State.favoriteThemes]
+     * and from the light/dark slots (falling back to the default theme
+     * when orphaned) before persisting.
+     */
+    suspend fun deleteCustomTheme(name: String) {
+        val cur = _stateFlow.value
+        val nextThemes = cur.customThemes.toMutableMap().apply { remove(name) }
+        val nextFavs = cur.favoriteThemes - name
+        val nextLight = if (cur.lightThemeName == name) DEFAULT_LIGHT_THEME_NAME else cur.lightThemeName
+        val nextDark = if (cur.darkThemeName == name) DEFAULT_DARK_THEME_NAME else cur.darkThemeName
+        emit(cur.copy(
+            customThemes = nextThemes,
+            favoriteThemes = nextFavs,
+            lightThemeName = nextLight,
+            darkThemeName = nextDark,
+        ))
+        persistCustomThemes(nextThemes)
+        val meta = buildJsonObject {
+            put("favorites.themes", JsonArray(nextFavs.map { JsonPrimitive(it) }))
+            put("theme.light", JsonPrimitive(nextLight))
+            put("theme.dark", JsonPrimitive(nextDark))
+        }
+        settingsPersister?.putJsonSettings(meta)
+    }
+
+    private suspend fun persistCustomThemes(themes: Map<String, ThemeConfigPreset>) {
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        val obj = buildJsonObject {
+            put("themeConfigs", JsonObject(themes.mapValues { (_, t) ->
+                buildJsonObject {
+                    put("mode", JsonPrimitive(t.mode.name))
+                    put("theme", JsonPrimitive(t.theme))
+                    put("theme.sidebar", JsonPrimitive(t.sidebar))
+                    put("theme.terminal", JsonPrimitive(t.terminal))
+                    put("theme.diff", JsonPrimitive(t.diff))
+                    put("theme.fileBrowser", JsonPrimitive(t.fileBrowser))
+                    put("theme.tabs", JsonPrimitive(t.tabs))
+                    put("theme.chrome", JsonPrimitive(t.chrome))
+                    put("theme.windows", JsonPrimitive(t.windows))
+                    put("theme.active", JsonPrimitive(t.active))
+                }
+            }))
+        }
+        settingsPersister?.putJsonSettings(obj)
     }
 }
 
