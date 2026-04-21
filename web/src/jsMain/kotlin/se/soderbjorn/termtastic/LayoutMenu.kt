@@ -1,11 +1,13 @@
 /**
  * Layout picker dropdown shown in the app-header toolbar.
  *
- * Opens a panel with one tile per predefined layout (grid, primary-left,
- * columns, …). Each tile renders a miniature preview with the same number
- * of boxes as the active tab has panes, highlighting the primary pane so
- * the user can see at a glance what applying that layout will do. Clicking
- * a tile dispatches [WindowCommand.ApplyLayout]; the server computes the
+ * Opens a panel with one tile per predefined layout (hero-left, split-h,
+ * t-shape, grid, …). Each tile renders a miniature preview with the same
+ * number of boxes as the active tab has panes, highlighting slot 0 (the
+ * focused pane's destination) so the user can see at a glance what applying
+ * that layout will do. Clicking a tile dispatches [WindowCommand.ApplyLayout];
+ * the server assigns the focused pane to slot 0 and the remaining panes to
+ * the other slots in descending current-area order, then computes the
  * authoritative geometry and pushes an updated config, so the preview and
  * the applied result always agree.
  *
@@ -22,24 +24,40 @@ import org.w3c.dom.events.Event
  * Order matches the order tiles render in the dropdown (top-to-bottom,
  * left-to-right in a 3-column grid). The keys are also what the server's
  * `applyLayout` handler dispatches on, so adding a new layout requires
- * matching entries here and there.
+ * matching entries here and there. Index 0 of every layout is the slot the
+ * focused pane lands in; remaining slots descend in size so area-ranked
+ * panes fill them biggest-to-smallest.
  */
 private val LAYOUTS = listOf(
-    "primary-left",
-    "primary-right",
-    "primary-top",
-    "primary-bottom",
-    "primary-wide-left",
-    "primary-wide-right",
-    "primary-wide-top",
-    "primary-wide-bottom",
-    "primary-main-2col",
-    "primary-main-2row",
+    // Equal (size-neutral resets)
     "grid",
-    "two-col-grid",
-    "three-col-grid",
     "columns",
     "rows",
+    // Hero: primary 65% + equal sibling strip 35%
+    "hero-left",
+    "hero-right",
+    "hero-top",
+    "hero-bottom",
+    // Half-and-half: primary 50% + equal sibling strip 50%
+    "split-h",
+    "split-v",
+    // Sidebar: primary 75% + thin equal sibling strip 25%
+    "sidebar-left",
+    "sidebar-right",
+    "sidebar-top",
+    "sidebar-bottom",
+    // T shapes: primary + one medium on a 70/30 row, equal strip on the other
+    "t-shape",
+    "t-shape-inv",
+    // L shapes: primary corner + full-edge sibling + equal strip
+    "l-shape",
+    "l-shape-tr",
+    "l-shape-bl",
+    "l-shape-br",
+    // Big primary + medium + equal stacked remainder
+    "big-2-stack",
+    "big-2-stack-right",
+    "big-2-stack-bottom",
 )
 
 /**
@@ -131,21 +149,28 @@ private fun populateLayoutMenu(menu: HTMLElement) {
 }
 
 private fun labelFor(key: String): String = when (key) {
-    "primary-left" -> "Primary left"
-    "primary-right" -> "Primary right"
-    "primary-top" -> "Primary top"
-    "primary-bottom" -> "Primary bottom"
-    "primary-wide-left" -> "Primary dominant (left)"
-    "primary-wide-right" -> "Primary dominant (right)"
-    "primary-wide-top" -> "Primary dominant (top)"
-    "primary-wide-bottom" -> "Primary dominant (bottom)"
-    "primary-main-2col" -> "Primary + right-side grid"
-    "primary-main-2row" -> "Primary + bottom grid"
     "grid" -> "Grid"
-    "two-col-grid" -> "Two-column grid"
-    "three-col-grid" -> "Three-column grid"
     "columns" -> "Equal columns"
     "rows" -> "Equal rows"
+    "hero-left" -> "Hero left"
+    "hero-right" -> "Hero right"
+    "hero-top" -> "Hero top"
+    "hero-bottom" -> "Hero bottom"
+    "split-h" -> "Split horizontal"
+    "split-v" -> "Split vertical"
+    "sidebar-left" -> "Sidebar left"
+    "sidebar-right" -> "Sidebar right"
+    "sidebar-top" -> "Sidebar top"
+    "sidebar-bottom" -> "Sidebar bottom"
+    "t-shape" -> "T-shape"
+    "t-shape-inv" -> "Inverted T"
+    "l-shape" -> "L-shape (top-left)"
+    "l-shape-tr" -> "L-shape (top-right)"
+    "l-shape-bl" -> "L-shape (bottom-left)"
+    "l-shape-br" -> "L-shape (bottom-right)"
+    "big-2-stack" -> "Big left + right stack"
+    "big-2-stack-right" -> "Big right + left stack"
+    "big-2-stack-bottom" -> "Big bottom + top stack"
     else -> key
 }
 
@@ -160,81 +185,144 @@ private fun emptyMessage(text: String): HTMLElement {
  * Mirror of [WindowState.computeLayout] on the client so the dropdown
  * previews match the geometry the server will actually apply. Must stay in
  * sync with the server-side copy — there's only one canonical set of
- * layouts, and we're rendering the same shape in two places.
+ * layouts, and we're rendering the same shape in two places. Slot 0 is
+ * always the primary/largest; remaining slots are equally sized within a
+ * given layout family (so every layout has at most three distinct size
+ * classes and no pane ends up as a sliver).
  */
 private fun computeLayout(layout: String, n: Int): List<PreviewBox> {
     if (n <= 0) return emptyList()
     if (n == 1) return listOf(PreviewBox(0.0, 0.0, 1.0, 1.0))
-    val others = n - 1
     return when (layout) {
-        "primary-left" -> primaryStack(n, 0.6, horizontal = true, primaryFirst = true)
-        "primary-right" -> primaryStack(n, 0.6, horizontal = true, primaryFirst = false)
-        "primary-top" -> primaryStack(n, 0.6, horizontal = false, primaryFirst = true)
-        "primary-bottom" -> primaryStack(n, 0.6, horizontal = false, primaryFirst = false)
-        "primary-wide-left" -> primaryStack(n, 0.75, horizontal = true, primaryFirst = true)
-        "primary-wide-right" -> primaryStack(n, 0.75, horizontal = true, primaryFirst = false)
-        "primary-wide-top" -> primaryStack(n, 0.75, horizontal = false, primaryFirst = true)
-        "primary-wide-bottom" -> primaryStack(n, 0.75, horizontal = false, primaryFirst = false)
-        "columns" -> (0 until n).map { i ->
-            val w = 1.0 / n
-            PreviewBox(i * w, 0.0, w, 1.0)
-        }
-        "rows" -> (0 until n).map { i ->
-            val h = 1.0 / n
-            PreviewBox(0.0, i * h, 1.0, h)
-        }
-        "two-col-grid" -> {
-            val cols = 2
-            val rows = kotlin.math.ceil(n.toDouble() / cols).toInt().coerceAtLeast(1)
-            val w = 1.0 / cols
-            val h = 1.0 / rows
-            (0 until n).map { i ->
-                val r = i / cols
-                val c = i % cols
-                PreviewBox(c * w, r * h, w, h)
+        "hero-left" -> listOf(PreviewBox(0.0, 0.0, 0.65, 1.0)) +
+            equalStrip(n - 1, 0.65, 0.0, 0.35, 1.0, horizontal = false)
+        "hero-right" -> listOf(PreviewBox(0.35, 0.0, 0.65, 1.0)) +
+            equalStrip(n - 1, 0.0, 0.0, 0.35, 1.0, horizontal = false)
+        "hero-top" -> listOf(PreviewBox(0.0, 0.0, 1.0, 0.65)) +
+            equalStrip(n - 1, 0.0, 0.65, 1.0, 0.35, horizontal = true)
+        "hero-bottom" -> listOf(PreviewBox(0.0, 0.35, 1.0, 0.65)) +
+            equalStrip(n - 1, 0.0, 0.0, 1.0, 0.35, horizontal = true)
+
+        "split-h" -> listOf(PreviewBox(0.0, 0.0, 0.50, 1.0)) +
+            equalStrip(n - 1, 0.50, 0.0, 0.50, 1.0, horizontal = false)
+        "split-v" -> listOf(PreviewBox(0.0, 0.0, 1.0, 0.50)) +
+            equalStrip(n - 1, 0.0, 0.50, 1.0, 0.50, horizontal = true)
+
+        "sidebar-left" -> listOf(PreviewBox(0.25, 0.0, 0.75, 1.0)) +
+            equalStrip(n - 1, 0.0, 0.0, 0.25, 1.0, horizontal = false)
+        "sidebar-right" -> listOf(PreviewBox(0.0, 0.0, 0.75, 1.0)) +
+            equalStrip(n - 1, 0.75, 0.0, 0.25, 1.0, horizontal = false)
+        "sidebar-top" -> listOf(PreviewBox(0.0, 0.25, 1.0, 0.75)) +
+            equalStrip(n - 1, 0.0, 0.0, 1.0, 0.25, horizontal = true)
+        "sidebar-bottom" -> listOf(PreviewBox(0.0, 0.0, 1.0, 0.75)) +
+            equalStrip(n - 1, 0.0, 0.75, 1.0, 0.25, horizontal = true)
+
+        "t-shape" -> when (n) {
+            2 -> listOf(
+                PreviewBox(0.0, 0.0, 0.70, 1.0),
+                PreviewBox(0.70, 0.0, 0.30, 1.0),
+            )
+            else -> buildList {
+                add(PreviewBox(0.0, 0.0, 0.70, 0.70))
+                add(PreviewBox(0.70, 0.0, 0.30, 0.70))
+                addAll(equalStrip(n - 2, 0.0, 0.70, 1.0, 0.30, horizontal = true))
             }
         }
-        "three-col-grid" -> {
-            val cols = 3
-            val rows = kotlin.math.ceil(n.toDouble() / cols).toInt().coerceAtLeast(1)
-            val w = 1.0 / cols
-            val h = 1.0 / rows
-            (0 until n).map { i ->
-                val r = i / cols
-                val c = i % cols
-                PreviewBox(c * w, r * h, w, h)
+        "t-shape-inv" -> when (n) {
+            2 -> listOf(
+                PreviewBox(0.0, 0.0, 0.70, 1.0),
+                PreviewBox(0.70, 0.0, 0.30, 1.0),
+            )
+            else -> buildList {
+                add(PreviewBox(0.0, 0.30, 0.70, 0.70))
+                add(PreviewBox(0.70, 0.30, 0.30, 0.70))
+                addAll(equalStrip(n - 2, 0.0, 0.0, 1.0, 0.30, horizontal = true))
             }
         }
-        "primary-main-2col" -> buildList {
-            add(PreviewBox(0.0, 0.0, 0.5, 1.0))
-            if (others > 0) {
-                val cols = 2
-                val rows = kotlin.math.ceil(others.toDouble() / cols).toInt().coerceAtLeast(1)
-                val w = 0.5 / cols
-                val h = 1.0 / rows
-                for (i in 0 until others) {
-                    val r = i / cols
-                    val c = i % cols
-                    add(PreviewBox(0.5 + c * w, r * h, w, h))
-                }
+
+        "l-shape" -> when (n) {
+            2 -> listOf(
+                PreviewBox(0.0, 0.0, 0.65, 1.0),
+                PreviewBox(0.65, 0.0, 0.35, 1.0),
+            )
+            else -> buildList {
+                add(PreviewBox(0.0, 0.0, 0.65, 0.65))
+                add(PreviewBox(0.65, 0.0, 0.35, 1.0))
+                addAll(equalStrip(n - 2, 0.0, 0.65, 0.65, 0.35, horizontal = true))
             }
         }
-        "primary-main-2row" -> buildList {
-            add(PreviewBox(0.0, 0.0, 1.0, 0.5))
-            if (others > 0) {
-                val cols = 2
-                val rows = kotlin.math.ceil(others.toDouble() / cols).toInt().coerceAtLeast(1)
-                val w = 1.0 / cols
-                val h = 0.5 / rows
-                for (i in 0 until others) {
-                    val r = i / cols
-                    val c = i % cols
-                    add(PreviewBox(c * w, 0.5 + r * h, w, h))
-                }
+        "l-shape-tr" -> when (n) {
+            2 -> listOf(
+                PreviewBox(0.35, 0.0, 0.65, 1.0),
+                PreviewBox(0.0, 0.0, 0.35, 1.0),
+            )
+            else -> buildList {
+                add(PreviewBox(0.35, 0.0, 0.65, 0.65))
+                add(PreviewBox(0.0, 0.0, 0.35, 1.0))
+                addAll(equalStrip(n - 2, 0.35, 0.65, 0.65, 0.35, horizontal = true))
             }
         }
+        "l-shape-bl" -> when (n) {
+            2 -> listOf(
+                PreviewBox(0.0, 0.0, 0.65, 1.0),
+                PreviewBox(0.65, 0.0, 0.35, 1.0),
+            )
+            else -> buildList {
+                add(PreviewBox(0.0, 0.35, 0.65, 0.65))
+                add(PreviewBox(0.65, 0.0, 0.35, 1.0))
+                addAll(equalStrip(n - 2, 0.0, 0.0, 0.65, 0.35, horizontal = true))
+            }
+        }
+        "l-shape-br" -> when (n) {
+            2 -> listOf(
+                PreviewBox(0.35, 0.0, 0.65, 1.0),
+                PreviewBox(0.0, 0.0, 0.35, 1.0),
+            )
+            else -> buildList {
+                add(PreviewBox(0.35, 0.35, 0.65, 0.65))
+                add(PreviewBox(0.0, 0.0, 0.35, 1.0))
+                addAll(equalStrip(n - 2, 0.35, 0.0, 0.65, 0.35, horizontal = true))
+            }
+        }
+
+        "big-2-stack" -> when (n) {
+            2 -> listOf(
+                PreviewBox(0.0, 0.0, 0.60, 1.0),
+                PreviewBox(0.60, 0.0, 0.40, 1.0),
+            )
+            else -> buildList {
+                add(PreviewBox(0.0, 0.0, 0.60, 1.0))
+                add(PreviewBox(0.60, 0.0, 0.40, 0.60))
+                addAll(equalStrip(n - 2, 0.60, 0.60, 0.40, 0.40, horizontal = false))
+            }
+        }
+        "big-2-stack-right" -> when (n) {
+            2 -> listOf(
+                PreviewBox(0.40, 0.0, 0.60, 1.0),
+                PreviewBox(0.0, 0.0, 0.40, 1.0),
+            )
+            else -> buildList {
+                add(PreviewBox(0.40, 0.0, 0.60, 1.0))
+                add(PreviewBox(0.0, 0.0, 0.40, 0.60))
+                addAll(equalStrip(n - 2, 0.0, 0.60, 0.40, 0.40, horizontal = false))
+            }
+        }
+        "big-2-stack-bottom" -> when (n) {
+            2 -> listOf(
+                PreviewBox(0.0, 0.40, 1.0, 0.60),
+                PreviewBox(0.0, 0.0, 1.0, 0.40),
+            )
+            else -> buildList {
+                add(PreviewBox(0.0, 0.40, 1.0, 0.60))
+                add(PreviewBox(0.0, 0.0, 0.60, 0.40))
+                addAll(equalStrip(n - 2, 0.60, 0.0, 0.40, 0.40, horizontal = true))
+            }
+        }
+
+        "columns" -> equalColumns(n)
+        "rows" -> equalRows(n)
         else -> {
-            // grid
+            // grid (default): even tiling with primary at top-left.
             val cols = kotlin.math.ceil(kotlin.math.sqrt(n.toDouble())).toInt().coerceAtLeast(1)
             val rows = kotlin.math.ceil(n.toDouble() / cols).toInt().coerceAtLeast(1)
             val w = 1.0 / cols
@@ -248,30 +336,40 @@ private fun computeLayout(layout: String, n: Int): List<PreviewBox> {
     }
 }
 
-private fun primaryStack(n: Int, primaryW: Double, horizontal: Boolean, primaryFirst: Boolean): List<PreviewBox> {
-    val others = n - 1
-    val out = ArrayList<PreviewBox>(n)
-    val primary: PreviewBox
-    val stackOrigin: Double
-    val stackExtent = 1.0 - primaryW
+/**
+ * Fill a rectangular strip with [count] equally-sized slots. Horizontal
+ * strips share `sy` as height and split `sx` into equal widths; vertical
+ * strips share `sx` as width and split `sy` into equal heights. Mirror of
+ * the server-side helper.
+ */
+private fun equalStrip(
+    count: Int,
+    ox: Double,
+    oy: Double,
+    sx: Double,
+    sy: Double,
+    horizontal: Boolean,
+): List<PreviewBox> {
+    if (count <= 0) return emptyList()
+    val out = ArrayList<PreviewBox>(count)
     if (horizontal) {
-        primary = if (primaryFirst) PreviewBox(0.0, 0.0, primaryW, 1.0)
-                  else PreviewBox(1.0 - primaryW, 0.0, primaryW, 1.0)
-        stackOrigin = if (primaryFirst) primaryW else 0.0
+        val bw = sx / count
+        for (i in 0 until count) out.add(PreviewBox(ox + i * bw, oy, bw, sy))
     } else {
-        primary = if (primaryFirst) PreviewBox(0.0, 0.0, 1.0, primaryW)
-                  else PreviewBox(0.0, 1.0 - primaryW, 1.0, primaryW)
-        stackOrigin = if (primaryFirst) primaryW else 0.0
-    }
-    out.add(primary)
-    if (others > 0) {
-        val step = 1.0 / others
-        for (i in 0 until others) {
-            if (horizontal) out.add(PreviewBox(stackOrigin, i * step, stackExtent, step))
-            else out.add(PreviewBox(i * step, stackOrigin, step, stackExtent))
-        }
+        val bh = sy / count
+        for (i in 0 until count) out.add(PreviewBox(ox, oy + i * bh, sx, bh))
     }
     return out
+}
+
+private fun equalColumns(n: Int): List<PreviewBox> = (0 until n).map { i ->
+    val w = 1.0 / n
+    PreviewBox(i * w, 0.0, w, 1.0)
+}
+
+private fun equalRows(n: Int): List<PreviewBox> = (0 until n).map { i ->
+    val h = 1.0 / n
+    PreviewBox(0.0, i * h, 1.0, h)
 }
 
 private data class PreviewBox(val x: Double, val y: Double, val width: Double, val height: Double)

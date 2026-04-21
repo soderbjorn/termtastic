@@ -849,7 +849,11 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             ctx.setGitWatcher(cmd.paneId, handle)
         }
         is WindowCommand.AddGitToTab -> {
-            val newLeaf = WindowState.addGitToTab(cmd.tabId)
+            // Inherit cwd from the pane the user triggered "new window" from
+            // so the git view has a repository to inspect. Without this the
+            // pane opens with cwd=null and buildGitListEnvelope returns empty.
+            val inheritedCwd = cmd.anchorPaneId?.let { WindowState.findLeaf(it)?.cwd }
+            val newLeaf = WindowState.addGitToTab(cmd.tabId, initialCwd = inheritedCwd)
             if (newLeaf != null) {
                 ctx.send(buildGitListEnvelope(newLeaf.id, newLeaf.cwd))
             }
@@ -870,9 +874,18 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
         is WindowCommand.CloseTab -> WindowState.closeTab(cmd.tabId)
         is WindowCommand.RenameTab -> WindowState.renameTab(cmd.tabId, cmd.title)
         is WindowCommand.MoveTab -> WindowState.moveTab(cmd.tabId, cmd.targetTabId, cmd.before)
-        is WindowCommand.AddPaneToTab -> WindowState.addPaneToTab(cmd.tabId)
+        is WindowCommand.AddPaneToTab -> {
+            // Inherit cwd from the anchor pane so a new terminal split off
+            // from an existing pane starts in the same directory instead of
+            // resetting to $HOME.
+            val inheritedCwd = cmd.anchorPaneId?.let { WindowState.findLeaf(it)?.cwd }
+            WindowState.addPaneToTab(cmd.tabId, initialCwd = inheritedCwd)
+        }
         is WindowCommand.AddFileBrowserToTab -> {
-            val newLeaf = WindowState.addFileBrowserToTab(cmd.tabId)
+            // Inherit cwd from the anchor pane so the file browser opens on
+            // the user's current directory, not an empty root.
+            val inheritedCwd = cmd.anchorPaneId?.let { WindowState.findLeaf(it)?.cwd }
+            val newLeaf = WindowState.addFileBrowserToTab(cmd.tabId, initialCwd = inheritedCwd)
             if (newLeaf != null) {
                 ctx.send(buildFileBrowserDirEnvelope(newLeaf.id, newLeaf.cwd, ""))
             }
@@ -887,6 +900,7 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
         is WindowCommand.PopOut -> WindowState.popOutPane(cmd.paneId)
         is WindowCommand.DockPoppedOut -> WindowState.dockPoppedOut(cmd.paneId)
         is WindowCommand.MovePaneToTab -> WindowState.movePaneToTab(cmd.paneId, cmd.targetTabId)
+        is WindowCommand.SwapPanes -> WindowState.swapPanes(cmd.paneAId, cmd.paneBId)
         is WindowCommand.SetActiveTab -> WindowState.setActiveTab(cmd.tabId)
         is WindowCommand.SetFocusedPane -> WindowState.setFocusedPane(cmd.tabId, cmd.paneId)
         is WindowCommand.SetStateOverride -> TerminalSessions.setStateOverride(cmd.sessionId, cmd.mode)

@@ -20,6 +20,7 @@ package se.soderbjorn.termtastic
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.serialization.encodeToString
+import org.w3c.dom.Element
 import org.w3c.dom.HTMLElement
 import org.w3c.dom.events.MouseEvent
 import kotlin.js.json
@@ -290,15 +291,17 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false, maximized: Boolean
 
 /**
  * Makes the pane's type icon (upper-left of the titlebar) the sole drag
- * source for cross-tab pane moves. Dragging it sets the pane id as DataTransfer
- * payload; tab buttons accept the drop via their own listeners in
- * `WindowConnection.renderConfig`.
+ * source for cross-tab pane moves and in-tab pane swaps. Dragging it sets
+ * the pane id as DataTransfer payload; tab buttons accept the drop (cross-
+ * tab move, see `WindowConnection.renderConfig`) and other pane cells in
+ * the same tab accept the drop to swap positions with the dragged pane
+ * (see [WindowCommand.SwapPanes]).
  *
  * Keeping the handle scoped to just the icon — not the whole titlebar — means
  * the rest of the header (title text, spacer, action buttons) is free to host
- * the in-tab drag-to-move gesture without the two conflicting, and the cross-
- * tab drag works on both active and inactive panes without the "click to
- * activate first" gate the titlebar-drag has.
+ * the in-tab drag-to-move gesture without the two conflicting, and the drag
+ * works on both active and inactive panes without the "click to activate
+ * first" gate the titlebar-drag has.
  *
  * @param cell the pane cell element containing the header
  * @param paneId the unique pane identifier to set as drag data
@@ -315,8 +318,45 @@ fun attachPaneTabDrag(cell: HTMLElement, paneId: String) {
     })
     icon.addEventListener("dragend", { _ ->
         cell.classList.remove("pane-dragging")
-        val highlighted = document.querySelectorAll(".tab-button.drop-pane")
-        for (i in 0 until highlighted.length) (highlighted.item(i) as HTMLElement).classList.remove("drop-pane")
+        val highlighted = document.querySelectorAll(".tab-button.drop-pane, .terminal-cell.drop-target")
+        for (i in 0 until highlighted.length) {
+            (highlighted.item(i) as HTMLElement).classList.remove("drop-pane", "drop-target")
+        }
+    })
+
+    // The cell itself is a drop target for OTHER panes' icon drags. When an
+    // icon-drag from a different pane passes over or lands on this cell we
+    // ask the server to swap positions with the drop source. Same-cell drops
+    // and non-pane drags are ignored so the normal in-tab free-form drag,
+    // file drops into terminals, and tab-bar drops keep working unchanged.
+    fun hasPaneDragPayload(ev: dynamic): Boolean {
+        val types = ev.dataTransfer?.types ?: return false
+        val len = (types.length as? Number)?.toInt() ?: 0
+        for (i in 0 until len) { if (types[i] == "application/x-termtastic-pane") return true }
+        return false
+    }
+    cell.addEventListener("dragover", { ev ->
+        if (!hasPaneDragPayload(ev.asDynamic())) return@addEventListener
+        if (cell.classList.contains("pane-dragging")) return@addEventListener
+        ev.preventDefault()
+        ev.asDynamic().dataTransfer.dropEffect = "move"
+        cell.classList.add("drop-target")
+    })
+    cell.addEventListener("dragleave", { ev ->
+        // `dragleave` fires for every child boundary crossing; only clear
+        // the highlight when the pointer has actually left the cell.
+        val related = ev.asDynamic().relatedTarget as? HTMLElement
+        if (related != null && cell.asDynamic().contains(related) as Boolean) return@addEventListener
+        cell.classList.remove("drop-target")
+    })
+    cell.addEventListener("drop", { ev ->
+        if (!hasPaneDragPayload(ev.asDynamic())) return@addEventListener
+        val dt = ev.asDynamic().dataTransfer ?: return@addEventListener
+        val sourcePaneId = dt.getData("application/x-termtastic-pane") as? String
+        cell.classList.remove("drop-target")
+        if (sourcePaneId.isNullOrEmpty() || sourcePaneId == paneId) return@addEventListener
+        ev.preventDefault(); ev.stopPropagation()
+        launchCmd(WindowCommand.SwapPanes(paneAId = sourcePaneId, paneBId = paneId))
     })
 }
 
@@ -355,11 +395,12 @@ fun buildEmptyTabPlaceholder(tabId: String): HTMLElement {
  * titlebar drags to move; a bottom-right corner grip drags to resize. Both
  * interactions feed raw cursor fractions into [PaneGeometry.normalize] so the
  * pane visibly snaps to the 10% grid during the drag, and the final geometry
- * is persisted to the server via [WindowCommand.SetPaneGeom]. A `mousedown`
- * on an *already-focused* pane fires [WindowCommand.RaisePane] to raise it
- * above its overlapping neighbours; a first click on an unfocused pane only
- * activates it (focus but no raise), matching the common desktop-window idiom
- * where a background pane must be clicked twice to pop to front.
+ * is persisted to the server via [WindowCommand.SetPaneGeom]. A single click
+ * on an unfocused pane activates it (focus only, no raise); a double-click
+ * anywhere on the pane fires [WindowCommand.RaisePane] to pop it above its
+ * overlapping neighbours. A plain click on an already-active pane intentionally
+ * does NOT raise — the user has to double-click to bring a background pane
+ * (or re-affirm the foreground pane) to the top of the stack.
  *
  * @param paneDesc the dynamic pane descriptor with leaf, x, y, width, height, z
  * @param tabSection the parent tab section used as the coordinate reference
@@ -425,8 +466,7 @@ fun buildPane(paneDesc: dynamic, tabSection: HTMLElement): HTMLElement {
     // already active *before* the click that might have activated it.
     // The drag and resize handlers read this to enforce the rule that
     // first click must activate; only a subsequent click-drag can move
-    // or resize. The raise-on-second-click logic below reads it for the
-    // same reason — a bubble-phase read would see the focused class that
+    // or resize. A bubble-phase read would see the focused class that
     // the cell's own mousedown listener has just added, making every
     // click look like a "second click".
     var wasFocusedAtMousedown = false
@@ -434,22 +474,15 @@ fun buildPane(paneDesc: dynamic, tabSection: HTMLElement): HTMLElement {
         wasFocusedAtMousedown = cell.classList.contains("focused")
     }, true)
 
-    // Raise only when clicking an already-focused pane. A first click on an
-    // unfocused pane just activates it; the user has to click again to pop
-    // it above overlapping neighbours.
+    // Raise only on an explicit double-click. A plain click on a background
+    // pane just activates it (focus), and a plain click on the already-active
+    // pane does nothing extra — matching the quieter desktop-window idiom
+    // where raising to the top is always an intentional gesture.
     //
-    // Skip raising when the mousedown lands on the header. That path either
-    // kicks off the in-tab titlebar drag (which will end with a SetPaneGeom
-    // that the server auto-raises on) or the HTML5 icon-drag (which lands
-    // in a new tab via MovePaneToTab that places the pane at top there).
-    // Firing RaisePane here would push a fresh config mid-drag, rebuilding
-    // the DOM and detaching the element the browser is still tracking
-    // pointer events against — which broke both the titlebar drag visual
-    // and the icon's cross-tab drag.
-    pane.addEventListener("mousedown", { ev ->
-        if (!wasFocusedAtMousedown) return@addEventListener
-        val target = ev.target as? HTMLElement
-        if (target != null && target.closest(".terminal-header") != null) return@addEventListener
+    // The rename handler on `.terminal-title` calls `stopPropagation` on its
+    // own dblclick listener, so double-clicking the title text opens rename
+    // instead of raising the pane.
+    pane.addEventListener("dblclick", { _ ->
         launchCmd(WindowCommand.RaisePane(paneId = paneId))
     })
 
@@ -459,11 +492,16 @@ fun buildPane(paneDesc: dynamic, tabSection: HTMLElement): HTMLElement {
         header.addEventListener("mousedown", drag@{ ev ->
             val mouse = ev as MouseEvent
             if (mouse.button.toInt() != 0) return@drag
-            val target = ev.target as? HTMLElement
+            // Use the DOM Element base type so SVG targets (inside the
+            // pane-type icon) still satisfy these .closest() guards — casting
+            // to HTMLElement silently drops SVGElement hits, which let the
+            // titlebar free-form drag kick in whenever the user grabbed the
+            // icon and broke the cross-tab drag that the icon is meant to
+            // initiate.
+            val target = ev.target as? Element
             if (target != null && target.closest(".pane-actions") != null) return@drag
             // The pane-type icon in the upper-left is reserved for HTML5
-            // cross-tab drag — don't start an in-tab move when the user
-            // grabs it.
+            // drag — don't start an in-tab move when the user grabs it.
             if (target != null && target.closest(".pane-header-icon") != null) return@drag
             // First click on an unfocused pane only activates it; the user
             // must release and click again on the titlebar to start dragging.

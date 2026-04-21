@@ -51,6 +51,57 @@ app.on("second-instance", () => showAndFocus());
 
 let mainWindow = null;
 
+// --- Window chrome preference (custom title bar toggle) ---------------------
+//
+// The `titleBarStyle` BrowserWindow option is immutable after creation, so we
+// cache the user's choice locally and read it before building the window.
+// The server is the source of truth (see `/api/ui-settings`), but we can't
+// hit the server from the main process without an auth token, so the web
+// renderer IPCs the current value down and we mirror it in userData.
+
+/**
+ * Absolute path to the JSON file that caches the user's window-chrome
+ * preference between launches.
+ *
+ * @returns {string} Path under Electron's `userData`.
+ */
+function chromePrefsPath() {
+  return path.join(app.getPath("userData"), "electron-chrome.json");
+}
+
+/**
+ * Loads the cached window-chrome preferences from disk.
+ *
+ * @returns {{ customTitleBar: boolean }} Defaults to `{ customTitleBar: false }`
+ *   (native title bar) when the file is missing or malformed.
+ */
+function loadChromePrefs() {
+  try {
+    const raw = fs.readFileSync(chromePrefsPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    return { customTitleBar: parsed.customTitleBar === true };
+  } catch (_) {
+    return { customTitleBar: false };
+  }
+}
+
+/**
+ * Persists the window-chrome preferences to disk so the next launch honours
+ * the user's choice without needing to fetch from the server.
+ *
+ * @param {{ customTitleBar: boolean }} prefs
+ */
+function saveChromePrefs(prefs) {
+  try {
+    fs.mkdirSync(path.dirname(chromePrefsPath()), { recursive: true });
+    fs.writeFileSync(chromePrefsPath(), JSON.stringify(prefs));
+  } catch (_) {
+    // Cosmetic — worst case the next launch forgets the preference.
+  }
+}
+
+let chromePrefs = loadChromePrefs();
+
 // --- Embedded server bootstrap ----------------------------------------------
 //
 // On launch we want the packaged Termtastic to "just work":
@@ -423,6 +474,10 @@ ipcMain.handle("popout-pane", (_event, { paneId, title }) => {
     minWidth: 400,
     minHeight: 280,
     title: title || "Termtastic",
+    // See the main window for why hiddenInset is needed for themed titlebars.
+    // Mirrors the main window's custom-title-bar toggle so popouts stay
+    // visually consistent with the parent.
+    titleBarStyle: chromePrefs.customTitleBar ? "hiddenInset" : "default",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -449,6 +504,64 @@ ipcMain.handle("close-popout", (_event, paneId) => {
   if (win && !win.isDestroyed()) win.close();
 });
 
+// --- Window chrome theming --------------------------------------------------
+//
+// The renderer computes the active theme's titlebar colour from the resolved
+// palette (ResolvedPalette.Chrome.titlebar) and sends it here whenever the
+// theme or appearance changes. We paint it via BrowserWindow.setBackgroundColor.
+//
+// On macOS the *default* native title bar is opaque and system-drawn — it
+// ignores the window's backgroundColor entirely. For the theme tint to be
+// visible, the main and popout windows are created with
+// titleBarStyle: "hiddenInset": the native bar is hidden, the window
+// background shows through where it used to be, and the traffic lights stay
+// natively positioned on top. See createWindow() and the popout handler.
+//
+// We route the colour to whichever BrowserWindow sent the IPC so the same
+// handler serves both the main window and popouts.
+
+/**
+ * IPC handler: tints the sender's BrowserWindow background to the given CSS
+ * colour string so the native macOS title bar adopts the theme colour.
+ *
+ * Called by the web renderer from `applyAppearanceClass` whenever the theme
+ * or appearance changes. The colour is the `--t-chrome-titlebar` value from
+ * the resolved palette.
+ *
+ * @param {Electron.IpcMainEvent} event  IPC event (sender identifies window).
+ * @param {string} color                  Hex colour string like `#002b36`.
+ */
+ipcMain.handle("set-window-background-color", (event, color) => {
+  if (typeof color !== "string" || !color) return;
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) win.setBackgroundColor(color);
+});
+
+/**
+ * IPC handler: toggles whether the main BrowserWindow renders the themed
+ * (custom) title bar in place of the native OS one. Because `titleBarStyle`
+ * is immutable after window creation, we destroy the current main window and
+ * rebuild it with the new style. The server keeps every bit of user-facing
+ * state (PTY sessions, layout, focus, settings), so the reload is
+ * visual-only.
+ *
+ * Called by the Kotlin/JS renderer when the user toggles the setting in the
+ * Settings panel, and once at startup when the renderer reconciles the
+ * cached electron-side value with the server-side source of truth.
+ *
+ * @param {Electron.IpcMainEvent} _event
+ * @param {boolean} enabled  `true` → themed chrome, `false` → native title bar.
+ */
+ipcMain.handle("set-custom-title-bar", (_event, enabled) => {
+  const next = enabled === true;
+  if (next === chromePrefs.customTitleBar) return;
+  chromePrefs = { ...chromePrefs, customTitleBar: next };
+  saveChromePrefs(chromePrefs);
+  const old = mainWindow;
+  createWindow();
+  if (old && !old.isDestroyed()) old.destroy();
+});
+
 // ----------------------------------------------------------------------------
 
 /**
@@ -471,6 +584,11 @@ function createWindow() {
     minHeight: 480,
     title: "Termtastic",
     icon: path.join(__dirname, "icons", "icon.png"),
+    // Hide the native macOS title bar (in favour of the themed chrome) when
+    // `chromePrefs.customTitleBar` is true. The `titleBarStyle` option is
+    // immutable after creation, so toggling the setting destroys and
+    // recreates this window (see the `set-custom-title-bar` IPC handler).
+    titleBarStyle: chromePrefs.customTitleBar ? "hiddenInset" : "default",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

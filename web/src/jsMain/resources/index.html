@@ -46,6 +46,23 @@
                 </button>
                 <div class="dropdown-menu" id="debug-menu" role="listbox"></div>
             </div>
+            <!-- New window button. Opens the pane-type modal scoped to the
+                 currently active tab, letting the user create a new pane
+                 (terminal, file browser, git, linked view). The new pane
+                 inherits cwd from the active tab's focused pane when one
+                 exists, mirroring the previous per-pane "New window" button. -->
+            <button class="icon-button" id="new-window-button" type="button"
+                    title="New window">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                     viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="1.5"/>
+                    <line x1="12" y1="3" x2="12" y2="21"/>
+                    <line x1="15" y1="12" x2="21" y2="12"/>
+                    <line x1="18" y1="9" x2="18" y2="15"/>
+                </svg>
+            </button>
             <!-- Arrange panes dropdown. Opens a menu of layout templates
                  (Grid, Primary Left, Columns, …) rendered as mini previews
                  that reflect the current pane count; click a tile to apply

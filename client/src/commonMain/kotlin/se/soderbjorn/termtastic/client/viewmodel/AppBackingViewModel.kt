@@ -80,6 +80,16 @@ class AppBackingViewModel(
      * @property sidebarWidth       persisted sidebar width in pixels, or `null`.
      * @property sidebarCollapsed    whether the sidebar is currently collapsed.
      * @property desktopNotifications whether desktop notifications are enabled.
+     * @property electronCustomTitleBar whether the Electron window should hide
+     *   the native OS title bar in favour of the themed chrome (`true`) or
+     *   render the native OS title bar (`false`, default). Ignored by
+     *   non-Electron clients.
+     * @property uiSettingsHydrated `true` once the server has pushed at least
+     *   one UiSettings envelope and [applyServerUiSettings] has populated the
+     *   state with authoritative values. Consumers that forward state changes
+     *   to out-of-process side effects (e.g. the Electron main process for the
+     *   custom title-bar toggle) must gate on this flag to avoid acting on the
+     *   defaults emitted before the server responds.
      * @property sidebarTheme       optional theme override for sidebar sections,
      *   or `null` to use [theme].
      * @property terminalTheme      optional theme override for terminal panes,
@@ -107,6 +117,7 @@ class AppBackingViewModel(
         val sidebarWidth: Int? = null,
         val sidebarCollapsed: Boolean = false,
         val desktopNotifications: Boolean = true,
+        val electronCustomTitleBar: Boolean = false,
         val sidebarTheme: TerminalTheme? = null,
         val terminalTheme: TerminalTheme? = null,
         val diffTheme: TerminalTheme? = null,
@@ -115,6 +126,7 @@ class AppBackingViewModel(
         val chromeTheme: TerminalTheme? = null,
         val windowsTheme: TerminalTheme? = null,
         val activeTheme: TerminalTheme? = null,
+        val uiSettingsHydrated: Boolean = false,
     )
 
     /**
@@ -229,6 +241,19 @@ class AppBackingViewModel(
     suspend fun setDesktopNotifications(enabled: Boolean) {
         emit(_stateFlow.value.copy(desktopNotifications = enabled))
         persistSetting("desktopNotifications", enabled.toString())
+    }
+
+    /**
+     * Enable or disable the custom (themed) Electron window title bar and
+     * persist the preference. Only meaningful inside the Electron desktop
+     * shell; other clients store the value but ignore it.
+     *
+     * @param enabled `true` to hide the native OS title bar and render the
+     *   themed chrome, `false` to show the native OS title bar.
+     */
+    suspend fun setElectronCustomTitleBar(enabled: Boolean) {
+        emit(_stateFlow.value.copy(electronCustomTitleBar = enabled))
+        persistSetting("electronCustomTitleBar", enabled.toString())
     }
 
     /**
@@ -417,6 +442,7 @@ class AppBackingViewModel(
         val sidebarW = settings["sidebarWidth"]?.jsonPrimitive?.intOrNull ?: cur.sidebarWidth
         val sidebarCol = settings["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: cur.sidebarCollapsed
         val desktopNotif = settings["desktopNotifications"]?.jsonPrimitive?.booleanOrNull ?: cur.desktopNotifications
+        val electronCustom = settings["electronCustomTitleBar"]?.jsonPrimitive?.booleanOrNull ?: cur.electronCustomTitleBar
 
         fun sectionTheme(key: String, current: TerminalTheme?): TerminalTheme? {
             val name = settings[key]?.jsonPrimitive?.contentOrNull ?: return current
@@ -431,6 +457,7 @@ class AppBackingViewModel(
             sidebarWidth = sidebarW,
             sidebarCollapsed = sidebarCol,
             desktopNotifications = desktopNotif,
+            electronCustomTitleBar = electronCustom,
             sidebarTheme = sectionTheme("theme.sidebar", cur.sidebarTheme),
             terminalTheme = sectionTheme("theme.terminal", cur.terminalTheme),
             diffTheme = sectionTheme("theme.diff", cur.diffTheme),
@@ -439,6 +466,7 @@ class AppBackingViewModel(
             chromeTheme = sectionTheme("theme.chrome", cur.chromeTheme),
             windowsTheme = sectionTheme("theme.windows", cur.windowsTheme),
             activeTheme = sectionTheme("theme.active", cur.activeTheme),
+            uiSettingsHydrated = true,
         ))
     }
 

@@ -332,6 +332,16 @@ internal fun applyAppearanceClass() {
         root?.style?.setProperty(prop, value)
     }
 
+    // Tint the native OS window chrome (macOS title bar) to match the theme.
+    // The Electron main process receives the hex colour via preload IPC and
+    // calls BrowserWindow.setBackgroundColor — the translucent macOS title
+    // bar then picks up the theme colour through its vibrancy material.
+    // No-op in a plain browser (electronApi is undefined).
+    val electronApi = kotlinx.browser.window.asDynamic().electronApi
+    if (electronApi?.setWindowBackgroundColor != null) {
+        electronApi.setWindowBackgroundColor(argbToHex(palette.chrome.titlebar))
+    }
+
     // Active-indicator accent — always on :root so it is available in
     // every section container regardless of per-section scoping.
     if (root != null) {

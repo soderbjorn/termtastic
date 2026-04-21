@@ -21,6 +21,7 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import org.w3c.dom.HTMLElement
 import org.w3c.dom.events.MouseEvent
@@ -94,6 +95,16 @@ private fun start() {
         "&clientType=" + encodeUriComponent(clientTypeAtStart)
     proto = if (window.location.protocol == "https:") "wss" else "ws"
     isElectronClient = window.navigator.userAgent.contains("Electron", ignoreCase = true)
+    // Tag the body when we're in an Electron renderer on macOS. The main and
+    // popout BrowserWindows use titleBarStyle: "hiddenInset" so the theme
+    // tint can bleed through the titlebar; that leaves the native traffic
+    // lights floating over the upper-left of our content. A body class lets
+    // CSS reserve horizontal room for them (see styles.css — look for
+    // `is-electron-mac`). Non-mac Electron puts window controls on the
+    // right and needs no such padding, hence the platform gate.
+    if (isElectronClient && window.navigator.userAgent.contains("Mac OS X", ignoreCase = true)) {
+        document.body?.classList?.add("is-electron-mac")
+    }
     val urlSearch = js("new URLSearchParams(window.location.search)")
     popoutPaneIdParam = (urlSearch.get("popout") as? String)?.takeIf { it.isNotEmpty() }
     isPopoutMode = popoutPaneIdParam != null
@@ -123,6 +134,13 @@ private fun start() {
                 "X-Termtastic-Client-Type" to clientTypeAtStart,
             )
             init.body = JSON.stringify(body)
+            // keepalive lets the POST outlive the renderer. Required for
+            // settings whose side effect tears the renderer down before the
+            // request can complete — notably electronCustomTitleBar, where
+            // the state change triggers a BrowserWindow rebuild in the main
+            // process. Without this, the cancelled POST never reaches the
+            // server and the new renderer re-hydrates from stale DB state.
+            init.keepalive = true
             window.fetch("/api/ui-settings", init)
         }
 
@@ -209,6 +227,38 @@ private fun start() {
         }
     }
 
+    // Reconcile Electron's cached `titleBarStyle` with the server value. The
+    // setting is the only one whose effect happens in the Electron main
+    // process (outside the renderer), so any change — whether from this
+    // device or another client — needs to be forwarded via IPC. The main
+    // process diffs against its own cache and only rebuilds the window when
+    // the value actually flipped.
+    //
+    // We MUST wait for `uiSettingsHydrated` before firing any IPC. The state
+    // flow's initial value is the default `false`, which is emitted before
+    // the server pushes the authoritative value. If the disk cache on the
+    // main process disagrees with that default, forwarding the default would
+    // trigger a window rebuild, the fresh renderer would again emit the
+    // default, the next server push would flip it back, and the app would
+    // be stuck in an infinite rebuild loop.
+    if (isElectronClient) {
+        GlobalScope.launch {
+            var prev: Boolean? = null
+            appVm.stateFlow
+                .filter { it.uiSettingsHydrated }
+                .collect { state ->
+                    val value = state.electronCustomTitleBar
+                    if (value != prev) {
+                        prev = value
+                        val electronApi = window.asDynamic().electronApi
+                        if (electronApi?.setElectronCustomTitleBar != null) {
+                            electronApi.setElectronCustomTitleBar(value)
+                        }
+                    }
+                }
+        }
+    }
+
     // React to system color scheme changes when in Auto.
     val mql = window.matchMedia("(prefers-color-scheme: dark)")
     mql.asDynamic().addEventListener("change", {
@@ -244,6 +294,18 @@ private fun start() {
         settingsAppearanceRefresh?.invoke()
     })
     updateAppearanceToggle()
+
+    // New window button. Opens the pane-type modal scoped to the active
+    // tab. When that tab has a persisted focused pane, it is passed as the
+    // anchor so the new pane inherits its cwd — matching the behaviour of
+    // the former per-pane "New window" header button.
+    val newWindowButton = document.getElementById("new-window-button") as? HTMLElement
+    newWindowButton?.addEventListener("click", { event ->
+        event.stopPropagation()
+        val tabId = activeTabId ?: return@addEventListener
+        val anchor = savedFocusedPaneId(tabId)
+        showPaneTypeModal(emptyTabId = tabId, anchorPaneId = anchor)
+    })
 
     // About button.
     val aboutButton = document.getElementById("about-button") as? HTMLElement

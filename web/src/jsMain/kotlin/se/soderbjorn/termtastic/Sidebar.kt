@@ -168,7 +168,7 @@ fun renderSidebar(config: dynamic) {
                     else if (cellEl != null) markPaneFocused(cellEl)
                     // Sidebar is explicit navigation: always raise the pane so
                     // it pops above overlapping neighbours, unlike in-pane clicks
-                    // which only raise on a second click of an already-active pane.
+                    // which only raise on a double-click.
                     launchCmd(WindowCommand.RaisePane(paneId = paneId))
                 }
                 if (needsTabSwitch) window.setTimeout({ doFocus() }, 50) else doFocus()

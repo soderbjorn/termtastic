@@ -882,9 +882,12 @@ object WindowState {
     /**
      * Arrange every pane in [tabId] using one of the predefined layout
      * algorithms. The pane with [primaryPaneId] (or the first pane if that
-     * is null/invalid) gets the primary slot; others fill the remaining
-     * slots in their existing order. Also clears any maximized flag so the
-     * layout takes effect visually.
+     * is null/invalid) always wins slot 0 — the biggest slot. The remaining
+     * panes are assigned to the other slots ordered by **descending current
+     * area** (width × height), so the user's manual sizing is preserved as a
+     * priority signal: whatever they've grown becomes second-biggest, and so
+     * on. Tab order is only consulted to break ties between equal-area panes.
+     * Also clears any maximized flag so the layout takes effect visually.
      */
     fun applyLayout(tabId: String, layout: String, primaryPaneId: String?) = synchronized(this) {
         val cfg = _config.value
@@ -894,7 +897,13 @@ object WindowState {
         if (tab.panes.isEmpty()) return@synchronized
 
         val primary = tab.panes.firstOrNull { it.leaf.id == primaryPaneId } ?: tab.panes.first()
-        val ordered = listOf(primary) + tab.panes.filter { it.leaf.id != primary.leaf.id }
+        val rest = tab.panes
+            .filter { it.leaf.id != primary.leaf.id }
+            .sortedWith(
+                compareByDescending<Pane> { it.width * it.height }
+                    .thenBy { tab.panes.indexOf(it) }
+            )
+        val ordered = listOf(primary) + rest
         val boxes = computeLayout(layout, ordered.size)
 
         val boxById = ordered.withIndex().associate { (i, p) -> p.leaf.id to boxes[i] }
@@ -908,88 +917,168 @@ object WindowState {
     }
 
     /**
-     * Compute the list of pane boxes for [layout] with [n] total panes. The
-     * primary pane is always index 0; remaining slots follow in order.
+     * Compute the list of pane boxes for [layout] with [n] total panes. Index
+     * 0 is always the slot the caller should assign to the focused (biggest)
+     * pane; subsequent indices are the remaining, uniformly-sized sibling
+     * slots so the caller can assign area-ranked panes in order.
+     *
+     * Every layout is designed to produce at most three distinct size classes
+     * (primary, secondary, rest-equal), with the smallest slot's dominant
+     * dimension never falling below ~25% at common pane counts. There is no
+     * cascade family here: strips are always filled with equal-sized slots,
+     * so no pane ends up as a super-narrow sliver.
+     *
+     * Layout families:
+     *  - **grid / columns / rows** — size-neutral resets (1 size class).
+     *  - **hero-** — 65/35 split, primary big, siblings in equal-size strip.
+     *  - **split-** — 50/50 split, primary half, siblings in equal-size strip.
+     *  - **sidebar-** — 75/25 split with a narrow strip of equal sibling cells.
+     *  - **t-shape / t-shape-inv** — 70/30 two-cell bar + equal-size strip.
+     *  - **l-shape / l-shape-tr / l-shape-bl / l-shape-br** — corner hero +
+     *    full-edge sibling + equal strip along the primary's remaining edge.
+     *  - **big-2-stack / -right / -bottom** — wide primary + one medium +
+     *    stacked equal siblings in the remaining quadrant.
+     *
+     * Unknown [layout] keys fall back to [grid] for robustness.
+     *
+     * @param layout the layout key (must match one in `LayoutMenu.kt`)
+     * @param n the number of panes to place; must be ≥ 0
+     * @return a list of [PaneBox] of size [n] in rank order
+     * @see equalStrip
      */
     private fun computeLayout(layout: String, n: Int): List<PaneBox> {
         if (n <= 0) return emptyList()
         if (n == 1) return listOf(PaneBox(0.0, 0.0, 1.0, 1.0))
-        val others = n - 1
         return when (layout) {
-            "primary-left" -> primaryWithStack(n, primaryW = 0.6, orientation = "horizontal", primaryFirst = true)
-            "primary-right" -> primaryWithStack(n, primaryW = 0.6, orientation = "horizontal", primaryFirst = false)
-            "primary-top" -> primaryWithStack(n, primaryW = 0.6, orientation = "vertical", primaryFirst = true)
-            "primary-bottom" -> primaryWithStack(n, primaryW = 0.6, orientation = "vertical", primaryFirst = false)
-            // 75/25 "dominant primary" variants for when the primary really
-            // should take the stage and the others are just reference panes.
-            "primary-wide-left" -> primaryWithStack(n, primaryW = 0.75, orientation = "horizontal", primaryFirst = true)
-            "primary-wide-right" -> primaryWithStack(n, primaryW = 0.75, orientation = "horizontal", primaryFirst = false)
-            "primary-wide-top" -> primaryWithStack(n, primaryW = 0.75, orientation = "vertical", primaryFirst = true)
-            "primary-wide-bottom" -> primaryWithStack(n, primaryW = 0.75, orientation = "vertical", primaryFirst = false)
-            "columns" -> (0 until n).map { i ->
-                val w = 1.0 / n
-                PaneBox(i * w, 0.0, w, 1.0)
-            }
-            "rows" -> (0 until n).map { i ->
-                val h = 1.0 / n
-                PaneBox(0.0, i * h, 1.0, h)
-            }
-            "two-col-grid" -> {
-                val cols = 2
-                val rows = kotlin.math.ceil(n.toDouble() / cols).toInt().coerceAtLeast(1)
-                val w = 1.0 / cols
-                val h = 1.0 / rows
-                (0 until n).map { i ->
-                    val r = i / cols
-                    val c = i % cols
-                    PaneBox(c * w, r * h, w, h)
+            "hero-left" -> listOf(PaneBox(0.0, 0.0, 0.65, 1.0)) +
+                equalStrip(n - 1, ox = 0.65, oy = 0.0, sx = 0.35, sy = 1.0, axis = "vertical")
+            "hero-right" -> listOf(PaneBox(0.35, 0.0, 0.65, 1.0)) +
+                equalStrip(n - 1, ox = 0.0, oy = 0.0, sx = 0.35, sy = 1.0, axis = "vertical")
+            "hero-top" -> listOf(PaneBox(0.0, 0.0, 1.0, 0.65)) +
+                equalStrip(n - 1, ox = 0.0, oy = 0.65, sx = 1.0, sy = 0.35, axis = "horizontal")
+            "hero-bottom" -> listOf(PaneBox(0.0, 0.35, 1.0, 0.65)) +
+                equalStrip(n - 1, ox = 0.0, oy = 0.0, sx = 1.0, sy = 0.35, axis = "horizontal")
+
+            "split-h" -> listOf(PaneBox(0.0, 0.0, 0.50, 1.0)) +
+                equalStrip(n - 1, ox = 0.50, oy = 0.0, sx = 0.50, sy = 1.0, axis = "vertical")
+            "split-v" -> listOf(PaneBox(0.0, 0.0, 1.0, 0.50)) +
+                equalStrip(n - 1, ox = 0.0, oy = 0.50, sx = 1.0, sy = 0.50, axis = "horizontal")
+
+            "sidebar-left" -> listOf(PaneBox(0.25, 0.0, 0.75, 1.0)) +
+                equalStrip(n - 1, ox = 0.0, oy = 0.0, sx = 0.25, sy = 1.0, axis = "vertical")
+            "sidebar-right" -> listOf(PaneBox(0.0, 0.0, 0.75, 1.0)) +
+                equalStrip(n - 1, ox = 0.75, oy = 0.0, sx = 0.25, sy = 1.0, axis = "vertical")
+            "sidebar-top" -> listOf(PaneBox(0.0, 0.25, 1.0, 0.75)) +
+                equalStrip(n - 1, ox = 0.0, oy = 0.0, sx = 1.0, sy = 0.25, axis = "horizontal")
+            "sidebar-bottom" -> listOf(PaneBox(0.0, 0.0, 1.0, 0.75)) +
+                equalStrip(n - 1, ox = 0.0, oy = 0.75, sx = 1.0, sy = 0.25, axis = "horizontal")
+
+            "t-shape" -> when (n) {
+                // n=2 has no bottom row to fill, so degrade to the hero-left
+                // shape at 70/30 so the layout still feels like itself.
+                2 -> listOf(
+                    PaneBox(0.0, 0.0, 0.70, 1.0),
+                    PaneBox(0.70, 0.0, 0.30, 1.0),
+                )
+                else -> buildList {
+                    add(PaneBox(0.0, 0.0, 0.70, 0.70))
+                    add(PaneBox(0.70, 0.0, 0.30, 0.70))
+                    addAll(equalStrip(n - 2, ox = 0.0, oy = 0.70, sx = 1.0, sy = 0.30, axis = "horizontal"))
                 }
             }
-            "three-col-grid" -> {
-                val cols = 3
-                val rows = kotlin.math.ceil(n.toDouble() / cols).toInt().coerceAtLeast(1)
-                val w = 1.0 / cols
-                val h = 1.0 / rows
-                (0 until n).map { i ->
-                    val r = i / cols
-                    val c = i % cols
-                    PaneBox(c * w, r * h, w, h)
+            "t-shape-inv" -> when (n) {
+                2 -> listOf(
+                    PaneBox(0.0, 0.0, 0.70, 1.0),
+                    PaneBox(0.70, 0.0, 0.30, 1.0),
+                )
+                else -> buildList {
+                    add(PaneBox(0.0, 0.30, 0.70, 0.70))
+                    add(PaneBox(0.70, 0.30, 0.30, 0.70))
+                    addAll(equalStrip(n - 2, ox = 0.0, oy = 0.0, sx = 1.0, sy = 0.30, axis = "horizontal"))
                 }
             }
-            "primary-main-2col" -> buildList {
-                // Primary on the left half; the others flow into a 2-column
-                // grid on the right half. Feels natural for editor-plus-
-                // reference setups (primary = editor, others = terminals).
-                add(PaneBox(0.0, 0.0, 0.5, 1.0))
-                if (others > 0) {
-                    val cols = 2
-                    val rows = kotlin.math.ceil(others.toDouble() / cols).toInt().coerceAtLeast(1)
-                    val w = 0.5 / cols
-                    val h = 1.0 / rows
-                    for (i in 0 until others) {
-                        val r = i / cols
-                        val c = i % cols
-                        add(PaneBox(0.5 + c * w, r * h, w, h))
-                    }
+
+            "l-shape" -> when (n) {
+                2 -> listOf(
+                    PaneBox(0.0, 0.0, 0.65, 1.0),
+                    PaneBox(0.65, 0.0, 0.35, 1.0),
+                )
+                else -> buildList {
+                    add(PaneBox(0.0, 0.0, 0.65, 0.65))
+                    add(PaneBox(0.65, 0.0, 0.35, 1.0))
+                    addAll(equalStrip(n - 2, ox = 0.0, oy = 0.65, sx = 0.65, sy = 0.35, axis = "horizontal"))
                 }
             }
-            "primary-main-2row" -> buildList {
-                // Primary across the top half; others flow into a 2-column
-                // grid on the bottom half. The horizontal mirror of
-                // `primary-main-2col`, useful on portrait / tall viewports.
-                add(PaneBox(0.0, 0.0, 1.0, 0.5))
-                if (others > 0) {
-                    val cols = 2
-                    val rows = kotlin.math.ceil(others.toDouble() / cols).toInt().coerceAtLeast(1)
-                    val w = 1.0 / cols
-                    val h = 0.5 / rows
-                    for (i in 0 until others) {
-                        val r = i / cols
-                        val c = i % cols
-                        add(PaneBox(c * w, 0.5 + r * h, w, h))
-                    }
+            "l-shape-tr" -> when (n) {
+                2 -> listOf(
+                    PaneBox(0.35, 0.0, 0.65, 1.0),
+                    PaneBox(0.0, 0.0, 0.35, 1.0),
+                )
+                else -> buildList {
+                    add(PaneBox(0.35, 0.0, 0.65, 0.65))
+                    add(PaneBox(0.0, 0.0, 0.35, 1.0))
+                    addAll(equalStrip(n - 2, ox = 0.35, oy = 0.65, sx = 0.65, sy = 0.35, axis = "horizontal"))
                 }
             }
+            "l-shape-bl" -> when (n) {
+                2 -> listOf(
+                    PaneBox(0.0, 0.0, 0.65, 1.0),
+                    PaneBox(0.65, 0.0, 0.35, 1.0),
+                )
+                else -> buildList {
+                    add(PaneBox(0.0, 0.35, 0.65, 0.65))
+                    add(PaneBox(0.65, 0.0, 0.35, 1.0))
+                    addAll(equalStrip(n - 2, ox = 0.0, oy = 0.0, sx = 0.65, sy = 0.35, axis = "horizontal"))
+                }
+            }
+            "l-shape-br" -> when (n) {
+                2 -> listOf(
+                    PaneBox(0.35, 0.0, 0.65, 1.0),
+                    PaneBox(0.0, 0.0, 0.35, 1.0),
+                )
+                else -> buildList {
+                    add(PaneBox(0.35, 0.35, 0.65, 0.65))
+                    add(PaneBox(0.0, 0.0, 0.35, 1.0))
+                    addAll(equalStrip(n - 2, ox = 0.35, oy = 0.0, sx = 0.65, sy = 0.35, axis = "horizontal"))
+                }
+            }
+
+            "big-2-stack" -> when (n) {
+                2 -> listOf(
+                    PaneBox(0.0, 0.0, 0.60, 1.0),
+                    PaneBox(0.60, 0.0, 0.40, 1.0),
+                )
+                else -> buildList {
+                    add(PaneBox(0.0, 0.0, 0.60, 1.0))
+                    add(PaneBox(0.60, 0.0, 0.40, 0.60))
+                    addAll(equalStrip(n - 2, ox = 0.60, oy = 0.60, sx = 0.40, sy = 0.40, axis = "vertical"))
+                }
+            }
+            "big-2-stack-right" -> when (n) {
+                2 -> listOf(
+                    PaneBox(0.40, 0.0, 0.60, 1.0),
+                    PaneBox(0.0, 0.0, 0.40, 1.0),
+                )
+                else -> buildList {
+                    add(PaneBox(0.40, 0.0, 0.60, 1.0))
+                    add(PaneBox(0.0, 0.0, 0.40, 0.60))
+                    addAll(equalStrip(n - 2, ox = 0.0, oy = 0.60, sx = 0.40, sy = 0.40, axis = "vertical"))
+                }
+            }
+            "big-2-stack-bottom" -> when (n) {
+                2 -> listOf(
+                    PaneBox(0.0, 0.40, 1.0, 0.60),
+                    PaneBox(0.0, 0.0, 1.0, 0.40),
+                )
+                else -> buildList {
+                    add(PaneBox(0.0, 0.40, 1.0, 0.60))
+                    add(PaneBox(0.0, 0.0, 0.60, 0.40))
+                    addAll(equalStrip(n - 2, ox = 0.60, oy = 0.0, sx = 0.40, sy = 0.40, axis = "horizontal"))
+                }
+            }
+
+            "columns" -> equalColumns(n)
+            "rows" -> equalRows(n)
             else -> {
                 // "grid" (default): even tiling with primary at top-left.
                 val cols = kotlin.math.ceil(kotlin.math.sqrt(n.toDouble())).toInt().coerceAtLeast(1)
@@ -1006,48 +1095,59 @@ object WindowState {
     }
 
     /**
-     * Shared implementation for the four "primary + stack of others" layouts
-     * (horizontal and vertical, primary on either side). [orientation] is
-     * `"horizontal"` for left/right split or `"vertical"` for top/bottom;
-     * [primaryFirst] puts the primary on the left / top when true.
-     * [primaryW] is the fraction of the long axis the primary occupies.
+     * Fill a rectangular strip with [count] equally-sized slots along [axis].
+     * The strip's top-left is at (`ox`, `oy`) and it spans (`sx`, `sy`) of
+     * the tab area. For `"horizontal"` the slots share `sy` as height and
+     * split `sx` into equal widths; for `"vertical"` they share `sx` as
+     * width and split `sy` into equal heights.
+     *
+     * Equal sizing keeps every layout at ≤ 3 size classes (primary +
+     * optional secondary + rest-equal) and avoids cascade-produced slivers.
+     *
+     * @param count number of slots to produce; 0 returns an empty list
+     * @param ox strip origin x (fraction of tab area)
+     * @param oy strip origin y (fraction of tab area)
+     * @param sx strip width (fraction of tab area)
+     * @param sy strip height (fraction of tab area)
+     * @param axis `"horizontal"` or `"vertical"`
+     * @return list of [PaneBox] of identical size
      */
-    private fun primaryWithStack(
-        n: Int,
-        primaryW: Double,
-        orientation: String,
-        primaryFirst: Boolean,
+    private fun equalStrip(
+        count: Int,
+        ox: Double,
+        oy: Double,
+        sx: Double,
+        sy: Double,
+        axis: String,
     ): List<PaneBox> {
-        val others = n - 1
-        val primaryBox: PaneBox
-        val stackOrigin: Double
-        val stackExtent: Double = 1.0 - primaryW
-        if (orientation == "horizontal") {
-            primaryBox = if (primaryFirst)
-                PaneBox(0.0, 0.0, primaryW, 1.0)
-            else
-                PaneBox(1.0 - primaryW, 0.0, primaryW, 1.0)
-            stackOrigin = if (primaryFirst) primaryW else 0.0
+        if (count <= 0) return emptyList()
+        val out = ArrayList<PaneBox>(count)
+        if (axis == "horizontal") {
+            val bw = sx / count
+            for (i in 0 until count) out.add(PaneBox(ox + i * bw, oy, bw, sy))
         } else {
-            primaryBox = if (primaryFirst)
-                PaneBox(0.0, 0.0, 1.0, primaryW)
-            else
-                PaneBox(0.0, 1.0 - primaryW, 1.0, primaryW)
-            stackOrigin = if (primaryFirst) primaryW else 0.0
+            val bh = sy / count
+            for (i in 0 until count) out.add(PaneBox(ox, oy + i * bh, sx, bh))
         }
-        val boxes = ArrayList<PaneBox>(n)
-        boxes.add(primaryBox)
-        if (others > 0) {
-            val step = 1.0 / others
-            for (i in 0 until others) {
-                if (orientation == "horizontal") {
-                    boxes.add(PaneBox(stackOrigin, i * step, stackExtent, step))
-                } else {
-                    boxes.add(PaneBox(i * step, stackOrigin, step, stackExtent))
-                }
-            }
-        }
-        return boxes
+        return out
+    }
+
+    /**
+     * Tile the full tab area into [n] equal-width columns, primary at left.
+     * Used by the `columns` layout.
+     */
+    private fun equalColumns(n: Int): List<PaneBox> = (0 until n).map { i ->
+        val w = 1.0 / n
+        PaneBox(i * w, 0.0, w, 1.0)
+    }
+
+    /**
+     * Tile the full tab area into [n] equal-height rows, primary at top.
+     * Used by the `rows` layout.
+     */
+    private fun equalRows(n: Int): List<PaneBox> = (0 until n).map { i ->
+        val h = 1.0 / n
+        PaneBox(0.0, i * h, 1.0, h)
     }
 
     /**
@@ -1288,6 +1388,40 @@ object WindowState {
             focusedPaneId = newTargetFocus,
         )
         _config.value = cfg.copy(tabs = newTabs)
+    }
+
+    /**
+     * Swap the positions and sizes of two panes that share a tab. Pane A
+     * (the drag source) inherits B's x/y/width/height and is raised to the
+     * top of the stacking order so the user's dragged pane stays visually
+     * on top; pane B takes A's former geometry and keeps its existing z.
+     * No-op if either id is missing, if they are the same pane, or if they
+     * live in different tabs — cross-tab moves go through [movePaneToTab].
+     *
+     * Dispatched from the web client when the user drops a pane's header
+     * icon onto another pane in the same tab.
+     */
+    fun swapPanes(aId: String, bId: String) = synchronized(this) {
+        if (aId.isEmpty() || bId.isEmpty() || aId == bId) return@synchronized
+        val cfg = _config.value
+        for ((tabIdx, tab) in cfg.tabs.withIndex()) {
+            val aIdx = tab.panes.indexOfFirst { it.leaf.id == aId }
+            val bIdx = tab.panes.indexOfFirst { it.leaf.id == bId }
+            if (aIdx < 0 || bIdx < 0) continue
+            val a = tab.panes[aIdx]
+            val b = tab.panes[bIdx]
+            val topZ = tab.panes.maxOf { it.z }
+            val newPanes = tab.panes.toMutableList()
+            newPanes[aIdx] = a.copy(
+                x = b.x, y = b.y, width = b.width, height = b.height,
+                z = topZ + 1,
+            )
+            newPanes[bIdx] = b.copy(x = a.x, y = a.y, width = a.width, height = a.height)
+            val newTabs = cfg.tabs.toMutableList()
+            newTabs[tabIdx] = tab.copy(panes = newPanes)
+            _config.value = cfg.copy(tabs = newTabs)
+            return@synchronized
+        }
     }
 
     /**

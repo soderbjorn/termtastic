@@ -475,8 +475,13 @@ fun TerminalScreen(
                         )
                     }
                 },
+                // Match TreeScreen's top bar: theme-aware sidebar surface so
+                // the terminal screen doesn't flash a default Material white
+                // bar on dark themes. titleContentColor also feeds icons that
+                // don't override their tint.
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = SidebarBackground,
+                    titleContentColor = SidebarTextPrimary,
                 ),
             )
         },

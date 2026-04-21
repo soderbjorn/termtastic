@@ -244,18 +244,22 @@ fun showPaneTypeModal(
         val grid = document.createElement("div") as HTMLElement
         grid.className = "pane-type-grid"
 
+        // Forward the anchor pane id so the server can inherit its cwd and
+        // the new pane opens in the user's current directory. When the modal
+        // is triggered from an empty-tab placeholder there is no anchor, in
+        // which case the new pane falls back to $HOME.
         grid.appendChild(makeTypeCard("Terminal", MODAL_TERMINAL_SVG) {
             closePaneTypeModal()
-            launchCmd(WindowCommand.AddPaneToTab(tabId = emptyTabId))
+            launchCmd(WindowCommand.AddPaneToTab(tabId = emptyTabId, anchorPaneId = anchorPaneId))
         })
         grid.appendChild(makeTypeCard("Terminal link", MODAL_LINK_SVG) { showLinkPicker() })
         grid.appendChild(makeTypeCard("File Browser", MODAL_FILE_BROWSER_SVG) {
             closePaneTypeModal()
-            launchCmd(WindowCommand.AddFileBrowserToTab(tabId = emptyTabId))
+            launchCmd(WindowCommand.AddFileBrowserToTab(tabId = emptyTabId, anchorPaneId = anchorPaneId))
         })
         grid.appendChild(makeTypeCard("Git", MODAL_GIT_SVG) {
             closePaneTypeModal()
-            launchCmd(WindowCommand.AddGitToTab(tabId = emptyTabId))
+            launchCmd(WindowCommand.AddGitToTab(tabId = emptyTabId, anchorPaneId = anchorPaneId))
         })
         body.appendChild(grid)
     }

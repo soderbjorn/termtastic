@@ -289,28 +289,48 @@ sealed class WindowCommand {
      * Add a new terminal pane to an existing tab (creates a new PTY session).
      *
      * @param tabId the id of the tab to add the pane to
+     * @param anchorPaneId optional id of the pane the user triggered "new
+     *   window" from; the server resolves its current cwd and starts the new
+     *   pane there so the user doesn't land back in `$HOME` when they split
+     *   off from a terminal that has already cd'd elsewhere. `null` means
+     *   "no anchor" (e.g. new pane from an empty-tab placeholder).
      */
     @Serializable
     @SerialName("addPaneToTab")
-    data class AddPaneToTab(val tabId: String) : WindowCommand()
+    data class AddPaneToTab(
+        val tabId: String,
+        val anchorPaneId: String? = null,
+    ) : WindowCommand()
 
     /**
      * Add a new file browser pane to an existing tab.
      *
      * @param tabId the id of the tab to add the file browser to
+     * @param anchorPaneId optional id of the pane the user triggered "new
+     *   window" from; the server resolves its current cwd and uses it as the
+     *   file browser root so the new pane isn't empty. See [AddPaneToTab].
      */
     @Serializable
     @SerialName("addFileBrowserToTab")
-    data class AddFileBrowserToTab(val tabId: String) : WindowCommand()
+    data class AddFileBrowserToTab(
+        val tabId: String,
+        val anchorPaneId: String? = null,
+    ) : WindowCommand()
 
     /**
      * Add a new git overview pane to an existing tab.
      *
      * @param tabId the id of the tab to add the git pane to
+     * @param anchorPaneId optional id of the pane the user triggered "new
+     *   window" from; the server resolves its current cwd and uses it as the
+     *   git root so the new pane isn't empty. See [AddPaneToTab].
      */
     @Serializable
     @SerialName("addGitToTab")
-    data class AddGitToTab(val tabId: String) : WindowCommand()
+    data class AddGitToTab(
+        val tabId: String,
+        val anchorPaneId: String? = null,
+    ) : WindowCommand()
 
     /**
      * Add a linked view of an existing terminal session to a tab.
@@ -380,8 +400,12 @@ sealed class WindowCommand {
      * maximized flag so the new layout is actually visible.
      *
      * @param tabId the tab to rearrange
-     * @param layout one of `grid`, `primary-left`, `primary-right`,
-     *               `primary-top`, `primary-bottom`, `columns`, `rows`
+     * @param layout one of `grid`, `columns`, `rows`, `hero-left`, `hero-right`,
+     *               `hero-top`, `hero-bottom`, `split-h`, `split-v`,
+     *               `sidebar-left`, `sidebar-right`, `sidebar-top`,
+     *               `sidebar-bottom`, `t-shape`, `t-shape-inv`, `l-shape`,
+     *               `l-shape-tr`, `l-shape-bl`, `l-shape-br`, `big-2-stack`,
+     *               `big-2-stack-right`, `big-2-stack-bottom`
      * @param primaryPaneId the pane to prioritise, or null/invalid to use
      *                      the tab's first pane
      */
@@ -424,6 +448,23 @@ sealed class WindowCommand {
     @Serializable
     @SerialName("movePaneToTab")
     data class MovePaneToTab(val paneId: String, val targetTabId: String) : WindowCommand()
+
+    /**
+     * Swap the positions and sizes of two panes that share the same tab.
+     * The dragged pane (A) inherits B's geometry and is raised to the top
+     * of the stacking order; pane B takes A's former geometry. No-op if
+     * either pane is missing or they live in different tabs — cross-tab
+     * moves go through [MovePaneToTab] instead.
+     *
+     * Dispatched from the web client when the user drops a pane's header
+     * icon onto another pane in the same tab.
+     *
+     * @param paneAId the dragged (source) pane id
+     * @param paneBId the drop-target pane id
+     */
+    @Serializable
+    @SerialName("swapPanes")
+    data class SwapPanes(val paneAId: String, val paneBId: String) : WindowCommand()
 
     /**
      * Switch the active (visible) tab. Persisted so tab selection survives restarts.

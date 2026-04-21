@@ -537,6 +537,38 @@ fun openSettingsPanel() {
     notifSection.appendChild(notifRow)
     body.appendChild(notifSection)
 
+    // ─── Custom title bar (Electron only) ──────────────────────────
+    if (isElectronClient) {
+        val titleBarSection = document.createElement("div") as HTMLElement
+        titleBarSection.className = "settings-section"
+        val titleBarLabel = document.createElement("div") as HTMLElement
+        titleBarLabel.className = "settings-label"
+        titleBarLabel.textContent = "Custom title bar"
+        titleBarSection.appendChild(titleBarLabel)
+
+        val titleBarRow = document.createElement("div") as HTMLElement
+        titleBarRow.className = "settings-button-row"
+        fun renderTitleBarRow() {
+            titleBarRow.innerHTML = ""
+            val enabled = appVm.stateFlow.value.electronCustomTitleBar
+            for ((label, value) in listOf("On" to true, "Off" to false)) {
+                val btn = document.createElement("button") as HTMLElement
+                btn.className = "settings-choice-btn" + if (value == enabled) " selected" else ""
+                btn.textContent = label
+                btn.addEventListener("click", {
+                    GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        appVm.setElectronCustomTitleBar(value)
+                    }
+                    renderTitleBarRow()
+                })
+                titleBarRow.appendChild(btn)
+            }
+        }
+        renderTitleBarRow()
+        titleBarSection.appendChild(titleBarRow)
+        body.appendChild(titleBarSection)
+    }
+
     // ─── Server settings ──────────────────────────────────────────
     val srvBtn = document.createElement("button") as HTMLElement
     srvBtn.className = "settings-server-btn"

@@ -142,6 +142,53 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     gap: 12px;
 }
 
+/* --- Native window chrome integration (Electron hiddenInset) -----------
+   The Electron BrowserWindows use titleBarStyle: "hiddenInset" so the
+   themed titlebar background shows through. That hides the native title
+   bar entirely, with two consequences the renderer has to compensate
+   for:
+     1. The window is no longer draggable by the OS title bar — we mark
+        the app header as a `-webkit-app-region: drag` area so it takes
+        over that role. Interactive children opt back out with `no-drag`
+        so clicks still register.
+     2. On macOS the traffic-light buttons still float over the upper-
+        left corner; we reserve ~80 px of padding there so they don't
+        overlap the sidebar toggle. Non-mac Electron puts window
+        controls on the right, so the padding is scoped to
+        `body.is-electron-mac` (set in main.kt at boot).
+   `-webkit-app-region` is a no-op in a plain browser, so the drag/no-
+   drag rules are safe to apply unconditionally. */
+.app-header {
+    -webkit-app-region: drag;
+    app-region: drag;
+}
+.app-header .icon-button,
+.app-header .tab-button,
+.app-header .dropdown,
+.app-header .dropdown-menu,
+.app-header .tab-menu-list {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+}
+body.is-electron-mac .app-header {
+    padding-left: 80px;
+}
+
+/* Popout windows hide .app-header entirely (see the popout-mode rules
+   further down); the pane's own header sits at the top of the window
+   instead and needs the same drag + traffic-light treatment. */
+body.is-electron-mac.popout-mode .popout-cell > .pane-header {
+    -webkit-app-region: drag;
+    app-region: drag;
+    padding-left: 80px;
+}
+body.is-electron-mac.popout-mode .popout-cell > .pane-header .pane-action-btn,
+body.is-electron-mac.popout-mode .popout-cell > .pane-header .pane-header-icon,
+body.is-electron-mac.popout-mode .popout-cell > .pane-header .terminal-title {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+}
+
 .header-brand {
     display: flex;
     align-items: center;
@@ -769,6 +816,12 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     opacity: 0.6;
 }
 
+/* Highlight shown on a pane cell while another pane's icon-drag hovers it,
+   signalling that a drop here will swap the two panes' positions. */
+.terminal-cell.drop-target {
+    box-shadow: inset 0 0 0 2px var(--t-accent-primary, var(--text-primary));
+}
+
 .terminal-title {
     font-size: 11px;
     font-weight: 600;
@@ -1152,9 +1205,9 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 /* ---------- Layout picker dropdown ------------------------------------ */
 
 /* Three-column grid of preview tiles, sized to content so the dropdown is
-   exactly wide enough for the tiles and tall enough to fit every layout
-   without scrolling. Uses the #id selector to outrank the generic
-   .dropdown.open .dropdown-menu rule further down this file. */
+   exactly wide enough for the tiles. Falls back to scrolling only when the
+   full palette wouldn't fit the viewport. Uses the #id selector to outrank
+   the generic .dropdown.open .dropdown-menu rule further down this file. */
 .dropdown.open #layout-menu {
     display: grid;
     grid-template-columns: repeat(3, min-content);
@@ -1163,8 +1216,8 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     min-width: 0;
     width: max-content;
     max-width: calc(100vw - 24px);
-    max-height: none;
-    overflow: visible;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
 }
 
 .layout-option {
