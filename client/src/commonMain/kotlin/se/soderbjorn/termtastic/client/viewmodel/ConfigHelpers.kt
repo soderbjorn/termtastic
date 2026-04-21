@@ -1,9 +1,9 @@
 /**
- * Utility functions for navigating and querying the [WindowConfig] pane tree.
+ * Utility functions for navigating and querying the [WindowConfig] pane list.
  *
  * These helpers are used by the per-pane ViewModels ([FileBrowserBackingViewModel],
  * [GitPaneBackingViewModel], [TerminalBackingViewModel]) to locate their own
- * [LeafNode] in the tree by pane ID or session ID, and to determine whether a
+ * [LeafNode] by pane ID or session ID, and to determine whether a
  * [WindowEnvelope] is addressed to a specific pane.
  *
  * @see se.soderbjorn.termtastic.WindowConfig
@@ -11,28 +11,20 @@
 package se.soderbjorn.termtastic.client.viewmodel
 
 import se.soderbjorn.termtastic.LeafNode
-import se.soderbjorn.termtastic.PaneNode
-import se.soderbjorn.termtastic.SplitNode
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.WindowEnvelope
 
 /**
- * Find a [LeafNode] by its pane ID across all tabs, including docked,
- * floating, and popped-out leaves.
+ * Find a [LeafNode] by its pane ID across all tabs, including visible and
+ * popped-out panes.
  *
  * @param config the current window layout.
  * @param paneId the unique pane identifier to search for.
  * @return the matching [LeafNode], or `null` if not found.
  */
 fun findLeafById(config: WindowConfig, paneId: String): LeafNode? {
-    fun walk(node: PaneNode?): LeafNode? = when (node) {
-        is LeafNode -> if (node.id == paneId) node else null
-        is SplitNode -> walk(node.first) ?: walk(node.second)
-        null -> null
-    }
     for (tab in config.tabs) {
-        walk(tab.root)?.let { return it }
-        tab.floating.firstOrNull { it.leaf.id == paneId }?.let { return it.leaf }
+        tab.panes.firstOrNull { it.leaf.id == paneId }?.let { return it.leaf }
         tab.poppedOut.firstOrNull { it.leaf.id == paneId }?.let { return it.leaf }
     }
     return null
@@ -46,14 +38,8 @@ fun findLeafById(config: WindowConfig, paneId: String): LeafNode? {
  * @return the matching [LeafNode], or `null` if not found.
  */
 fun findLeafBySessionId(config: WindowConfig, sessionId: String): LeafNode? {
-    fun walk(node: PaneNode?): LeafNode? = when (node) {
-        is LeafNode -> if (node.sessionId == sessionId) node else null
-        is SplitNode -> walk(node.first) ?: walk(node.second)
-        null -> null
-    }
     for (tab in config.tabs) {
-        walk(tab.root)?.let { return it }
-        tab.floating.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
+        tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
         tab.poppedOut.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
     }
     return null

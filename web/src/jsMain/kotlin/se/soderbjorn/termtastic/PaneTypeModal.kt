@@ -7,8 +7,8 @@
  * xterm.js previews of existing terminal sessions.
  *
  * The modal can be triggered from:
- * - The split flyout in [buildPaneHeader] (splits an existing pane)
- * - The "New pane" button in [buildEmptyTabPlaceholder] (adds to an empty tab)
+ * - The "New window" icon in [buildPaneHeader]
+ * - The "New pane" button in [buildEmptyTabPlaceholder]
  *
  * @see showPaneTypeModal
  * @see closePaneTypeModal
@@ -61,22 +61,23 @@ fun closePaneTypeModal() {
 }
 
 /**
- * Opens the pane type selection modal.
+ * Opens the pane type selection modal for a specific tab.
  *
  * Shows a card grid with options: Terminal, Terminal Link, File Browser, and Git.
  * Selecting "Terminal link" transitions to a picker showing live previews of
  * existing terminal sessions. Only one modal can be open at a time.
  *
- * @param anchorPaneId the pane to split (required when splitting, null for empty tab)
- * @param direction the direction to split in (required when splitting, null for empty tab)
- * @param emptyTabId the empty tab to add a pane to (null when splitting an existing pane)
+ * @param emptyTabId the tab that will receive the new pane (every pane creation
+ *   flow is tab-scoped now; the parameter name is kept for backwards-compat
+ *   with callers)
+ * @param anchorPaneId optional pane id used to inherit cwd context when a new
+ *   pane is created from within an existing pane's new-window button
  * @see closePaneTypeModal
  * @see buildPaneHeader
  */
 fun showPaneTypeModal(
+    emptyTabId: String,
     anchorPaneId: String? = null,
-    direction: SplitDirection? = null,
-    emptyTabId: String? = null,
 ) {
     if (document.getElementById("pane-type-modal") != null) return
 
@@ -128,23 +129,13 @@ fun showPaneTypeModal(
         for (tab in tabsArr) {
             val tabTitle = tab.title as String
             val leaves = mutableListOf<TermLeaf>()
-            fun walkNode(node: dynamic) {
-                if (node == null) return
-                if (node.kind == "leaf") {
-                    val kind = (node.content?.kind as? String) ?: "terminal"
-                    val sid = node.sessionId as String
-                    if (kind == "terminal" && sid.isNotEmpty()) {
-                        leaves.add(TermLeaf(node.id as String, node.title as String, sid))
-                    }
-                } else { walkNode(node.first); walkNode(node.second) }
-            }
-            walkNode(tab.root)
-            val floats = tab.floating as? Array<dynamic> ?: emptyArray()
-            for (fp in floats) {
-                val kind = (fp.leaf.content?.kind as? String) ?: "terminal"
-                val sid = fp.leaf.sessionId as String
+            val panes = tab.panes as? Array<dynamic> ?: emptyArray()
+            for (p in panes) {
+                val leaf = p.leaf
+                val kind = (leaf.content?.kind as? String) ?: "terminal"
+                val sid = leaf.sessionId as String
                 if (kind == "terminal" && sid.isNotEmpty()) {
-                    leaves.add(TermLeaf(fp.leaf.id as String, fp.leaf.title as String, sid))
+                    leaves.add(TermLeaf(leaf.id as String, leaf.title as String, sid))
                 }
             }
             if (leaves.isNotEmpty()) groups.add(TabGroup(tabTitle, leaves))
@@ -161,7 +152,7 @@ fun showPaneTypeModal(
         backBtn.textContent = "\u2190 Back"
         backBtn.addEventListener("click", { _: Event ->
             closePaneTypeModal()
-            showPaneTypeModal(anchorPaneId, direction, emptyTabId)
+            showPaneTypeModal(emptyTabId = emptyTabId, anchorPaneId = anchorPaneId)
         })
         body.appendChild(backBtn)
         titleEl.textContent = "Link to terminal"
@@ -236,11 +227,7 @@ fun showPaneTypeModal(
 
                 leafCard.addEventListener("click", { _: Event ->
                     closePaneTypeModal()
-                    if (emptyTabId != null) {
-                        launchCmd(WindowCommand.AddLinkToTab(tabId = emptyTabId, targetSessionId = leaf.sessionId))
-                    } else {
-                        launchCmd(WindowCommand.SplitLink(paneId = anchorPaneId!!, direction = direction!!, targetSessionId = leaf.sessionId))
-                    }
+                    launchCmd(WindowCommand.AddLinkToTab(tabId = emptyTabId, targetSessionId = leaf.sessionId))
                 })
                 grid.appendChild(leafCard)
             }
@@ -259,19 +246,16 @@ fun showPaneTypeModal(
 
         grid.appendChild(makeTypeCard("Terminal", MODAL_TERMINAL_SVG) {
             closePaneTypeModal()
-            if (emptyTabId != null) launchCmd(WindowCommand.AddPaneToTab(tabId = emptyTabId))
-            else launchCmd(WindowCommand.SplitTerminal(paneId = anchorPaneId!!, direction = direction!!))
+            launchCmd(WindowCommand.AddPaneToTab(tabId = emptyTabId))
         })
         grid.appendChild(makeTypeCard("Terminal link", MODAL_LINK_SVG) { showLinkPicker() })
         grid.appendChild(makeTypeCard("File Browser", MODAL_FILE_BROWSER_SVG) {
             closePaneTypeModal()
-            if (emptyTabId != null) launchCmd(WindowCommand.AddFileBrowserToTab(tabId = emptyTabId))
-            else launchCmd(WindowCommand.SplitFileBrowser(paneId = anchorPaneId!!, direction = direction!!))
+            launchCmd(WindowCommand.AddFileBrowserToTab(tabId = emptyTabId))
         })
         grid.appendChild(makeTypeCard("Git", MODAL_GIT_SVG) {
             closePaneTypeModal()
-            if (emptyTabId != null) launchCmd(WindowCommand.AddGitToTab(tabId = emptyTabId))
-            else launchCmd(WindowCommand.SplitGit(paneId = anchorPaneId!!, direction = direction!!))
+            launchCmd(WindowCommand.AddGitToTab(tabId = emptyTabId))
         })
         body.appendChild(grid)
     }

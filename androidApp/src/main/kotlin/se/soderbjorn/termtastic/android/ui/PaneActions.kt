@@ -158,8 +158,8 @@ fun TabNameDialog(
 /**
  * Collects all leaf panes from the given [WindowConfig] as [SplitTarget] items.
  *
- * Walks the pane tree of every tab (including floating and popped-out panes)
- * and returns a flat list suitable for [PanePickerDialog].
+ * Walks every tab's visible and popped-out panes and returns a flat list
+ * suitable for [PanePickerDialog].
  *
  * @param config the current window configuration, or null if not yet received.
  * @return a list of split targets; empty if [config] is null.
@@ -167,16 +167,8 @@ fun TabNameDialog(
 fun collectSplitTargets(config: WindowConfig?): List<SplitTarget> {
     if (config == null) return emptyList()
     val targets = mutableListOf<SplitTarget>()
-    fun walk(node: se.soderbjorn.termtastic.PaneNode?) {
-        when (node) {
-            is se.soderbjorn.termtastic.LeafNode -> targets.add(SplitTarget(node.id, node.title))
-            is se.soderbjorn.termtastic.SplitNode -> { walk(node.first); walk(node.second) }
-            null -> Unit
-        }
-    }
     for (tab in config.tabs) {
-        walk(tab.root)
-        tab.floating.forEach { targets.add(SplitTarget(it.leaf.id, it.leaf.title)) }
+        tab.panes.forEach { targets.add(SplitTarget(it.leaf.id, it.leaf.title)) }
         tab.poppedOut.forEach { targets.add(SplitTarget(it.leaf.id, it.leaf.title)) }
     }
     return targets

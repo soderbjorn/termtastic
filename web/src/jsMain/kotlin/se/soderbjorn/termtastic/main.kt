@@ -386,6 +386,9 @@ private fun start() {
         if (dy != 0.0 && dx == 0.0) { tabBarLocal.scrollLeft += dy; ev.preventDefault() }
     })
 
+    // Layout dropdown in the header toolbar.
+    initLayoutMenu()
+
     // Connect and go.
     connectWindow()
 

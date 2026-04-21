@@ -152,7 +152,7 @@ fun handlePaneContentMessage(type: String?, parsed: dynamic): Boolean {
  * envelope is received. It:
  * 1. Removes terminals for panes that no longer exist in the config
  * 2. Rebuilds the tab bar with drag-and-drop support
- * 3. Rebuilds all tab pane content trees via [buildNode]
+ * 3. Rebuilds all tab pane content via [buildPane]
  * 4. Constructs floating pane layers
  * 5. Restores maximized panes, scroll positions, and focus state
  * 6. Applies entrance animations for new tabs/panes
@@ -161,7 +161,7 @@ fun handlePaneContentMessage(type: String?, parsed: dynamic): Boolean {
  *
  * @param config the dynamic server configuration object
  * @see connectWindow
- * @see buildNode
+ * @see buildPane
  */
 /**
  * Returns true when [prev] and [next] differ only in per-tab `focusedPaneId`
@@ -178,8 +178,7 @@ private fun isOnlyFocusChange(prev: dynamic, next: dynamic): Boolean {
         val pt = prevTabs[i]; val nt = nextTabs[i]
         if ((pt.id as? String) != (nt.id as? String)) return false
         if ((pt.title as? String) != (nt.title as? String)) return false
-        if (stringify(pt.root) != stringify(nt.root)) return false
-        if (stringify(pt.floating) != stringify(nt.floating)) return false
+        if (stringify(pt.panes) != stringify(nt.panes)) return false
     }
     return true
 }
@@ -217,11 +216,21 @@ fun renderConfig(config: dynamic) {
     val previousTabIdsSnapshot = previousTabIds.toSet()
     val previousPaneIdsSnapshot = previousPaneIds.toSet()
 
+    // Snapshot each pane's current maximized class state so the rebuild
+    // below can animate from old → new via CSS transitions rather than
+    // appearing in its target state on first paint.
+    previousMaximizedStates.clear()
+    val existingPanes = wrap.querySelectorAll(".floating-pane[data-pane]")
+    for (i in 0 until existingPanes.length) {
+        val el = existingPanes.item(i) as HTMLElement
+        val pid = el.getAttribute("data-pane") ?: continue
+        previousMaximizedStates[pid] = el.classList.contains("maximized")
+    }
+
     val livePanes = HashSet<String>()
     for (tab in tabsArr) {
-        if (tab.root != null) collectPaneIds(tab.root, livePanes)
-        val floats = tab.floating as? Array<dynamic> ?: emptyArray()
-        for (fp in floats) livePanes.add(fp.leaf.id as String)
+        val panes = tab.panes as? Array<dynamic> ?: emptyArray()
+        for (p in panes) livePanes.add(p.leaf.id as String)
     }
     val toRemove = terminals.keys.filter { it !in livePanes }
     for (pid in toRemove) {
@@ -399,35 +408,29 @@ fun renderConfig(config: dynamic) {
         val tabPane = document.createElement("section") as HTMLElement
         tabPane.id = tabId
         tabPane.className = if (isActive) "tab-pane active" else "tab-pane"
-        val rootNode = tab.root
-        val floats = (tab.floating as? Array<dynamic>) ?: emptyArray()
-        if (rootNode != null) tabPane.appendChild(buildNode(rootNode))
-        else if (floats.isEmpty()) tabPane.appendChild(buildEmptyTabPlaceholder(tabId))
-        if (floats.isNotEmpty()) {
-            val layer = document.createElement("div") as HTMLElement
-            layer.className = "floating-layer"
-            val sorted = floats.toList().sortedBy { (it.z as Number).toDouble() }
-            for (fp in sorted) layer.appendChild(buildFloatingPane(fp, tabPane))
-            tabPane.appendChild(layer)
+        val panes = (tab.panes as? Array<dynamic>) ?: emptyArray()
+        if (panes.isEmpty()) {
+            tabPane.appendChild(buildEmptyTabPlaceholder(tabId))
+        } else {
+            val sorted = panes.toList().sortedBy { (it.z as Number).toDouble() }
+            for (p in sorted) tabPane.appendChild(buildPane(p, tabPane))
         }
         wrap.appendChild(tabPane)
     }
 
     val focusedPaneId = activeTabId?.let { savedFocusedPaneId(it) }
     if (focusedPaneId != null) {
-        val cell = wrap.querySelector("[data-pane=\"$focusedPaneId\"]") as? HTMLElement
+        // Both `.floating-pane` (the outer wrapper) and `.terminal-cell`
+        // (the inner chrome frame the CSS `.focused` rule targets) carry
+        // `data-pane`. An unscoped `[data-pane=...]` selector finds the
+        // wrapper first; adding `focused` there has no visual effect.
+        val cell = wrap.querySelector(".terminal-cell[data-pane=\"$focusedPaneId\"]") as? HTMLElement
         cell?.classList?.add("focused")
     }
 
     applyAll()
     renderSidebar(config)
     updateStateIndicators(appVm.stateFlow.value.sessionStates)
-
-    for ((tabId, paneId) in maximizedPaneIds.toMap()) {
-        val cell = wrap.querySelector("[data-pane=\"$paneId\"]") as? HTMLElement
-        if (cell != null) { maximizedPaneIds.remove(tabId); maximizePane(paneId, animate = false) }
-        else maximizedPaneIds.remove(tabId)
-    }
 
     if (savedGitScrolls.isNotEmpty() || savedFileBrowserScrolls.isNotEmpty()) {
         window.requestAnimationFrame {
@@ -443,16 +446,10 @@ fun renderConfig(config: dynamic) {
         val pid = cell.getAttribute("data-pane") ?: continue
         freshPaneIds.add(pid)
         if (firstRender || pid in previousPaneIdsSnapshot) continue
-        val splitChild = cell.parentElement as? HTMLElement
-        if (splitChild?.classList?.contains("split-child") == true) {
-            splitChild.classList.add("entering")
-            splitChild.addEventListener("animationend", { _ -> splitChild.classList.remove("entering") })
-        } else {
-            val floating = cell.parentElement as? HTMLElement
-            if (floating?.classList?.contains("floating-pane") == true) {
-                floating.classList.add("entering")
-                floating.addEventListener("animationend", { _ -> floating.classList.remove("entering") })
-            }
+        val container = cell.parentElement as? HTMLElement
+        if (container?.classList?.contains("floating-pane") == true) {
+            container.classList.add("entering")
+            container.addEventListener("animationend", { _ -> container.classList.remove("entering") })
         }
     }
 

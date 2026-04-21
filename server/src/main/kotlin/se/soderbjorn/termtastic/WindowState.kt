@@ -1,11 +1,11 @@
 /**
- * Window, tab, and pane tree state management for Termtastic.
+ * Window, tab, and pane state management for Termtastic.
  *
  * This file contains the [WindowState] singleton, which is the authoritative
- * source of truth for the entire window layout: tabs, split panes, floating
- * panes, popped-out panes, file-browser state, and git-pane state. Every
- * mutation flows through this object so the resulting [WindowConfig] StateFlow
- * is the single stream clients subscribe to.
+ * source of truth for the entire window layout: tabs, the free-form list of
+ * panes in each tab, their popped-out siblings, and the per-pane file-browser
+ * and git state. Every mutation flows through this object so the resulting
+ * [WindowConfig] StateFlow is the single stream clients subscribe to.
  *
  * Also contains helper functions:
  *  - [prettifyPath] -- collapses `$HOME` to `~` for display titles.
@@ -20,7 +20,8 @@
  *
  * @see WindowConfig
  * @see TabConfig
- * @see PaneNode
+ * @see Pane
+ * @see PaneGeometry the snap/clamp utility every geometry mutation routes through
  * @see TerminalSessions
  * @see SettingsRepository
  */
@@ -32,12 +33,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.slf4j.LoggerFactory
 import se.soderbjorn.termtastic.persistence.SettingsRepository
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.random.Random
 
-// The @Serializable data classes (WindowConfig, TabConfig, PaneNode, LeafNode,
-// LeafContent + subclasses, SplitNode, SplitOrientation, SplitDirection,
-// FloatingPane, PoppedOutPane) now live in the :clientServer KMP module so
-// the web and android clients can deserialize the same wire types the server
-// produces. See clientServer/src/commonMain/kotlin/se/soderbjorn/termtastic/.
+// The @Serializable data classes (WindowConfig, TabConfig, Pane, LeafNode,
+// LeafContent + subclasses, PoppedOutPane) live in the :clientServer KMP
+// module so the web and android clients can deserialize the same wire types
+// the server produces. See clientServer/src/commonMain/kotlin/se/soderbjorn/termtastic/.
 //
 // The mutation logic (the WindowState object below) stays server-side since
 // it touches TerminalSessions, the SQLite persistence layer, and live PTYs.
@@ -79,14 +80,6 @@ internal fun WindowConfig.withBlankSessionIds(): WindowConfig {
         is TerminalContent -> if (c.sessionId.isEmpty()) c else c.copy(sessionId = "")
         is FileBrowserContent, is GitContent, null -> c
     }
-    fun strip(node: PaneNode): PaneNode = when (node) {
-        is LeafNode -> {
-            val newContent = blankContent(node.content)
-            if (node.sessionId.isEmpty() && newContent === node.content) node
-            else node.copy(sessionId = "", content = newContent)
-        }
-        is SplitNode -> node.copy(first = strip(node.first), second = strip(node.second))
-    }
     fun stripLeaf(leaf: LeafNode): LeafNode {
         val newContent = blankContent(leaf.content)
         return if (leaf.sessionId.isEmpty() && newContent === leaf.content) leaf
@@ -95,8 +88,7 @@ internal fun WindowConfig.withBlankSessionIds(): WindowConfig {
     return copy(
         tabs = tabs.map { tab ->
             tab.copy(
-                root = tab.root?.let(::strip),
-                floating = tab.floating.map { fp -> fp.copy(leaf = stripLeaf(fp.leaf)) },
+                panes = tab.panes.map { p -> p.copy(leaf = stripLeaf(p.leaf)) },
                 poppedOut = tab.poppedOut.map { po -> po.copy(leaf = stripLeaf(po.leaf)) },
             )
         }
@@ -137,8 +129,8 @@ object WindowState {
      *
      * On a successful restore, persisted leaf [LeafNode.sessionId]s are
      * discarded (they refer to PTYs from a previous process) and replaced with
-     * freshly minted [TerminalSessions]. Tab order, titles, split orientations
-     * and ratios are preserved verbatim.
+     * freshly minted [TerminalSessions]. Tab order, titles, and pane geometry
+     * are preserved verbatim.
      */
     @Synchronized
     fun initialize(repo: SettingsRepository) {
@@ -164,8 +156,7 @@ object WindowState {
         runCatching {
             val live = HashSet<String>()
             for (tab in cfg.tabs) {
-                tab.root?.let { collectLeafIds(it, live) }
-                tab.floating.forEach { live.add(it.leaf.id) }
+                tab.panes.forEach { live.add(it.leaf.id) }
                 tab.poppedOut.forEach { live.add(it.leaf.id) }
             }
             for (stale in repo.allScrollbackLeafIds() - live) {
@@ -178,7 +169,9 @@ object WindowState {
      * Walk a freshly-loaded config and:
      *  1. mint a new [TerminalSessions] for every leaf, replacing the stale id;
      *  2. retarget the node/tab id counters past the highest persisted ids so
-     *     subsequent splits/tabs don't collide.
+     *     subsequent panes/tabs don't collide;
+     *  3. dock any popped-out panes back into the tab's [TabConfig.panes] list
+     *     (the Electron windows that displayed them don't survive a restart).
      */
     private fun rehydrate(loaded: WindowConfig, repo: SettingsRepository): WindowConfig {
         var maxNodeId = 0L
@@ -204,47 +197,38 @@ object WindowState {
             }
         }
 
-        fun rebuild(node: PaneNode): PaneNode = when (node) {
-            is LeafNode -> rebuildLeaf(node)
-            is SplitNode -> {
-                trackNodeId(node.id)
-                node.copy(
-                    first = rebuild(node.first),
-                    second = rebuild(node.second)
-                )
-            }
-        }
-
         val rebuiltTabs = loaded.tabs.map { tab ->
             tab.id.removePrefix("t").toLongOrNull()?.let { if (it > maxTabId) maxTabId = it }
-            // Popped-out panes dock back into the tree on rehydrate: the
-            // Electron windows that displayed them don't survive a server
-            // restart, so leaving them in `poppedOut` would orphan the PTY.
-            // Each popped-out leaf becomes either the new root (if empty) or
-            // the right child of a horizontal split wrapping the current root
-            // — same rule as toggleFloating's dock path and movePaneToTab.
-            var mergedRoot: PaneNode? = tab.root?.let(::rebuild)
+
+            val rebuiltPanes = tab.panes.map { p ->
+                val box = PaneGeometry.normalize(p.x, p.y, p.width, p.height)
+                p.copy(
+                    leaf = rebuildLeaf(p.leaf),
+                    x = box.x, y = box.y, width = box.width, height = box.height,
+                )
+            }
+            var running = rebuiltPanes.toMutableList()
+            var nextZ = (running.maxOfOrNull { it.z } ?: 0L) + 1L
+
+            // Popped-out panes dock back: Electron windows don't survive a
+            // server restart, so leaving them in `poppedOut` would orphan the
+            // PTY. They land on top of the existing panes at a random snapped
+            // origin so the user can see and drag them.
             for (po in tab.poppedOut) {
                 val leaf = rebuildLeaf(po.leaf)
-                mergedRoot = when (val r = mergedRoot) {
-                    null -> leaf
-                    else -> {
-                        maxNodeId += 1
-                        SplitNode(
-                            id = "n$maxNodeId",
-                            orientation = SplitOrientation.Horizontal,
-                            ratio = 0.5,
-                            first = r,
-                            second = leaf,
-                        )
-                    }
-                }
+                val (ox, oy) = randomSnappedOrigin()
+                running.add(
+                    Pane(
+                        leaf = leaf,
+                        x = ox, y = oy,
+                        width = PaneGeometry.DEFAULT_SIZE,
+                        height = PaneGeometry.DEFAULT_SIZE,
+                        z = nextZ,
+                    )
+                )
+                nextZ += 1
             }
-            tab.copy(
-                root = mergedRoot,
-                floating = tab.floating.map { fp -> fp.copy(leaf = rebuildLeaf(fp.leaf)) },
-                poppedOut = emptyList(),
-            )
+            tab.copy(panes = running.toList(), poppedOut = emptyList())
         }
 
         // Counters use incrementAndGet, so set them to the current max — the
@@ -253,47 +237,72 @@ object WindowState {
         tabIdCounter.set(maxTabId)
 
         // Validate the persisted activeTabId / focusedPaneId references —
-        // anything that no longer exists in the rebuilt tree gets cleared so
-        // the client falls back cleanly to the first tab / first pane.
+        // anything that no longer exists gets cleared so the client falls back
+        // cleanly to the first tab / first pane.
         val tabIdSet = rebuiltTabs.map { it.id }.toSet()
         val validatedActive = loaded.activeTabId?.takeIf { it in tabIdSet }
         val sanitizedTabs = rebuiltTabs.map { tab ->
-            val livePaneIds = HashSet<String>()
-            tab.root?.let { collectLeafIds(it, livePaneIds) }
-            tab.floating.forEach { livePaneIds.add(it.leaf.id) }
-            tab.poppedOut.forEach { livePaneIds.add(it.leaf.id) }
+            val livePaneIds = tab.panes.mapTo(HashSet()) { it.leaf.id }
             val keepFocus = tab.focusedPaneId?.takeIf { it in livePaneIds }
             if (keepFocus == tab.focusedPaneId) tab else tab.copy(focusedPaneId = keepFocus)
         }
         return WindowConfig(tabs = sanitizedTabs, activeTabId = validatedActive)
     }
 
-    private fun collectLeafIds(node: PaneNode, out: HashSet<String>) {
-        when (node) {
-            is LeafNode -> out.add(node.id)
-            is SplitNode -> {
-                collectLeafIds(node.first, out)
-                collectLeafIds(node.second, out)
-            }
-        }
-    }
-
 
     private fun buildDefault(): WindowConfig {
-        // A fresh window starts with a single tab containing a single pane.
-        // Users can split panes and add/remove tabs from the UI.
+        // A fresh window starts with a single tab containing a single pane at
+        // a snap-aligned medium position/size. Users can create more panes from
+        // the new-window icon in the header.
         val s1 = TerminalSessions.create()
+        val leaf = LeafNode(
+            id = newNodeId(),
+            sessionId = s1,
+            title = "Session ${s1.removePrefix("s")}",
+            content = TerminalContent(s1),
+        )
+        val (ox, oy) = randomSnappedOrigin()
         val tab1 = TabConfig(
             id = newTabId(),
             title = "Tab 1",
-            root = LeafNode(
-                id = newNodeId(),
-                sessionId = s1,
-                title = "Session ${s1.removePrefix("s")}",
-                content = TerminalContent(s1),
-            )
+            panes = listOf(
+                Pane(
+                    leaf = leaf,
+                    x = ox, y = oy,
+                    width = PaneGeometry.DEFAULT_SIZE,
+                    height = PaneGeometry.DEFAULT_SIZE,
+                    z = 1L,
+                )
+            ),
         )
         return WindowConfig(listOf(tab1))
+    }
+
+    /**
+     * Pick a random `(x, y)` origin on the 10% grid for a new pane of [size]
+     * so the pane stays fully inside the tab area. Used by every "add pane"
+     * entry point (new-window icon, empty-tab placeholder, cross-tab move).
+     */
+    private fun randomSnappedOrigin(size: Double = PaneGeometry.DEFAULT_SIZE): Pair<Double, Double> {
+        val maxSteps = ((1.0 - size) / PaneGeometry.SNAP).toInt().coerceAtLeast(0)
+        val sx = Random.nextInt(0, maxSteps + 1) * PaneGeometry.SNAP
+        val sy = Random.nextInt(0, maxSteps + 1) * PaneGeometry.SNAP
+        return sx to sy
+    }
+
+    /** Next available z in [tab]'s stacking order. */
+    private fun nextZ(tab: TabConfig): Long =
+        (tab.panes.maxOfOrNull { it.z } ?: 0L) + 1L
+
+    /**
+     * Return [tab] with every pane's `maximized` flag cleared. Adding a new
+     * pane to a tab that already has one maximized would otherwise leave
+     * the new pane hidden behind the full-screen sibling; demoting first
+     * makes the new pane immediately visible.
+     */
+    private fun demoteMaximized(tab: TabConfig): TabConfig {
+        if (tab.panes.none { it.maximized }) return tab
+        return tab.copy(panes = tab.panes.map { if (it.maximized) it.copy(maximized = false) else it })
     }
 
     /**
@@ -304,15 +313,25 @@ object WindowState {
         val cfg = _config.value
         val sessionId = TerminalSessions.create()
         val nextNumber = cfg.tabs.size + 1
+        val leaf = LeafNode(
+            id = newNodeId(),
+            sessionId = sessionId,
+            title = "Session ${sessionId.removePrefix("s")}",
+            content = TerminalContent(sessionId),
+        )
+        val (ox, oy) = randomSnappedOrigin()
         val newTab = TabConfig(
             id = newTabId(),
             title = "Tab $nextNumber",
-            root = LeafNode(
-                id = newNodeId(),
-                sessionId = sessionId,
-                title = "Session ${sessionId.removePrefix("s")}",
-                content = TerminalContent(sessionId),
-            )
+            panes = listOf(
+                Pane(
+                    leaf = leaf,
+                    x = ox, y = oy,
+                    width = PaneGeometry.DEFAULT_SIZE,
+                    height = PaneGeometry.DEFAULT_SIZE,
+                    z = 1L,
+                )
+            ),
         )
         _config.value = cfg.copy(tabs = cfg.tabs + newTab)
     }
@@ -371,8 +390,7 @@ object WindowState {
         // Verify the pane still belongs to this tab — otherwise we'd persist
         // a stale reference that rehydrate() would have to clean up later.
         val livePanes = HashSet<String>()
-        tab.root?.let { collectLeafIds(it, livePanes) }
-        tab.floating.forEach { livePanes.add(it.leaf.id) }
+        tab.panes.forEach { livePanes.add(it.leaf.id) }
         tab.poppedOut.forEach { livePanes.add(it.leaf.id) }
         if (paneId !in livePanes) return@synchronized
         if (tab.focusedPaneId == paneId) return@synchronized
@@ -428,176 +446,47 @@ object WindowState {
     }
 
     /**
-     * Split [paneId] and create a new terminal pane in the given [direction].
-     * The new pane inherits the cwd of the anchor pane unless [initialCwd] is
-     * provided (used by the worktree flow to root the new pane directly in
-     * the freshly-created worktree path). Gets a fresh PTY regardless.
-     * Returns the newly created [LeafNode], or null if [paneId] wasn't found.
-     *
-     * @param paneId the anchor pane to split
-     * @param direction side of the anchor the new pane should appear on
-     * @param initialCwd override for the new shell's starting cwd; null means
-     *                   inherit from the anchor pane
-     * @return the newly created leaf, or null if [paneId] is unknown
+     * Find a leaf by id across visible and popped-out panes. Returns null if
+     * no leaf with [paneId] exists. Used by file-browser / git command
+     * handlers that need a leaf's cwd or current content state.
      */
-    fun splitTerminal(paneId: String, direction: SplitDirection, initialCwd: String? = null): LeafNode? = synchronized(this) {
+    fun findLeaf(paneId: String): LeafNode? = synchronized(this) {
         val cfg = _config.value
-        val orientation = directionToOrientation(direction)
-        val newLeafFirst = direction == SplitDirection.Left || direction == SplitDirection.Up
-        var created: LeafNode? = null
-        val newCfg = cfg.copy(
-            tabs = cfg.tabs.map { tab ->
-                val root = tab.root ?: return@map tab
-                tab.copy(root = transformLeaf(root, paneId) { leaf ->
-                    val startCwd = initialCwd ?: leaf.cwd
-                    val newSession = TerminalSessions.create(initialCwd = startCwd)
-                    val fallbackTitle = "Session ${newSession.removePrefix("s")}"
-                    val newLeaf = LeafNode(
-                        id = newNodeId(),
-                        sessionId = newSession,
-                        cwd = startCwd,
-                        title = computeLeafTitle(null, startCwd, fallbackTitle),
-                        content = TerminalContent(newSession),
-                    )
-                    created = newLeaf
-                    SplitNode(
-                        id = newNodeId(),
-                        orientation = orientation,
-                        ratio = 0.5,
-                        first = if (newLeafFirst) newLeaf else leaf,
-                        second = if (newLeafFirst) leaf else newLeaf
-                    )
-                })
-            }
-        )
-        if (created != null) _config.value = newCfg
-        created
+        for (tab in cfg.tabs) {
+            tab.panes.firstOrNull { it.leaf.id == paneId }?.let { return@synchronized it.leaf }
+            tab.poppedOut.firstOrNull { it.leaf.id == paneId }?.let { return@synchronized it.leaf }
+        }
+        null
     }
 
     /**
-     * Split [paneId] and create a new file-browser pane in the given [direction].
-     * Returns the newly created [LeafNode], or null if [paneId] wasn't found.
+     * Return the id of the tab that contains [paneId], or null if the pane
+     * isn't found. Used by flows that want to add a sibling pane to the same
+     * tab as an anchor (worktree creation, for instance).
      */
-    fun splitFileBrowser(paneId: String, direction: SplitDirection): LeafNode? = synchronized(this) {
+    fun tabIdOfPane(paneId: String): String? = synchronized(this) {
         val cfg = _config.value
-        val orientation = directionToOrientation(direction)
-        val newLeafFirst = direction == SplitDirection.Left || direction == SplitDirection.Up
-        var created: LeafNode? = null
-        val newCfg = cfg.copy(
-            tabs = cfg.tabs.map { tab ->
-                val root = tab.root ?: return@map tab
-                tab.copy(root = transformLeaf(root, paneId) { leaf ->
-                    val inheritedCwd = leaf.cwd
-                    val newLeaf = LeafNode(
-                        id = newNodeId(),
-                        sessionId = "",
-                        cwd = inheritedCwd,
-                        title = computeLeafTitle(null, inheritedCwd, "Files"),
-                        content = FileBrowserContent(),
-                    )
-                    created = newLeaf
-                    SplitNode(
-                        id = newNodeId(),
-                        orientation = orientation,
-                        ratio = 0.5,
-                        first = if (newLeafFirst) newLeaf else leaf,
-                        second = if (newLeafFirst) leaf else newLeaf
-                    )
-                })
-            }
-        )
-        if (created != null) _config.value = newCfg
-        created
-    }
-
-    /**
-     * Split [paneId] and create a linked terminal pane pointing at
-     * [targetSessionId] in the given [direction]. The linked pane shares the
-     * same PTY session — no new process is spawned. Returns the newly created
-     * [LeafNode], or null if [paneId] or [targetSessionId] wasn't found.
-     */
-    fun splitLink(paneId: String, direction: SplitDirection, targetSessionId: String): LeafNode? = synchronized(this) {
-        if (TerminalSessions.get(targetSessionId) == null) return@synchronized null
-        val cfg = _config.value
-        val orientation = directionToOrientation(direction)
-        val newLeafFirst = direction == SplitDirection.Left || direction == SplitDirection.Up
-
-        // Find the source pane's title for the link label.
-        val sourceTitle = findLeafBySession(cfg, targetSessionId)?.title ?: "Terminal"
-
-        var created: LeafNode? = null
-        val newCfg = cfg.copy(
-            tabs = cfg.tabs.map { tab ->
-                val root = tab.root ?: return@map tab
-                tab.copy(root = transformLeaf(root, paneId) { leaf ->
-                    val newLeaf = LeafNode(
-                        id = newNodeId(),
-                        sessionId = targetSessionId,
-                        cwd = leaf.cwd,
-                        title = sourceTitle,
-                        content = TerminalContent(targetSessionId),
-                        isLink = true,
-                    )
-                    created = newLeaf
-                    SplitNode(
-                        id = newNodeId(),
-                        orientation = orientation,
-                        ratio = 0.5,
-                        first = if (newLeafFirst) newLeaf else leaf,
-                        second = if (newLeafFirst) leaf else newLeaf
-                    )
-                })
-            }
-        )
-        if (created != null) _config.value = newCfg
-        created
-    }
-
-    private fun directionToOrientation(direction: SplitDirection) = when (direction) {
-        SplitDirection.Left, SplitDirection.Right -> SplitOrientation.Horizontal
-        SplitDirection.Up, SplitDirection.Down -> SplitOrientation.Vertical
+        for (tab in cfg.tabs) {
+            if (tab.panes.any { it.leaf.id == paneId } ||
+                tab.poppedOut.any { it.leaf.id == paneId }
+            ) return@synchronized tab.id
+        }
+        null
     }
 
     /** Find the first leaf that references [sessionId], across all tabs. */
     private fun findLeafBySession(cfg: WindowConfig, sessionId: String): LeafNode? {
-        fun walk(node: PaneNode): LeafNode? = when (node) {
-            is LeafNode -> if (node.sessionId == sessionId) node else null
-            is SplitNode -> walk(node.first) ?: walk(node.second)
-        }
         for (tab in cfg.tabs) {
-            tab.root?.let { walk(it) }?.let { return it }
-            tab.floating.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
+            tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
             tab.poppedOut.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
         }
         return null
     }
 
     /**
-     * Find a leaf by id across docked, floating and popped-out positions.
-     * Returns null if no leaf with [paneId] exists. Used by file-browser
-     * command handlers that need a leaf's cwd or current [FileBrowserContent].
-     */
-    fun findLeaf(paneId: String): LeafNode? = synchronized(this) {
-        val cfg = _config.value
-        for (tab in cfg.tabs) {
-            tab.root?.let { root ->
-                findLeafIn(root, paneId)?.let { return@synchronized it }
-            }
-            tab.floating.firstOrNull { it.leaf.id == paneId }?.let { return@synchronized it.leaf }
-            tab.poppedOut.firstOrNull { it.leaf.id == paneId }?.let { return@synchronized it.leaf }
-        }
-        null
-    }
-
-    private fun findLeafIn(node: PaneNode, paneId: String): LeafNode? = when (node) {
-        is LeafNode -> if (node.id == paneId) node else null
-        is SplitNode -> findLeafIn(node.first, paneId) ?: findLeafIn(node.second, paneId)
-    }
-
-    /**
      * Apply [transform] to the [FileBrowserContent] of pane [paneId], if it
      * exists and is currently a file-browser pane. Used by the small fleet of
-     * setFileBrowser* commands so each handler doesn't have to walk the tree
+     * setFileBrowser* commands so each handler doesn't have to walk the list
      * itself.
      */
     private fun updateFileBrowserContent(
@@ -618,8 +507,7 @@ object WindowState {
             val newCfg = cfg.copy(
                 tabs = cfg.tabs.map { tab ->
                     tab.copy(
-                        root = tab.root?.let { transformAllLeaves(it, ::mutate) },
-                        floating = tab.floating.map { fp -> fp.copy(leaf = mutate(fp.leaf)) },
+                        panes = tab.panes.map { p -> p.copy(leaf = mutate(p.leaf)) },
                         poppedOut = tab.poppedOut.map { po -> po.copy(leaf = mutate(po.leaf)) },
                     )
                 }
@@ -707,8 +595,7 @@ object WindowState {
             val newCfg = cfg.copy(
                 tabs = cfg.tabs.map { tab ->
                     tab.copy(
-                        root = tab.root?.let { transformAllLeaves(it, ::mutate) },
-                        floating = tab.floating.map { fp -> fp.copy(leaf = mutate(fp.leaf)) },
+                        panes = tab.panes.map { p -> p.copy(leaf = mutate(p.leaf)) },
                         poppedOut = tab.poppedOut.map { po -> po.copy(leaf = mutate(po.leaf)) },
                     )
                 }
@@ -724,61 +611,6 @@ object WindowState {
     }
 
     // ---- Git pane mutations ------------------------------------------------
-
-    /**
-     * Split [paneId] and create a new git pane in the given [direction].
-     * Returns the newly created [LeafNode], or null if [paneId] wasn't found.
-     */
-    fun splitGit(paneId: String, direction: SplitDirection): LeafNode? = synchronized(this) {
-        val cfg = _config.value
-        val orientation = directionToOrientation(direction)
-        val newLeafFirst = direction == SplitDirection.Left || direction == SplitDirection.Up
-        var created: LeafNode? = null
-        val newCfg = cfg.copy(
-            tabs = cfg.tabs.map { tab ->
-                val root = tab.root ?: return@map tab
-                tab.copy(root = transformLeaf(root, paneId) { leaf ->
-                    val inheritedCwd = leaf.cwd
-                    val newLeaf = LeafNode(
-                        id = newNodeId(),
-                        sessionId = "",
-                        cwd = inheritedCwd,
-                        title = computeLeafTitle(null, inheritedCwd, "Git"),
-                        content = GitContent(),
-                    )
-                    created = newLeaf
-                    SplitNode(
-                        id = newNodeId(),
-                        orientation = orientation,
-                        ratio = 0.5,
-                        first = if (newLeafFirst) newLeaf else leaf,
-                        second = if (newLeafFirst) leaf else newLeaf
-                    )
-                })
-            }
-        )
-        if (created != null) _config.value = newCfg
-        created
-    }
-
-    /** Add a git pane as the sole pane in an empty tab. */
-    fun addGitToEmptyTab(tabId: String): LeafNode? = synchronized(this) {
-        val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
-        if (tab.root != null || tab.floating.isNotEmpty()) return@synchronized null
-        val leaf = LeafNode(
-            id = newNodeId(),
-            sessionId = "",
-            title = "Git",
-            content = GitContent(),
-        )
-        val newTabs = cfg.tabs.toMutableList()
-        newTabs[idx] = tab.copy(root = leaf)
-        _config.value = cfg.copy(tabs = newTabs)
-        leaf
-    }
 
     private fun updateGitContent(
         paneId: String,
@@ -798,8 +630,7 @@ object WindowState {
             val newCfg = cfg.copy(
                 tabs = cfg.tabs.map { tab ->
                     tab.copy(
-                        root = tab.root?.let { transformAllLeaves(it, ::mutate) },
-                        floating = tab.floating.map { fp -> fp.copy(leaf = mutate(fp.leaf)) },
+                        panes = tab.panes.map { p -> p.copy(leaf = mutate(p.leaf)) },
                         poppedOut = tab.poppedOut.map { po -> po.copy(leaf = mutate(po.leaf)) },
                     )
                 }
@@ -840,32 +671,27 @@ object WindowState {
         updateGitContent(paneId) { it.copy(autoRefresh = enabled) }
 
     /**
-     * Remove the leaf pane with [paneId] from the tree. Destroys any PTY
-     * session that is no longer referenced by any remaining pane. Tabs are
-     * not removed even if they become empty -- the empty-state placeholder
-     * lets the user create a new pane in-place.
+     * Remove the pane [paneId] from its tab. Destroys any PTY session that is
+     * no longer referenced by any remaining pane. Tabs are not removed even
+     * if they become empty — the empty-state placeholder lets the user create
+     * a new pane in-place.
      *
-     * @param paneId the id of the leaf pane to close
+     * @param paneId the id of the pane to close
      */
     fun closePane(paneId: String) = synchronized(this) {
         val cfg = _config.value
         val before = collectSessionIds(cfg)
-        // Tabs are *not* dropped here even if they end up with no panes. The
-        // empty-state placeholder lets the user create a new pane in-place;
-        // tab removal is now exclusively the job of [closeTab].
         val newTabs = cfg.tabs.map { tab ->
-            val newRoot = tab.root?.let { removeLeaf(it, paneId) }
-            val newFloating = tab.floating.filterNot { it.leaf.id == paneId }
+            val newPanes = tab.panes.filterNot { it.leaf.id == paneId }
             val newPoppedOut = tab.poppedOut.filterNot { it.leaf.id == paneId }
             // Drop the tab's saved focus if it pointed at the pane we're
             // killing — otherwise the next render would chase a ghost.
             val newFocus = if (tab.focusedPaneId == paneId) null else tab.focusedPaneId
-            if (newRoot === tab.root &&
-                newFloating.size == tab.floating.size &&
+            if (newPanes.size == tab.panes.size &&
                 newPoppedOut.size == tab.poppedOut.size &&
                 newFocus == tab.focusedPaneId
             ) tab
-            else tab.copy(root = newRoot, floating = newFloating, poppedOut = newPoppedOut, focusedPaneId = newFocus)
+            else tab.copy(panes = newPanes, poppedOut = newPoppedOut, focusedPaneId = newFocus)
         }
         val newCfg = cfg.copy(tabs = newTabs)
         if (newCfg == cfg) return@synchronized
@@ -884,30 +710,14 @@ object WindowState {
         val cfg = _config.value
         val before = collectSessionIds(cfg)
 
-        fun removeBySession(node: PaneNode): PaneNode? = when (node) {
-            is LeafNode -> if (node.sessionId == sessionId) null else node
-            is SplitNode -> {
-                val newFirst = removeBySession(node.first)
-                val newSecond = removeBySession(node.second)
-                when {
-                    newFirst == null && newSecond == null -> null
-                    newFirst == null -> newSecond
-                    newSecond == null -> newFirst
-                    else -> node.copy(first = newFirst, second = newSecond)
-                }
-            }
-        }
-
         val newTabs = cfg.tabs.map { tab ->
-            val newRoot = tab.root?.let { removeBySession(it) }
-            val newFloating = tab.floating.filterNot { it.leaf.sessionId == sessionId }
+            val newPanes = tab.panes.filterNot { it.leaf.sessionId == sessionId }
             val newPoppedOut = tab.poppedOut.filterNot { it.leaf.sessionId == sessionId }
             val liveIds = HashSet<String>()
-            newRoot?.let { collectLeafIds(it, liveIds) }
-            newFloating.forEach { liveIds.add(it.leaf.id) }
+            newPanes.forEach { liveIds.add(it.leaf.id) }
             newPoppedOut.forEach { liveIds.add(it.leaf.id) }
             val newFocus = tab.focusedPaneId?.takeIf { it in liveIds }
-            tab.copy(root = newRoot, floating = newFloating, poppedOut = newPoppedOut, focusedPaneId = newFocus)
+            tab.copy(panes = newPanes, poppedOut = newPoppedOut, focusedPaneId = newFocus)
         }
         val newCfg = cfg.copy(tabs = newTabs)
         if (newCfg == cfg) return@synchronized
@@ -920,7 +730,7 @@ object WindowState {
      * Set or clear the custom display name for [paneId]. An empty [title]
      * clears the custom name and lets the cwd-based title take over.
      *
-     * @param paneId the id of the leaf pane to rename
+     * @param paneId the id of the pane to rename
      * @param title the new custom name, or empty to clear
      */
     fun renamePane(paneId: String, title: String) = synchronized(this) {
@@ -941,21 +751,12 @@ object WindowState {
         val newCfg = cfg.copy(
             tabs = cfg.tabs.map { tab ->
                 tab.copy(
-                    root = tab.root?.let { transformLeaf(it, paneId, ::renameLeaf) },
-                    floating = tab.floating.map { fp -> fp.copy(leaf = renameLeaf(fp.leaf)) },
+                    panes = tab.panes.map { p -> p.copy(leaf = renameLeaf(p.leaf)) },
                     poppedOut = tab.poppedOut.map { po -> po.copy(leaf = renameLeaf(po.leaf)) },
                 )
             }
         )
         if (changed) _config.value = newCfg
-    }
-
-    private fun transformAllLeaves(node: PaneNode, f: (LeafNode) -> LeafNode): PaneNode = when (node) {
-        is LeafNode -> f(node)
-        is SplitNode -> node.copy(
-            first = transformAllLeaves(node.first, f),
-            second = transformAllLeaves(node.second, f)
-        )
     }
 
     /**
@@ -976,8 +777,7 @@ object WindowState {
         val newCfg = cfg.copy(
             tabs = cfg.tabs.map { tab ->
                 tab.copy(
-                    root = tab.root?.let { transformAllLeaves(it, ::maybeUpdate) },
-                    floating = tab.floating.map { fp -> fp.copy(leaf = maybeUpdate(fp.leaf)) },
+                    panes = tab.panes.map { p -> p.copy(leaf = maybeUpdate(p.leaf)) },
                     poppedOut = tab.poppedOut.map { po -> po.copy(leaf = maybeUpdate(po.leaf)) },
                 )
             }
@@ -986,111 +786,371 @@ object WindowState {
     }
 
     /**
-     * Adjust the size of [paneId] by [delta] (additive on the parent split's
-     * ratio, in (-1, 1)). If the leaf is the `first` child of its parent,
-     * the parent's ratio moves by `+delta`; if it's the `second` child, by
-     * `-delta`. Pane has no parent (i.e. it is the tab root) → no-op.
+     * Update the position and size of a pane after the user drags or resizes
+     * it. Inputs are snapped and clamped via [PaneGeometry.normalize] so the
+     * pane always lands on the 10% grid and stays fully inside the tab area.
+     * No-op if [paneId] isn't found.
      */
-    fun resizePane(paneId: String, delta: Double) = synchronized(this) {
+    fun setPaneGeometry(
+        paneId: String,
+        x: Double,
+        y: Double,
+        width: Double,
+        height: Double,
+    ) = synchronized(this) {
+        val box = PaneGeometry.normalize(x, y, width, height)
         val cfg = _config.value
-        for (tab in cfg.tabs) {
-            val root = tab.root ?: continue
-            val parent = findParentSplit(root, paneId) ?: continue
-            val (split, isFirst) = parent
-            val newRatio = if (isFirst) split.ratio + delta else split.ratio - delta
-            setSplitRatio(split.id, newRatio)
-            return@synchronized
+        var changed = false
+        val newTabs = cfg.tabs.map { tab ->
+            val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+            if (idx < 0) return@map tab
+            val current = tab.panes[idx]
+            // Moving or resizing a pane also bumps it to the top of the
+            // stacking order — conceptually the user just interacted with
+            // it, so it should come to the front. Folding this into the
+            // same config push avoids a separate RaisePane round-trip that
+            // would otherwise rebuild the DOM mid-drag and detach the
+            // element the browser is still tracking pointer events on.
+            val maxZ = tab.panes.maxOf { it.z }
+            val alreadyTop = current.z == maxZ && tab.panes.count { it.z == maxZ } == 1
+            val newZ = if (alreadyTop) current.z else maxZ + 1
+            if (current.x == box.x && current.y == box.y &&
+                current.width == box.width && current.height == box.height &&
+                current.z == newZ
+            ) return@map tab
+            changed = true
+            val newPanes = tab.panes.toMutableList()
+            newPanes[idx] = current.copy(x = box.x, y = box.y, width = box.width, height = box.height, z = newZ)
+            tab.copy(panes = newPanes)
+        }
+        if (changed) _config.value = cfg.copy(tabs = newTabs)
+    }
+
+    /**
+     * Bring the pane [paneId] to the top of its tab's stacking order by
+     * setting its z to `max + 1`. No-op if the pane isn't found or is
+     * already strictly on top.
+     */
+    fun raisePane(paneId: String) = synchronized(this) {
+        val cfg = _config.value
+        var changed = false
+        val newTabs = cfg.tabs.map { tab ->
+            val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+            if (idx < 0) return@map tab
+            val current = tab.panes[idx]
+            val maxZ = tab.panes.maxOf { it.z }
+            if (current.z == maxZ && tab.panes.count { it.z == maxZ } == 1) return@map tab
+            changed = true
+            val newPanes = tab.panes.toMutableList()
+            newPanes[idx] = current.copy(z = maxZ + 1)
+            tab.copy(panes = newPanes)
+        }
+        if (changed) _config.value = cfg.copy(tabs = newTabs)
+    }
+
+    /**
+     * Toggle the maximized flag on [paneId]. When becoming maximized, any
+     * other maximized pane in the same tab is demoted and this pane's z is
+     * bumped to the top. When restoring, the pane's stored geometry is left
+     * untouched so it returns to its prior size/position.
+     */
+    fun toggleMaximized(paneId: String) = synchronized(this) {
+        val cfg = _config.value
+        var changed = false
+        val newTabs = cfg.tabs.map { tab ->
+            val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+            if (idx < 0) return@map tab
+            val current = tab.panes[idx]
+            val nowMax = !current.maximized
+            val topZ = tab.panes.maxOf { it.z }
+            changed = true
+            val newPanes = tab.panes.mapIndexed { i, p ->
+                when {
+                    i == idx -> p.copy(
+                        maximized = nowMax,
+                        z = if (nowMax) topZ + 1 else p.z,
+                    )
+                    nowMax && p.maximized -> p.copy(maximized = false)
+                    else -> p
+                }
+            }
+            tab.copy(panes = newPanes)
+        }
+        if (changed) _config.value = cfg.copy(tabs = newTabs)
+    }
+
+    /**
+     * Arrange every pane in [tabId] using one of the predefined layout
+     * algorithms. The pane with [primaryPaneId] (or the first pane if that
+     * is null/invalid) gets the primary slot; others fill the remaining
+     * slots in their existing order. Also clears any maximized flag so the
+     * layout takes effect visually.
+     */
+    fun applyLayout(tabId: String, layout: String, primaryPaneId: String?) = synchronized(this) {
+        val cfg = _config.value
+        val tabIdx = cfg.tabs.indexOfFirst { it.id == tabId }
+        if (tabIdx < 0) return@synchronized
+        val tab = cfg.tabs[tabIdx]
+        if (tab.panes.isEmpty()) return@synchronized
+
+        val primary = tab.panes.firstOrNull { it.leaf.id == primaryPaneId } ?: tab.panes.first()
+        val ordered = listOf(primary) + tab.panes.filter { it.leaf.id != primary.leaf.id }
+        val boxes = computeLayout(layout, ordered.size)
+
+        val boxById = ordered.withIndex().associate { (i, p) -> p.leaf.id to boxes[i] }
+        val newPanes = tab.panes.map { p ->
+            val b = boxById[p.leaf.id] ?: return@map p
+            p.copy(x = b.x, y = b.y, width = b.width, height = b.height, maximized = false)
+        }
+        val newTabs = cfg.tabs.toMutableList()
+        newTabs[tabIdx] = tab.copy(panes = newPanes)
+        _config.value = cfg.copy(tabs = newTabs)
+    }
+
+    /**
+     * Compute the list of pane boxes for [layout] with [n] total panes. The
+     * primary pane is always index 0; remaining slots follow in order.
+     */
+    private fun computeLayout(layout: String, n: Int): List<PaneBox> {
+        if (n <= 0) return emptyList()
+        if (n == 1) return listOf(PaneBox(0.0, 0.0, 1.0, 1.0))
+        val others = n - 1
+        return when (layout) {
+            "primary-left" -> primaryWithStack(n, primaryW = 0.6, orientation = "horizontal", primaryFirst = true)
+            "primary-right" -> primaryWithStack(n, primaryW = 0.6, orientation = "horizontal", primaryFirst = false)
+            "primary-top" -> primaryWithStack(n, primaryW = 0.6, orientation = "vertical", primaryFirst = true)
+            "primary-bottom" -> primaryWithStack(n, primaryW = 0.6, orientation = "vertical", primaryFirst = false)
+            // 75/25 "dominant primary" variants for when the primary really
+            // should take the stage and the others are just reference panes.
+            "primary-wide-left" -> primaryWithStack(n, primaryW = 0.75, orientation = "horizontal", primaryFirst = true)
+            "primary-wide-right" -> primaryWithStack(n, primaryW = 0.75, orientation = "horizontal", primaryFirst = false)
+            "primary-wide-top" -> primaryWithStack(n, primaryW = 0.75, orientation = "vertical", primaryFirst = true)
+            "primary-wide-bottom" -> primaryWithStack(n, primaryW = 0.75, orientation = "vertical", primaryFirst = false)
+            "columns" -> (0 until n).map { i ->
+                val w = 1.0 / n
+                PaneBox(i * w, 0.0, w, 1.0)
+            }
+            "rows" -> (0 until n).map { i ->
+                val h = 1.0 / n
+                PaneBox(0.0, i * h, 1.0, h)
+            }
+            "two-col-grid" -> {
+                val cols = 2
+                val rows = kotlin.math.ceil(n.toDouble() / cols).toInt().coerceAtLeast(1)
+                val w = 1.0 / cols
+                val h = 1.0 / rows
+                (0 until n).map { i ->
+                    val r = i / cols
+                    val c = i % cols
+                    PaneBox(c * w, r * h, w, h)
+                }
+            }
+            "three-col-grid" -> {
+                val cols = 3
+                val rows = kotlin.math.ceil(n.toDouble() / cols).toInt().coerceAtLeast(1)
+                val w = 1.0 / cols
+                val h = 1.0 / rows
+                (0 until n).map { i ->
+                    val r = i / cols
+                    val c = i % cols
+                    PaneBox(c * w, r * h, w, h)
+                }
+            }
+            "primary-main-2col" -> buildList {
+                // Primary on the left half; the others flow into a 2-column
+                // grid on the right half. Feels natural for editor-plus-
+                // reference setups (primary = editor, others = terminals).
+                add(PaneBox(0.0, 0.0, 0.5, 1.0))
+                if (others > 0) {
+                    val cols = 2
+                    val rows = kotlin.math.ceil(others.toDouble() / cols).toInt().coerceAtLeast(1)
+                    val w = 0.5 / cols
+                    val h = 1.0 / rows
+                    for (i in 0 until others) {
+                        val r = i / cols
+                        val c = i % cols
+                        add(PaneBox(0.5 + c * w, r * h, w, h))
+                    }
+                }
+            }
+            "primary-main-2row" -> buildList {
+                // Primary across the top half; others flow into a 2-column
+                // grid on the bottom half. The horizontal mirror of
+                // `primary-main-2col`, useful on portrait / tall viewports.
+                add(PaneBox(0.0, 0.0, 1.0, 0.5))
+                if (others > 0) {
+                    val cols = 2
+                    val rows = kotlin.math.ceil(others.toDouble() / cols).toInt().coerceAtLeast(1)
+                    val w = 1.0 / cols
+                    val h = 0.5 / rows
+                    for (i in 0 until others) {
+                        val r = i / cols
+                        val c = i % cols
+                        add(PaneBox(c * w, 0.5 + r * h, w, h))
+                    }
+                }
+            }
+            else -> {
+                // "grid" (default): even tiling with primary at top-left.
+                val cols = kotlin.math.ceil(kotlin.math.sqrt(n.toDouble())).toInt().coerceAtLeast(1)
+                val rows = kotlin.math.ceil(n.toDouble() / cols).toInt().coerceAtLeast(1)
+                val w = 1.0 / cols
+                val h = 1.0 / rows
+                (0 until n).map { i ->
+                    val r = i / cols
+                    val c = i % cols
+                    PaneBox(c * w, r * h, w, h)
+                }
+            }
         }
     }
 
     /**
-     * Walk [node] looking for the leaf with [paneId]; if found, return its
-     * direct parent SplitNode and whether the leaf is the parent's `first`
-     * child. Returns null if not found or if the pane has no parent split.
+     * Shared implementation for the four "primary + stack of others" layouts
+     * (horizontal and vertical, primary on either side). [orientation] is
+     * `"horizontal"` for left/right split or `"vertical"` for top/bottom;
+     * [primaryFirst] puts the primary on the left / top when true.
+     * [primaryW] is the fraction of the long axis the primary occupies.
      */
-    private fun findParentSplit(node: PaneNode, paneId: String): Pair<SplitNode, Boolean>? {
-        if (node !is SplitNode) return null
-        if (node.first is LeafNode && node.first.id == paneId) return node to true
-        if (node.second is LeafNode && node.second.id == paneId) return node to false
-        return findParentSplit(node.first, paneId) ?: findParentSplit(node.second, paneId)
-    }
-
-    /**
-     * Set the split ratio for split node [splitId]. The ratio is clamped
-     * to [0.05, 0.95] to prevent invisible panes.
-     *
-     * @param splitId the id of the split node
-     * @param ratio the new ratio (0.0 = all space to first child, 1.0 = all to second)
-     */
-    fun setSplitRatio(splitId: String, ratio: Double) = synchronized(this) {
-        val clamped = ratio.coerceIn(0.05, 0.95)
-        val cfg = _config.value
-        var changed = false
-        val newCfg = cfg.copy(
-            tabs = cfg.tabs.map { tab ->
-                val root = tab.root ?: return@map tab
-                tab.copy(root = transformSplit(root, splitId) { split ->
-                    if (split.ratio == clamped) split else {
-                        changed = true
-                        split.copy(ratio = clamped)
-                    }
-                })
+    private fun primaryWithStack(
+        n: Int,
+        primaryW: Double,
+        orientation: String,
+        primaryFirst: Boolean,
+    ): List<PaneBox> {
+        val others = n - 1
+        val primaryBox: PaneBox
+        val stackOrigin: Double
+        val stackExtent: Double = 1.0 - primaryW
+        if (orientation == "horizontal") {
+            primaryBox = if (primaryFirst)
+                PaneBox(0.0, 0.0, primaryW, 1.0)
+            else
+                PaneBox(1.0 - primaryW, 0.0, primaryW, 1.0)
+            stackOrigin = if (primaryFirst) primaryW else 0.0
+        } else {
+            primaryBox = if (primaryFirst)
+                PaneBox(0.0, 0.0, 1.0, primaryW)
+            else
+                PaneBox(0.0, 1.0 - primaryW, 1.0, primaryW)
+            stackOrigin = if (primaryFirst) primaryW else 0.0
+        }
+        val boxes = ArrayList<PaneBox>(n)
+        boxes.add(primaryBox)
+        if (others > 0) {
+            val step = 1.0 / others
+            for (i in 0 until others) {
+                if (orientation == "horizontal") {
+                    boxes.add(PaneBox(stackOrigin, i * step, stackExtent, step))
+                } else {
+                    boxes.add(PaneBox(i * step, stackOrigin, step, stackExtent))
+                }
             }
-        )
-        if (changed) _config.value = newCfg
+        }
+        return boxes
     }
 
     /**
-     * Spawn a fresh shell as the sole pane in [tabId]. Used by the empty-tab
-     * placeholder's "New pane" button. No-op if the tab already has any panes
-     * (docked or floating) — clients should only surface the button when both
-     * `tab.root` and `tab.floating` are empty.
+     * Spawn a fresh shell as a new pane in [tabId]. Used by the new-window
+     * icon and by the empty-tab placeholder's "New pane" button. If
+     * [initialCwd] is provided the new shell starts there; otherwise the
+     * new PTY inherits the user's home.
      */
-    fun addPaneToEmptyTab(tabId: String) = synchronized(this) {
-        val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (idx < 0) return@synchronized
-        val tab = cfg.tabs[idx]
-        if (tab.root != null || tab.floating.isNotEmpty()) return@synchronized
-        val sessionId = TerminalSessions.create()
-        val leaf = LeafNode(
-            id = newNodeId(),
-            sessionId = sessionId,
-            title = "Session ${sessionId.removePrefix("s")}",
-            content = TerminalContent(sessionId),
-        )
-        val newTabs = cfg.tabs.toMutableList()
-        newTabs[idx] = tab.copy(root = leaf)
-        _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /** Add a file-browser pane as the sole pane in an empty tab. */
-    fun addFileBrowserToEmptyTab(tabId: String): LeafNode? = synchronized(this) {
+    fun addPaneToTab(tabId: String, initialCwd: String? = null): LeafNode? = synchronized(this) {
         val cfg = _config.value
         val idx = cfg.tabs.indexOfFirst { it.id == tabId }
         if (idx < 0) return@synchronized null
         val tab = cfg.tabs[idx]
-        if (tab.root != null || tab.floating.isNotEmpty()) return@synchronized null
+        val sessionId = TerminalSessions.create(initialCwd = initialCwd)
+        val fallbackTitle = "Session ${sessionId.removePrefix("s")}"
         val leaf = LeafNode(
             id = newNodeId(),
-            sessionId = "",
-            title = "Files",
-            content = FileBrowserContent(),
+            sessionId = sessionId,
+            cwd = initialCwd,
+            title = computeLeafTitle(null, initialCwd, fallbackTitle),
+            content = TerminalContent(sessionId),
+        )
+        val (ox, oy) = randomSnappedOrigin()
+        val newPane = Pane(
+            leaf = leaf,
+            x = ox, y = oy,
+            width = PaneGeometry.DEFAULT_SIZE,
+            height = PaneGeometry.DEFAULT_SIZE,
+            z = nextZ(tab),
         )
         val newTabs = cfg.tabs.toMutableList()
-        newTabs[idx] = tab.copy(root = leaf)
+        val demoted = demoteMaximized(tab)
+        newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
         _config.value = cfg.copy(tabs = newTabs)
         leaf
     }
 
-    /** Add a linked terminal pane as the sole pane in an empty tab. */
-    fun addLinkToEmptyTab(tabId: String, targetSessionId: String) = synchronized(this) {
-        if (TerminalSessions.get(targetSessionId) == null) return@synchronized
+    /** Add a file-browser pane to [tabId]. */
+    fun addFileBrowserToTab(tabId: String, initialCwd: String? = null): LeafNode? = synchronized(this) {
         val cfg = _config.value
         val idx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (idx < 0) return@synchronized
+        if (idx < 0) return@synchronized null
         val tab = cfg.tabs[idx]
-        if (tab.root != null || tab.floating.isNotEmpty()) return@synchronized
+        val leaf = LeafNode(
+            id = newNodeId(),
+            sessionId = "",
+            cwd = initialCwd,
+            title = computeLeafTitle(null, initialCwd, "Files"),
+            content = FileBrowserContent(),
+        )
+        val (ox, oy) = randomSnappedOrigin()
+        val newPane = Pane(
+            leaf = leaf,
+            x = ox, y = oy,
+            width = PaneGeometry.DEFAULT_SIZE,
+            height = PaneGeometry.DEFAULT_SIZE,
+            z = nextZ(tab),
+        )
+        val newTabs = cfg.tabs.toMutableList()
+        val demoted = demoteMaximized(tab)
+        newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
+        _config.value = cfg.copy(tabs = newTabs)
+        leaf
+    }
+
+    /** Add a git overview pane to [tabId]. */
+    fun addGitToTab(tabId: String, initialCwd: String? = null): LeafNode? = synchronized(this) {
+        val cfg = _config.value
+        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        if (idx < 0) return@synchronized null
+        val tab = cfg.tabs[idx]
+        val leaf = LeafNode(
+            id = newNodeId(),
+            sessionId = "",
+            cwd = initialCwd,
+            title = computeLeafTitle(null, initialCwd, "Git"),
+            content = GitContent(),
+        )
+        val (ox, oy) = randomSnappedOrigin()
+        val newPane = Pane(
+            leaf = leaf,
+            x = ox, y = oy,
+            width = PaneGeometry.DEFAULT_SIZE,
+            height = PaneGeometry.DEFAULT_SIZE,
+            z = nextZ(tab),
+        )
+        val newTabs = cfg.tabs.toMutableList()
+        val demoted = demoteMaximized(tab)
+        newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
+        _config.value = cfg.copy(tabs = newTabs)
+        leaf
+    }
+
+    /**
+     * Add a linked terminal pane to [tabId] that shares the PTY session
+     * [targetSessionId]. No new process is spawned.
+     */
+    fun addLinkToTab(tabId: String, targetSessionId: String): LeafNode? = synchronized(this) {
+        if (TerminalSessions.get(targetSessionId) == null) return@synchronized null
+        val cfg = _config.value
+        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        if (idx < 0) return@synchronized null
+        val tab = cfg.tabs[idx]
         val sourceTitle = findLeafBySession(cfg, targetSessionId)?.title ?: "Terminal"
         val leaf = LeafNode(
             id = newNodeId(),
@@ -1099,132 +1159,41 @@ object WindowState {
             content = TerminalContent(targetSessionId),
             isLink = true,
         )
+        val (ox, oy) = randomSnappedOrigin()
+        val newPane = Pane(
+            leaf = leaf,
+            x = ox, y = oy,
+            width = PaneGeometry.DEFAULT_SIZE,
+            height = PaneGeometry.DEFAULT_SIZE,
+            z = nextZ(tab),
+        )
         val newTabs = cfg.tabs.toMutableList()
-        newTabs[idx] = tab.copy(root = leaf)
+        val demoted = demoteMaximized(tab)
+        newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
         _config.value = cfg.copy(tabs = newTabs)
+        leaf
     }
 
     /**
-     * Detach the pane [paneId] from its current location and put it back the
-     * other way: a pane in the split tree becomes floating; a floating pane
-     * gets re-docked. Re-docking follows the same rule as [movePaneToTab]:
-     * if the destination tree is empty, the leaf becomes the root; otherwise
-     * the existing root is wrapped in a new horizontal split with the leaf
-     * as its right child.
-     */
-    fun toggleFloating(paneId: String) = synchronized(this) {
-        val cfg = _config.value
-        for ((tabIdx, tab) in cfg.tabs.withIndex()) {
-            // Case 1: pane is currently floating → re-dock it.
-            val floatingIdx = tab.floating.indexOfFirst { it.leaf.id == paneId }
-            if (floatingIdx >= 0) {
-                val leaf = tab.floating[floatingIdx].leaf
-                val newFloating = tab.floating.toMutableList().also { it.removeAt(floatingIdx) }
-                val newRoot: PaneNode = when (val root = tab.root) {
-                    null -> leaf
-                    else -> SplitNode(
-                        id = newNodeId(),
-                        orientation = SplitOrientation.Horizontal,
-                        ratio = 0.5,
-                        first = root,
-                        second = leaf,
-                    )
-                }
-                val newTabs = cfg.tabs.toMutableList()
-                newTabs[tabIdx] = tab.copy(root = newRoot, floating = newFloating)
-                _config.value = cfg.copy(tabs = newTabs)
-                return@synchronized
-            }
-            // Case 2: pane lives in the split tree → detach into floating.
-            val root = tab.root ?: continue
-            val detached = detachLeaf(root, paneId) ?: continue
-            val (leaf, newRoot) = detached
-            val nextZ = (tab.floating.maxOfOrNull { it.z } ?: 0L) + 1L
-            val newFloater = FloatingPane(
-                leaf = leaf,
-                x = 0.2,
-                y = 0.2,
-                width = 0.4,
-                height = 0.4,
-                z = nextZ,
-            )
-            val newTabs = cfg.tabs.toMutableList()
-            newTabs[tabIdx] = tab.copy(root = newRoot, floating = tab.floating + newFloater)
-            _config.value = cfg.copy(tabs = newTabs)
-            return@synchronized
-        }
-    }
-
-    /**
-     * Update the relative geometry of a floating pane. All inputs are clamped
-     * to keep the pane visible inside the tab area and at least 5% of each
-     * dimension (mirrors the split-ratio clamp). No-op if [paneId] isn't
-     * floating in any tab.
-     */
-    fun setFloatingGeometry(
-        paneId: String,
-        x: Double,
-        y: Double,
-        width: Double,
-        height: Double,
-    ) = synchronized(this) {
-        val w = width.coerceIn(0.05, 1.0)
-        val h = height.coerceIn(0.05, 1.0)
-        val nx = x.coerceIn(0.0, (1.0 - w).coerceAtLeast(0.0))
-        val ny = y.coerceIn(0.0, (1.0 - h).coerceAtLeast(0.0))
-        val cfg = _config.value
-        var changed = false
-        val newTabs = cfg.tabs.map { tab ->
-            val idx = tab.floating.indexOfFirst { it.leaf.id == paneId }
-            if (idx < 0) return@map tab
-            val current = tab.floating[idx]
-            if (current.x == nx && current.y == ny && current.width == w && current.height == h) {
-                return@map tab
-            }
-            changed = true
-            val newFloating = tab.floating.toMutableList()
-            newFloating[idx] = current.copy(x = nx, y = ny, width = w, height = h)
-            tab.copy(floating = newFloating)
-        }
-        if (changed) _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /**
-     * Detach [paneId] from its tab's split tree or floating layer and move it
-     * into the tab's `poppedOut` list. The caller (Electron main process)
+     * Detach [paneId] from its tab's visible panes and move it into the
+     * tab's [TabConfig.poppedOut] list. The caller (Electron main process)
      * is responsible for opening a new BrowserWindow that renders just this
-     * pane. No-op if the pane isn't found. If the pane is already popped out,
-     * this is a no-op too — re-popping a popped-out pane makes no sense.
+     * pane. No-op if the pane isn't found or is already popped out.
      */
     fun popOutPane(paneId: String) = synchronized(this) {
         val cfg = _config.value
         for ((tabIdx, tab) in cfg.tabs.withIndex()) {
-            // Already popped out → nothing to do.
             if (tab.poppedOut.any { it.leaf.id == paneId }) return@synchronized
-
-            // Case 1: pane is currently floating → detach from floating layer.
-            val floatingIdx = tab.floating.indexOfFirst { it.leaf.id == paneId }
-            if (floatingIdx >= 0) {
-                val leaf = tab.floating[floatingIdx].leaf
-                val newFloating = tab.floating.toMutableList().also { it.removeAt(floatingIdx) }
-                val newTabs = cfg.tabs.toMutableList()
-                newTabs[tabIdx] = tab.copy(
-                    floating = newFloating,
-                    poppedOut = tab.poppedOut + PoppedOutPane(leaf),
-                )
-                _config.value = cfg.copy(tabs = newTabs)
-                return@synchronized
-            }
-            // Case 2: pane lives in the split tree → detach from tree.
-            val root = tab.root ?: continue
-            val detached = detachLeaf(root, paneId) ?: continue
-            val (leaf, newRoot) = detached
+            val paneIdx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+            if (paneIdx < 0) continue
+            val leaf = tab.panes[paneIdx].leaf
+            val newPanes = tab.panes.toMutableList().also { it.removeAt(paneIdx) }
             val newTabs = cfg.tabs.toMutableList()
             // If the popped pane was the focused pane, clear it — focus
             // follows the pane into the new window.
             val newFocus = if (tab.focusedPaneId == paneId) null else tab.focusedPaneId
             newTabs[tabIdx] = tab.copy(
-                root = newRoot,
+                panes = newPanes,
                 poppedOut = tab.poppedOut + PoppedOutPane(leaf),
                 focusedPaneId = newFocus,
             )
@@ -1234,11 +1203,10 @@ object WindowState {
     }
 
     /**
-     * Re-dock a popped-out pane back into its tab's split tree. Called when
-     * the user clicks "Dock" in the popout window, or when the popout window
-     * is closed via the OS close button. Same re-docking rule as
-     * [toggleFloating]: become the root if the tree is empty, otherwise wrap
-     * the current root in a horizontal split.
+     * Re-dock a popped-out pane back into its tab. Called when the user
+     * clicks "Dock" in the popout window, or when the popout window is
+     * closed via the OS close button. The returning pane lands at a random
+     * snapped origin on top of any existing panes so it's easy to find.
      */
     fun dockPoppedOut(paneId: String) = synchronized(this) {
         val cfg = _config.value
@@ -1247,53 +1215,26 @@ object WindowState {
             if (idx < 0) continue
             val leaf = tab.poppedOut[idx].leaf
             val newPoppedOut = tab.poppedOut.toMutableList().also { it.removeAt(idx) }
-            val newRoot: PaneNode = when (val root = tab.root) {
-                null -> leaf
-                else -> SplitNode(
-                    id = newNodeId(),
-                    orientation = SplitOrientation.Horizontal,
-                    ratio = 0.5,
-                    first = root,
-                    second = leaf,
-                )
-            }
+            val (ox, oy) = randomSnappedOrigin()
+            val newPane = Pane(
+                leaf = leaf,
+                x = ox, y = oy,
+                width = PaneGeometry.DEFAULT_SIZE,
+                height = PaneGeometry.DEFAULT_SIZE,
+                z = nextZ(tab),
+            )
             val newTabs = cfg.tabs.toMutableList()
-            newTabs[tabIdx] = tab.copy(root = newRoot, poppedOut = newPoppedOut)
+            val demoted = demoteMaximized(tab)
+            newTabs[tabIdx] = demoted.copy(panes = demoted.panes + newPane, poppedOut = newPoppedOut)
             _config.value = cfg.copy(tabs = newTabs)
             return@synchronized
         }
     }
 
     /**
-     * Bring the floating pane [paneId] to the front of its tab's stacking
-     * order. No-op if it isn't floating or is already on top.
-     */
-    fun raiseFloating(paneId: String) = synchronized(this) {
-        val cfg = _config.value
-        var changed = false
-        val newTabs = cfg.tabs.map { tab ->
-            val idx = tab.floating.indexOfFirst { it.leaf.id == paneId }
-            if (idx < 0) return@map tab
-            val current = tab.floating[idx]
-            val maxZ = tab.floating.maxOf { it.z }
-            if (current.z == maxZ && tab.floating.count { it.z == maxZ } == 1) return@map tab
-            changed = true
-            val newFloating = tab.floating.toMutableList()
-            newFloating[idx] = current.copy(z = maxZ + 1)
-            tab.copy(floating = newFloating)
-        }
-        if (changed) _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /**
-     * Move the pane [paneId] from whichever tab currently holds it (in either
-     * the split tree or the floating layer) into [targetTabId], where it
-     * lands as a docked pane. If the target tab is empty, the pane becomes
-     * its root; otherwise the existing root is wrapped in a new horizontal
-     * split with the moved pane as the right child.
-     *
-     * Floating-ness is intentionally dropped on transfer: the user explicitly
-     * asked for "Move to tab" as a docking operation.
+     * Move the pane [paneId] from whichever tab currently holds it into
+     * [targetTabId]. The pane lands at a random snapped origin on top of
+     * any existing panes in the target.
      */
     fun movePaneToTab(paneId: String, targetTabId: String) = synchronized(this) {
         if (paneId.isEmpty() || targetTabId.isEmpty()) return@synchronized
@@ -1301,86 +1242,52 @@ object WindowState {
         val targetIdx = cfg.tabs.indexOfFirst { it.id == targetTabId }
         if (targetIdx < 0) return@synchronized
 
-        // Locate the source: search every tab's tree and floating layer.
+        // Locate the source.
         var sourceIdx = -1
         var movedLeaf: LeafNode? = null
-        var newSourceRoot: PaneNode? = null
-        var newSourceFloating: List<FloatingPane>? = null
+        var newSourcePanes: List<Pane>? = null
 
         for ((idx, tab) in cfg.tabs.withIndex()) {
-            val floatingIdx = tab.floating.indexOfFirst { it.leaf.id == paneId }
-            if (floatingIdx >= 0) {
+            val paneIdx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+            if (paneIdx >= 0) {
                 sourceIdx = idx
-                movedLeaf = tab.floating[floatingIdx].leaf
-                newSourceRoot = tab.root
-                newSourceFloating = tab.floating.toMutableList().also { it.removeAt(floatingIdx) }
+                movedLeaf = tab.panes[paneIdx].leaf
+                newSourcePanes = tab.panes.toMutableList().also { it.removeAt(paneIdx) }
                 break
             }
-            val root = tab.root ?: continue
-            val detached = detachLeaf(root, paneId) ?: continue
-            sourceIdx = idx
-            movedLeaf = detached.first
-            newSourceRoot = detached.second
-            newSourceFloating = tab.floating
-            break
         }
-        if (sourceIdx < 0 || movedLeaf == null) return@synchronized
+        if (sourceIdx < 0 || movedLeaf == null || newSourcePanes == null) return@synchronized
         if (sourceIdx == targetIdx) return@synchronized
 
         val newTabs = cfg.tabs.toMutableList()
         // Clear the source tab's saved focus if it pointed at the moving
-        // pane — that pane no longer lives in the source tab.
+        // pane — that pane no longer lives in the source tab. Remember
+        // whether the moving pane was the source's focused one so we can
+        // carry that focus into the target tab; otherwise a cross-tab move
+        // would silently deactivate the pane.
         val sourceFocus = cfg.tabs[sourceIdx].focusedPaneId
-        val newSourceFocus = if (sourceFocus == paneId) null else sourceFocus
+        val wasFocusedInSource = sourceFocus == paneId
+        val newSourceFocus = if (wasFocusedInSource) null else sourceFocus
         newTabs[sourceIdx] = cfg.tabs[sourceIdx].copy(
-            root = newSourceRoot,
-            floating = newSourceFloating ?: cfg.tabs[sourceIdx].floating,
+            panes = newSourcePanes,
             focusedPaneId = newSourceFocus,
         )
         val targetTab = newTabs[targetIdx]
-        val newTargetRoot: PaneNode = when (val root = targetTab.root) {
-            null -> movedLeaf
-            else -> SplitNode(
-                id = newNodeId(),
-                orientation = SplitOrientation.Horizontal,
-                ratio = 0.5,
-                first = root,
-                second = movedLeaf,
-            )
-        }
-        newTabs[targetIdx] = targetTab.copy(root = newTargetRoot)
+        val (ox, oy) = randomSnappedOrigin()
+        val newPane = Pane(
+            leaf = movedLeaf,
+            x = ox, y = oy,
+            width = PaneGeometry.DEFAULT_SIZE,
+            height = PaneGeometry.DEFAULT_SIZE,
+            z = nextZ(targetTab),
+        )
+        val demotedTarget = demoteMaximized(targetTab)
+        val newTargetFocus = if (wasFocusedInSource) paneId else demotedTarget.focusedPaneId
+        newTabs[targetIdx] = demotedTarget.copy(
+            panes = demotedTarget.panes + newPane,
+            focusedPaneId = newTargetFocus,
+        )
         _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /**
-     * Like [removeLeaf] but also returns the removed [LeafNode] and the new
-     * (possibly null) root. Used by [toggleFloating] and [movePaneToTab] to
-     * detach a leaf without losing its identity. Returns null if [paneId]
-     * isn't found in [node].
-     */
-    private fun detachLeaf(node: PaneNode, paneId: String): Pair<LeafNode, PaneNode?>? {
-        when (node) {
-            is LeafNode -> return if (node.id == paneId) node to null else null
-            is SplitNode -> {
-                val fromFirst = detachLeaf(node.first, paneId)
-                if (fromFirst != null) {
-                    val (leaf, newFirst) = fromFirst
-                    val newRoot: PaneNode = newFirst?.let {
-                        node.copy(first = it)
-                    } ?: node.second
-                    return leaf to newRoot
-                }
-                val fromSecond = detachLeaf(node.second, paneId)
-                if (fromSecond != null) {
-                    val (leaf, newSecond) = fromSecond
-                    val newRoot: PaneNode = newSecond?.let {
-                        node.copy(second = it)
-                    } ?: node.first
-                    return leaf to newRoot
-                }
-                return null
-            }
-        }
     }
 
     /**
@@ -1392,48 +1299,6 @@ object WindowState {
     fun hasSession(sessionId: String): Boolean =
         collectSessionIds(_config.value).contains(sessionId)
 
-    private fun transformLeaf(
-        node: PaneNode,
-        paneId: String,
-        f: (LeafNode) -> PaneNode
-    ): PaneNode = when (node) {
-        is LeafNode -> if (node.id == paneId) f(node) else node
-        is SplitNode -> node.copy(
-            first = transformLeaf(node.first, paneId, f),
-            second = transformLeaf(node.second, paneId, f)
-        )
-    }
-
-    private fun transformSplit(
-        node: PaneNode,
-        splitId: String,
-        f: (SplitNode) -> SplitNode
-    ): PaneNode = when (node) {
-        is LeafNode -> node
-        is SplitNode -> {
-            val maybeReplaced = if (node.id == splitId) f(node) else node
-            maybeReplaced.copy(
-                first = transformSplit(maybeReplaced.first, splitId, f),
-                second = transformSplit(maybeReplaced.second, splitId, f)
-            )
-        }
-    }
-
-    /** Returns null if removing the leaf empties the entire subtree. */
-    private fun removeLeaf(node: PaneNode, paneId: String): PaneNode? = when (node) {
-        is LeafNode -> if (node.id == paneId) null else node
-        is SplitNode -> {
-            val newFirst = removeLeaf(node.first, paneId)
-            val newSecond = removeLeaf(node.second, paneId)
-            when {
-                newFirst == null && newSecond == null -> null
-                newFirst == null -> newSecond
-                newSecond == null -> newFirst
-                else -> node.copy(first = newFirst, second = newSecond)
-            }
-        }
-    }
-
     private fun collectSessionIds(cfg: WindowConfig): Set<String> {
         val out = HashSet<String>()
         fun add(leaf: LeafNode) {
@@ -1442,15 +1307,8 @@ object WindowState {
             // appears in transient states (e.g. just-blanked persisted blobs).
             if (leaf.sessionId.isNotEmpty()) out.add(leaf.sessionId)
         }
-        fun walk(n: PaneNode) {
-            when (n) {
-                is LeafNode -> add(n)
-                is SplitNode -> { walk(n.first); walk(n.second) }
-            }
-        }
         cfg.tabs.forEach { tab ->
-            tab.root?.let(::walk)
-            tab.floating.forEach { add(it.leaf) }
+            tab.panes.forEach { add(it.leaf) }
             tab.poppedOut.forEach { add(it.leaf) }
         }
         return out

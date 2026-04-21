@@ -77,8 +77,6 @@ import kotlinx.coroutines.launch
 import se.soderbjorn.termtastic.GitContent
 import se.soderbjorn.termtastic.LeafNode
 import se.soderbjorn.termtastic.FileBrowserContent
-import se.soderbjorn.termtastic.PaneNode
-import se.soderbjorn.termtastic.SplitNode
 import se.soderbjorn.termtastic.TerminalContent
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
@@ -158,8 +156,7 @@ private fun flatten(config: WindowConfig, states: Map<String, String?>): List<Tr
     val rows = mutableListOf<TreeRow>()
     for (tab in config.tabs) {
         val leaves = mutableListOf<CollectedLeaf>()
-        tab.root?.let { collectLeaves(it, floating = false, out = leaves) }
-        for (fp in tab.floating) addLeaf(fp.leaf, floating = true, out = leaves)
+        for (p in tab.panes) addLeaf(p.leaf, floating = false, out = leaves)
         for (po in tab.poppedOut) addLeaf(po.leaf, floating = false, out = leaves)
 
         // "waiting" wins over "working" — matches updateStateIndicators() in WebState.kt.
@@ -188,23 +185,6 @@ private fun flatten(config: WindowConfig, states: Map<String, String?>): List<Tr
 }
 
 /**
- * Recursively walks a [PaneNode] tree, appending every [LeafNode] to [out].
- *
- * @param node the current node in the pane tree.
- * @param floating whether these leaves are inside a floating window.
- * @param out accumulator list for collected leaves.
- */
-private fun collectLeaves(node: PaneNode, floating: Boolean, out: MutableList<CollectedLeaf>) {
-    when (node) {
-        is LeafNode -> addLeaf(node, floating, out)
-        is SplitNode -> {
-            collectLeaves(node.first, floating, out)
-            collectLeaves(node.second, floating, out)
-        }
-    }
-}
-
-/**
  * Converts a single [LeafNode] into a [CollectedLeaf] and appends it to [out].
  *
  * Determines the [LeafKind] from the leaf's content type.
@@ -218,7 +198,6 @@ private fun addLeaf(leaf: LeafNode, floating: Boolean, out: MutableList<Collecte
         is TerminalContent, null -> LeafKind.TERMINAL
         is FileBrowserContent -> LeafKind.FILE_BROWSER
         is GitContent -> LeafKind.GIT
-        else -> LeafKind.EMPTY
     }
     out.add(
         CollectedLeaf(
@@ -313,11 +292,12 @@ fun TreeScreen(
             onPick = { paneId ->
                 showPanePicker = null
                 val socket = ConnectionHolder.windowSocket() ?: return@PanePickerDialog
+                val cfgSnapshot = config
                 scope.launch {
                     when (kind) {
-                        "terminal" -> addSiblingTerminal(socket, paneId)
-                        "fileBrowser" -> addSiblingFileBrowser(socket, paneId)
-                        "git" -> addSiblingGit(socket, paneId)
+                        "terminal" -> addSiblingTerminal(socket, paneId, cfgSnapshot)
+                        "fileBrowser" -> addSiblingFileBrowser(socket, paneId, cfgSnapshot)
+                        "git" -> addSiblingGit(socket, paneId, cfgSnapshot)
                     }
                 }
             },

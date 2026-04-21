@@ -27,7 +27,6 @@ import se.soderbjorn.termtastic.Appearance
 import se.soderbjorn.termtastic.ClaudeUsageData
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
 import se.soderbjorn.termtastic.ResolvedPalette
-import se.soderbjorn.termtastic.SplitDirection
 import se.soderbjorn.termtastic.TerminalTheme
 import se.soderbjorn.termtastic.WindowCommand
 import se.soderbjorn.termtastic.WindowConfig
@@ -338,26 +337,6 @@ class AppBackingViewModel(
         windowSocket.send(WindowCommand.Rename(paneId = paneId, title = title))
     }
 
-    /** Split [paneId] and create a new terminal in [direction]. */
-    suspend fun splitTerminal(paneId: String, direction: SplitDirection) {
-        windowSocket.send(WindowCommand.SplitTerminal(paneId = paneId, direction = direction))
-    }
-
-    /** Split [paneId] and create a file browser in [direction]. */
-    suspend fun splitFileBrowser(paneId: String, direction: SplitDirection) {
-        windowSocket.send(WindowCommand.SplitFileBrowser(paneId = paneId, direction = direction))
-    }
-
-    /** Split [paneId] and create a git pane in [direction]. */
-    suspend fun splitGit(paneId: String, direction: SplitDirection) {
-        windowSocket.send(WindowCommand.SplitGit(paneId = paneId, direction = direction))
-    }
-
-    /** Split [paneId] and link a new pane to [targetSessionId]. */
-    suspend fun splitLink(paneId: String, direction: SplitDirection, targetSessionId: String) {
-        windowSocket.send(WindowCommand.SplitLink(paneId = paneId, direction = direction, targetSessionId = targetSessionId))
-    }
-
     /** Add a new terminal pane to [tabId]. */
     suspend fun addPaneToTab(tabId: String) {
         windowSocket.send(WindowCommand.AddPaneToTab(tabId = tabId))
@@ -378,24 +357,14 @@ class AppBackingViewModel(
         windowSocket.send(WindowCommand.AddLinkToTab(tabId = tabId, targetSessionId = targetSessionId))
     }
 
-    /** Toggle [paneId] between docked and floating state. */
-    suspend fun toggleFloating(paneId: String) {
-        windowSocket.send(WindowCommand.ToggleFloating(paneId = paneId))
+    /** Update the geometry (position and size) for [paneId]. */
+    suspend fun setPaneGeom(paneId: String, x: Double, y: Double, width: Double, height: Double) {
+        windowSocket.send(WindowCommand.SetPaneGeom(paneId = paneId, x = x, y = y, width = width, height = height))
     }
 
-    /** Update the floating geometry (position and size) for [paneId]. */
-    suspend fun setFloatingGeom(paneId: String, x: Double, y: Double, width: Double, height: Double) {
-        windowSocket.send(WindowCommand.SetFloatingGeom(paneId = paneId, x = x, y = y, width = width, height = height))
-    }
-
-    /** Bring floating [paneId] to the front of the z-order. */
-    suspend fun raiseFloating(paneId: String) {
-        windowSocket.send(WindowCommand.RaiseFloating(paneId = paneId))
-    }
-
-    /** Adjust the split ratio for [splitId] (0.0 -- 1.0). */
-    suspend fun setRatio(splitId: String, ratio: Double) {
-        windowSocket.send(WindowCommand.SetRatio(splitId = splitId, ratio = ratio))
+    /** Bring [paneId] to the front of its tab's z-order. */
+    suspend fun raisePane(paneId: String) {
+        windowSocket.send(WindowCommand.RaisePane(paneId = paneId))
     }
 
     /** Move [paneId] from its current tab to [targetTabId]. */

@@ -56,17 +56,10 @@ fun initPopoutMode() {
                 if ((po.leaf.id as String) == paneId) return Pair(po.leaf, true)
             }
         }
-        fun walkTree(node: dynamic): dynamic? {
-            if (node == null) return null
-            if (node.kind == "leaf") return if ((node.id as String) == paneId) node else null
-            return walkTree(node.first) ?: walkTree(node.second)
-        }
         for (tab in tabsArr) {
-            val treeHit = walkTree(tab.root)
-            if (treeHit != null) return Pair(treeHit, false)
-            val floats = tab.floating as? Array<dynamic> ?: emptyArray()
-            for (fp in floats) {
-                if ((fp.leaf.id as String) == paneId) return Pair(fp.leaf, false)
+            val panes = tab.panes as? Array<dynamic> ?: emptyArray()
+            for (p in panes) {
+                if ((p.leaf.id as String) == paneId) return Pair(p.leaf, false)
             }
         }
         return null

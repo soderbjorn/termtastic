@@ -16,60 +16,14 @@ import kotlinx.serialization.json.JsonClassDiscriminator
 
 /**
  * Mutation commands sent client → server over the `/window` websocket as
- * JSON Text frames. Each subclass maps 1:1 to a branch of the server's old
+ * JSON Text frames. Each subclass maps 1:1 to a branch of the server's
  * `handleWindowCommand` `when` block. The discriminator is `"type"` (not the
- * global `"kind"` [windowJson] uses for nested pane hierarchies) — preserved
- * via [JsonClassDiscriminator] so the encoded form matches the pre-refactor
- * wire format byte-for-byte.
+ * global `"kind"` [windowJson] uses for nested pane hierarchies).
  */
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable
 @JsonClassDiscriminator("type")
 sealed class WindowCommand {
-    /**
-     * Split an existing pane and place a new terminal in the created region.
-     *
-     * @param paneId the id of the pane to split
-     * @param direction which side of the existing pane the new terminal appears on
-     */
-    @Serializable
-    @SerialName("splitTerminal")
-    data class SplitTerminal(val paneId: String, val direction: SplitDirection) : WindowCommand()
-
-    /**
-     * Split an existing pane and place a new file browser in the created region.
-     *
-     * @param paneId the id of the pane to split
-     * @param direction which side of the existing pane the new file browser appears on
-     */
-    @Serializable
-    @SerialName("splitFileBrowser")
-    data class SplitFileBrowser(val paneId: String, val direction: SplitDirection) : WindowCommand()
-
-    /**
-     * Split an existing pane and place a new git overview in the created region.
-     *
-     * @param paneId the id of the pane to split
-     * @param direction which side of the existing pane the new git pane appears on
-     */
-    @Serializable
-    @SerialName("splitGit")
-    data class SplitGit(val paneId: String, val direction: SplitDirection) : WindowCommand()
-
-    /**
-     * Split an existing pane and place a linked view of another terminal session
-     * in the created region. The linked view shares the PTY session with the
-     * original pane, allowing side-by-side views of the same terminal.
-     *
-     * @param paneId the id of the pane to split
-     * @param direction which side of the existing pane the linked view appears on
-     * @param targetSessionId the PTY session id to link to
-     * @see LeafNode.isLink
-     */
-    @Serializable
-    @SerialName("splitLink")
-    data class SplitLink(val paneId: String, val direction: SplitDirection, val targetSessionId: String) : WindowCommand()
-
     /**
      * Request a one-level directory listing from the server for the file browser.
      * The server responds with a [WindowEnvelope.FileBrowserDir] message.
@@ -332,28 +286,6 @@ sealed class WindowCommand {
     ) : WindowCommand()
 
     /**
-     * Update the split ratio of a [SplitNode] after a drag resize of the divider.
-     *
-     * @param splitId the id of the split node
-     * @param ratio new relative size of the first child, in `(0, 1)`
-     * @see SplitNode.ratio
-     */
-    @Serializable
-    @SerialName("setRatio")
-    data class SetRatio(val splitId: String, val ratio: Double) : WindowCommand()
-
-    /**
-     * Incrementally resize a pane by adjusting its parent split's ratio by [delta].
-     * Used for keyboard-driven resize (as opposed to drag-based [SetRatio]).
-     *
-     * @param paneId the pane to grow or shrink
-     * @param delta fractional change to apply to the parent split ratio (positive = grow)
-     */
-    @Serializable
-    @SerialName("resizePane")
-    data class ResizePane(val paneId: String, val delta: Double) : WindowCommand()
-
-    /**
      * Add a new terminal pane to an existing tab (creates a new PTY session).
      *
      * @param tabId the id of the tab to add the pane to
@@ -392,30 +324,22 @@ sealed class WindowCommand {
     data class AddLinkToTab(val tabId: String, val targetSessionId: String) : WindowCommand()
 
     /**
-     * Toggle a pane between docked (in the split tree) and floating (free-positioned
-     * overlay) states.
+     * Update the position and size of a pane after the user drags or
+     * resizes it. All values are fractions of the tab area dimensions;
+     * the server snaps and clamps via [PaneGeometry.normalize] before
+     * persisting, so raw cursor-derived fractions are acceptable here.
      *
-     * @param paneId the pane to toggle
-     * @see FloatingPane
-     */
-    @Serializable
-    @SerialName("toggleFloating")
-    data class ToggleFloating(val paneId: String) : WindowCommand()
-
-    /**
-     * Update the position and size of a floating pane after the user drags or
-     * resizes it. All values are fractions of the tab area dimensions.
-     *
-     * @param paneId the floating pane to reposition
+     * @param paneId the pane to reposition
      * @param x top-left x as a fraction of the tab area's width
      * @param y top-left y as a fraction of the tab area's height
      * @param width width as a fraction of the tab area's width
      * @param height height as a fraction of the tab area's height
-     * @see FloatingPane
+     * @see Pane
+     * @see PaneGeometry.normalize
      */
     @Serializable
-    @SerialName("setFloatingGeom")
-    data class SetFloatingGeom(
+    @SerialName("setPaneGeom")
+    data class SetPaneGeom(
         val paneId: String,
         val x: Double,
         val y: Double,
@@ -424,14 +348,50 @@ sealed class WindowCommand {
     ) : WindowCommand()
 
     /**
-     * Bring a floating pane to the top of the stacking order (raise its z-index).
+     * Bring a pane to the top of the stacking order (raise its z-index to
+     * `maxZ + 1` within its containing tab). Dispatched on pane activation
+     * so clicking any pane surfaces it above its overlapping neighbours.
      *
-     * @param paneId the floating pane to raise
-     * @see FloatingPane.z
+     * @param paneId the pane to raise
+     * @see Pane.z
      */
     @Serializable
-    @SerialName("raiseFloating")
-    data class RaiseFloating(val paneId: String) : WindowCommand()
+    @SerialName("raisePane")
+    data class RaisePane(val paneId: String) : WindowCommand()
+
+    /**
+     * Toggle [Pane.maximized] on [paneId]. Maximizing a pane unsets any other
+     * maximized pane in the same tab and bumps the pane's [Pane.z] to the
+     * top of the stacking order; restoring simply clears the flag and leaves
+     * the pane's stored x/y/width/height unchanged so it returns to its
+     * prior geometry.
+     *
+     * @param paneId the pane to toggle
+     */
+    @Serializable
+    @SerialName("toggleMaximized")
+    data class ToggleMaximized(val paneId: String) : WindowCommand()
+
+    /**
+     * Arrange every pane in [tabId] according to [layout], giving
+     * [primaryPaneId] (if provided and present in the tab) the largest
+     * region for layouts that distinguish a primary. Other panes are placed
+     * in the remaining slots in their current order. Also clears any
+     * maximized flag so the new layout is actually visible.
+     *
+     * @param tabId the tab to rearrange
+     * @param layout one of `grid`, `primary-left`, `primary-right`,
+     *               `primary-top`, `primary-bottom`, `columns`, `rows`
+     * @param primaryPaneId the pane to prioritise, or null/invalid to use
+     *                      the tab's first pane
+     */
+    @Serializable
+    @SerialName("applyLayout")
+    data class ApplyLayout(
+        val tabId: String,
+        val layout: String,
+        val primaryPaneId: String? = null,
+    ) : WindowCommand()
 
     /**
      * Detach a pane from the main window and display it in a separate OS-level
@@ -445,7 +405,8 @@ sealed class WindowCommand {
     data class PopOut(val paneId: String) : WindowCommand()
 
     /**
-     * Return a previously popped-out pane back into the main window's split tree.
+     * Return a previously popped-out pane back into the main window at a
+     * random snap-aligned position on top of any existing panes.
      *
      * @param paneId the popped-out pane to dock back
      * @see PopOut

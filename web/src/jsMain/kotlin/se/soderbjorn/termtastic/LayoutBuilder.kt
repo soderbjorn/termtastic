@@ -1,16 +1,17 @@
 /**
- * Layout builder for the Termtastic web frontend pane tree.
+ * Layout builder for the Termtastic web frontend free-form pane layout.
  *
- * Responsible for recursively constructing the DOM tree from the server-provided
- * pane configuration. Handles terminal pane creation (xterm.js instances with
- * WebSocket PTY connections), file browser panes, git panes, split containers
- * with draggable dividers, floating panes, pane maximize/restore animations,
- * and drag-and-drop for files and pane reordering.
+ * Responsible for constructing the DOM for the server-provided list of panes.
+ * Handles terminal pane creation (xterm.js instances with WebSocket PTY
+ * connections), file browser panes, git panes, per-pane absolute positioning,
+ * drag-to-move (via the titlebar), drag-to-resize (via the bottom-right
+ * corner), pane maximize/restore animations, and drag-and-drop for files and
+ * cross-tab pane reordering.
  *
- * This is the core rendering engine that translates the declarative pane tree
+ * This is the core rendering engine that translates the declarative pane list
  * from the server into a live, interactive DOM.
  *
- * @see buildNode
+ * @see buildPane
  * @see buildLeafCell
  * @see renderConfig
  */
@@ -206,60 +207,6 @@ fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
 }
 
 /**
- * Attaches mouse-drag behavior to a split divider element, allowing the user
- * to resize the two children of a split container by dragging.
- *
- * On mouse-up, persists the new ratio to the server via [WindowCommand.SetRatio].
- *
- * @param divider the divider DOM element to attach drag listeners to
- * @param container the parent split container element
- * @param firstWrap the first child wrapper element
- * @param secondWrap the second child wrapper element
- * @param splitId the unique split identifier for persisting the ratio
- * @param isHorizontal true for horizontal splits (left/right), false for vertical (top/bottom)
- */
-fun attachDividerDrag(
-    divider: HTMLElement, container: HTMLElement,
-    firstWrap: HTMLElement, secondWrap: HTMLElement,
-    splitId: String, isHorizontal: Boolean,
-) {
-    divider.addEventListener("mousedown", { ev ->
-        val mouse = ev as MouseEvent
-        if (mouse.button.toInt() != 0) return@addEventListener
-        mouse.preventDefault()
-        val rect = container.getBoundingClientRect()
-        val total = if (isHorizontal) rect.width else rect.height
-        if (total <= 0.0) return@addEventListener
-        divider.classList.add("dragging")
-        container.classList.add("resizing")
-        val previousBodyCursor = document.body?.style?.cursor ?: ""
-        document.body?.style?.cursor = if (isHorizontal) "col-resize" else "row-resize"
-        var latestRatio = -1.0
-        val moveListener: (org.w3c.dom.events.Event) -> Unit = { evMove ->
-            val m = evMove as MouseEvent
-            val offset = if (isHorizontal) m.clientX - rect.left else m.clientY - rect.top
-            var r = offset / total
-            if (r < 0.05) r = 0.05; if (r > 0.95) r = 0.95
-            latestRatio = r
-            val secondR = 1.0 - r
-            firstWrap.style.flex = "$r $r 0%"
-            secondWrap.style.flex = "$secondR $secondR 0%"
-        }
-        lateinit var upListener: (org.w3c.dom.events.Event) -> Unit
-        upListener = { _ ->
-            document.removeEventListener("mousemove", moveListener)
-            document.removeEventListener("mouseup", upListener)
-            divider.classList.remove("dragging")
-            container.classList.remove("resizing")
-            document.body?.style?.cursor = previousBodyCursor
-            if (latestRatio > 0.0) launchCmd(WindowCommand.SetRatio(splitId = splitId, ratio = latestRatio))
-        }
-        document.addEventListener("mousemove", moveListener)
-        document.addEventListener("mouseup", upListener)
-    })
-}
-
-/**
  * Builds a single leaf pane cell element based on its content kind.
  *
  * Dispatches to the appropriate builder:
@@ -272,10 +219,10 @@ fun attachDividerDrag(
  * @param leaf the dynamic leaf node from the server config
  * @param popoutMode true if this cell is rendered in a pop-out window
  * @return the root HTMLElement for the pane cell
- * @see buildNode
+ * @see buildPane
  * @see buildPaneHeader
  */
-fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false): HTMLElement {
+fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false, maximized: Boolean = false): HTMLElement {
     val paneId = leaf.id as String
     val title = leaf.title as String
     val contentKind: String = (leaf.content?.kind as? String) ?: "terminal"
@@ -287,7 +234,7 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false): HTMLElement {
 
     when (contentKind) {
         "fileBrowser" -> {
-            val header = buildPaneHeader(paneId, title, null, popoutMode = popoutMode)
+            val header = buildPaneHeader(paneId, title, null, popoutMode = popoutMode, maximized = maximized)
             val fbIcon = document.createElement("span") as HTMLElement
             fbIcon.className = "pane-header-icon"
             fbIcon.innerHTML = """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M2 4.5 a0.5 0.5 0 0 1 0.5 -0.5 h3.5 l1.25 1.75 h6.25 a0.5 0.5 0 0 1 0.5 0.5 v7.25 a0.5 0.5 0 0 1 -0.5 0.5 H2.5 a0.5 0.5 0 0 1 -0.5 -0.5 Z"/></svg>"""
@@ -298,10 +245,15 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false): HTMLElement {
             cell.appendChild(fbView)
             val fbRenderedEl = fbView.querySelector(".md-rendered") as? HTMLElement
             fbRenderedEl?.style?.fontSize = "${(appVm.stateFlow.value.paneFontSize ?: 14)}px"
+            // Focus on either titlebar click or anywhere else in the pane body.
+            // The header listener is critical — clicking the title text needs
+            // to activate before the bubble reaches the cell so the in-tab
+            // drag gate sees the correct focused state on the *next* click.
+            header.addEventListener("mousedown", { _ -> markPaneFocused(cell) })
             cell.addEventListener("mousedown", { _ -> markPaneFocused(cell) })
         }
         "git" -> {
-            val header = buildPaneHeader(paneId, title, null, popoutMode = popoutMode)
+            val header = buildPaneHeader(paneId, title, null, popoutMode = popoutMode, maximized = maximized)
             val gitIcon = document.createElement("span") as HTMLElement
             gitIcon.className = "pane-header-icon"
             gitIcon.innerHTML = """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="5" cy="4" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="8" r="1.5"/><line x1="5" y1="5.5" x2="5" y2="10.5"/><path d="M5 5.5 C5 8 8 8 9.5 8"/></svg>"""
@@ -309,12 +261,13 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false): HTMLElement {
             if (gitTitleEl != null) header.insertBefore(gitIcon, gitTitleEl)
             cell.appendChild(header)
             cell.appendChild(buildGitView(paneId, leaf, header))
+            header.addEventListener("mousedown", { _ -> markPaneFocused(cell) })
             cell.addEventListener("mousedown", { _ -> markPaneFocused(cell) })
         }
         else -> {
             val sessionId = (leaf.content?.sessionId as? String) ?: (leaf.sessionId as String)
             val isLink = leaf.isLink as? Boolean ?: false
-            val header = buildPaneHeader(paneId, title, sessionId, popoutMode = popoutMode, isLink = isLink)
+            val header = buildPaneHeader(paneId, title, sessionId, popoutMode = popoutMode, isLink = isLink, maximized = maximized)
             val headerIcon = document.createElement("span") as HTMLElement
             headerIcon.className = "pane-header-icon"
             if (isLink) {
@@ -336,80 +289,35 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false): HTMLElement {
 }
 
 /**
- * Makes a pane cell's header draggable for pane-to-tab drag-and-drop reordering.
+ * Makes the pane's type icon (upper-left of the titlebar) the sole drag
+ * source for cross-tab pane moves. Dragging it sets the pane id as DataTransfer
+ * payload; tab buttons accept the drop via their own listeners in
+ * `WindowConnection.renderConfig`.
  *
- * When the header is dragged, the pane ID is set as transfer data so that tab
- * buttons can accept the drop and move the pane to a different tab.
+ * Keeping the handle scoped to just the icon — not the whole titlebar — means
+ * the rest of the header (title text, spacer, action buttons) is free to host
+ * the in-tab drag-to-move gesture without the two conflicting, and the cross-
+ * tab drag works on both active and inactive panes without the "click to
+ * activate first" gate the titlebar-drag has.
  *
  * @param cell the pane cell element containing the header
  * @param paneId the unique pane identifier to set as drag data
  */
 fun attachPaneTabDrag(cell: HTMLElement, paneId: String) {
-    val header = cell.querySelector(".terminal-header") as? HTMLElement ?: return
-    header.setAttribute("draggable", "true")
-    header.addEventListener("dragstart", { ev ->
-        val target = ev.target
-        if (target != null && (target as HTMLElement).closest(".pane-actions") != null) {
-            ev.preventDefault(); return@addEventListener
-        }
+    val icon = cell.querySelector(".pane-header-icon") as? HTMLElement ?: return
+    icon.setAttribute("draggable", "true")
+    icon.addEventListener("dragstart", { ev ->
         val dt = ev.asDynamic().dataTransfer ?: return@addEventListener
         dt.effectAllowed = "move"
         dt.setData("application/x-termtastic-pane", paneId)
         dt.setData("text/plain", "pane:$paneId")
         cell.classList.add("pane-dragging")
     })
-    header.addEventListener("dragend", { _ ->
+    icon.addEventListener("dragend", { _ ->
         cell.classList.remove("pane-dragging")
         val highlighted = document.querySelectorAll(".tab-button.drop-pane")
         for (i in 0 until highlighted.length) (highlighted.item(i) as HTMLElement).classList.remove("drop-pane")
     })
-}
-
-/**
- * Recursively builds the DOM tree for a pane tree node.
- *
- * For leaf nodes, delegates to [buildLeafCell] and attaches pane drag behavior.
- * For split nodes, creates a flex container with two children separated by a
- * draggable divider, with the split ratio applied via CSS flex properties.
- *
- * @param node a dynamic object with kind "leaf" or "split", from the server config
- * @return the root HTMLElement for this node's subtree
- * @see buildLeafCell
- * @see attachDividerDrag
- */
-fun buildNode(node: dynamic): HTMLElement {
-    if (node.kind == "leaf") {
-        val cell = buildLeafCell(node)
-        attachPaneTabDrag(cell, node.id as String)
-        return cell
-    } else {
-        val splitId = node.id as String
-        val orientation = node.orientation as String
-        val isHorizontal = orientation == "Horizontal"
-        val ratio = (node.ratio as Number).toDouble()
-        val container = document.createElement("div") as HTMLElement
-        container.className = "split ${if (isHorizontal) "split-horizontal" else "split-vertical"}"
-        container.setAttribute("data-split", splitId)
-
-        val firstWrap = document.createElement("div") as HTMLElement
-        firstWrap.className = "split-child"
-        firstWrap.style.flex = "$ratio $ratio 0%"
-        firstWrap.appendChild(buildNode(node.first))
-
-        val secondWrap = document.createElement("div") as HTMLElement
-        secondWrap.className = "split-child"
-        val secondRatio = 1.0 - ratio
-        secondWrap.style.flex = "$secondRatio $secondRatio 0%"
-        secondWrap.appendChild(buildNode(node.second))
-
-        val divider = document.createElement("div") as HTMLElement
-        divider.className = "split-divider ${if (isHorizontal) "split-divider-horizontal" else "split-divider-vertical"}"
-        divider.setAttribute("data-split-divider", splitId)
-        attachDividerDrag(divider, container, firstWrap, secondWrap, splitId, isHorizontal)
-
-        container.appendChild(firstWrap); container.appendChild(divider); container.appendChild(secondWrap)
-        return container
-    }
 }
 
 /**
@@ -439,36 +347,111 @@ fun buildEmptyTabPlaceholder(tabId: String): HTMLElement {
 }
 
 /**
- * Builds a floating (detached) pane element with absolute positioning within its tab.
+ * Builds an absolutely-positioned pane element with move/resize affordances.
  *
- * The pane can be moved by dragging its header and resized via a bottom-right grip.
- * Position and size are expressed as fractions of the tab section dimensions and
- * persisted to the server via [WindowCommand.SetFloatingGeom].
+ * Every pane in the new free-form layout renders through this one function.
+ * The pane is positioned via CSS `left/top/width/height` as percentages of the
+ * tab section, and its `z-index` is set from the server's stacking key. The
+ * titlebar drags to move; a bottom-right corner grip drags to resize. Both
+ * interactions feed raw cursor fractions into [PaneGeometry.normalize] so the
+ * pane visibly snaps to the 10% grid during the drag, and the final geometry
+ * is persisted to the server via [WindowCommand.SetPaneGeom]. A `mousedown`
+ * on an *already-focused* pane fires [WindowCommand.RaisePane] to raise it
+ * above its overlapping neighbours; a first click on an unfocused pane only
+ * activates it (focus but no raise), matching the common desktop-window idiom
+ * where a background pane must be clicked twice to pop to front.
  *
- * @param floater the dynamic floating pane descriptor with leaf, x, y, width, height
- * @param tabSection the parent tab section element used as the coordinate reference
- * @return the floating pane HTMLElement
- * @see WindowCommand.ToggleFloating
- * @see WindowCommand.RaiseFloating
+ * @param paneDesc the dynamic pane descriptor with leaf, x, y, width, height, z
+ * @param tabSection the parent tab section used as the coordinate reference
+ * @return the pane HTMLElement
+ * @see WindowCommand.SetPaneGeom
+ * @see WindowCommand.RaisePane
+ * @see PaneGeometry
  */
-fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
-    val leaf = floater.leaf
+/**
+ * Write the pane's fractional geometry into the CSS custom properties the
+ * `.floating-pane` rule reads. The visible box is offset inward by the shared
+ * `--pane-inset` so two adjacent snap-aligned panes still show a gap between
+ * them — the underlying percentage values stay on the grid.
+ */
+private fun setPaneGeomVars(pane: HTMLElement, x: Double, y: Double, w: Double, h: Double) {
+    val style = pane.style.asDynamic()
+    style.setProperty("--px", "${x * 100}%")
+    style.setProperty("--py", "${y * 100}%")
+    style.setProperty("--pw", "${w * 100}%")
+    style.setProperty("--ph", "${h * 100}%")
+}
+
+fun buildPane(paneDesc: dynamic, tabSection: HTMLElement): HTMLElement {
+    val leaf = paneDesc.leaf
     val paneId = leaf.id as String
-    val x = (floater.x as Number).toDouble()
-    val y = (floater.y as Number).toDouble()
-    val w = (floater.width as Number).toDouble()
-    val h = (floater.height as Number).toDouble()
+    val initialX = (paneDesc.x as Number).toDouble()
+    val initialY = (paneDesc.y as Number).toDouble()
+    val initialW = (paneDesc.width as Number).toDouble()
+    val initialH = (paneDesc.height as Number).toDouble()
+    val z = (paneDesc.z as Number).toDouble()
+    val maximized = paneDesc.maximized as? Boolean ?: false
 
     val pane = document.createElement("div") as HTMLElement
-    pane.className = "floating-pane"
     pane.setAttribute("data-pane", paneId)
-    pane.style.left = "${x * 100}%"; pane.style.top = "${y * 100}%"
-    pane.style.width = "${w * 100}%"; pane.style.height = "${h * 100}%"
+    // Animate across rebuild: if the previous DOM had this pane in the
+    // opposite maximized state, mount the new element in that OLD state
+    // first, then rAF into the new state. That lets the CSS transition on
+    // `.floating-pane` (left/top/width/height) fire, producing the same
+    // smooth grow / shrink we had before the pane-system rewrite.
+    val prior = previousMaximizedStates[paneId]
+    val shouldAnimate = prior != null && prior != maximized
+    val initialMaximized = if (shouldAnimate) !maximized else maximized
+    pane.className = if (initialMaximized) "floating-pane maximized" else "floating-pane"
+    // When maximized the `.maximized` class overrides the geom vars to fill
+    // the tab area via CSS; we still set the vars from the stored geometry
+    // so a later restore snaps back to the same place without the server
+    // needing to round-trip those values.
+    setPaneGeomVars(pane, initialX, initialY, initialW, initialH)
+    pane.style.zIndex = z.toInt().toString()
+    if (shouldAnimate) {
+        window.requestAnimationFrame {
+            if (maximized) pane.classList.add("maximized")
+            else pane.classList.remove("maximized")
+        }
+    }
 
-    val cell = buildLeafCell(leaf)
+    val cell = buildLeafCell(leaf, maximized = maximized)
     pane.appendChild(cell)
+    attachPaneTabDrag(cell, paneId)
 
-    pane.addEventListener("mousedown", { _ -> launchCmd(WindowCommand.RaiseFloating(paneId = paneId)) })
+    // Capture-phase snapshot of focus state. Runs BEFORE any bubble-phase
+    // listener on this mousedown event, so we see whether the pane was
+    // already active *before* the click that might have activated it.
+    // The drag and resize handlers read this to enforce the rule that
+    // first click must activate; only a subsequent click-drag can move
+    // or resize. The raise-on-second-click logic below reads it for the
+    // same reason — a bubble-phase read would see the focused class that
+    // the cell's own mousedown listener has just added, making every
+    // click look like a "second click".
+    var wasFocusedAtMousedown = false
+    pane.addEventListener("mousedown", { _ ->
+        wasFocusedAtMousedown = cell.classList.contains("focused")
+    }, true)
+
+    // Raise only when clicking an already-focused pane. A first click on an
+    // unfocused pane just activates it; the user has to click again to pop
+    // it above overlapping neighbours.
+    //
+    // Skip raising when the mousedown lands on the header. That path either
+    // kicks off the in-tab titlebar drag (which will end with a SetPaneGeom
+    // that the server auto-raises on) or the HTML5 icon-drag (which lands
+    // in a new tab via MovePaneToTab that places the pane at top there).
+    // Firing RaisePane here would push a fresh config mid-drag, rebuilding
+    // the DOM and detaching the element the browser is still tracking
+    // pointer events against — which broke both the titlebar drag visual
+    // and the icon's cross-tab drag.
+    pane.addEventListener("mousedown", { ev ->
+        if (!wasFocusedAtMousedown) return@addEventListener
+        val target = ev.target as? HTMLElement
+        if (target != null && target.closest(".terminal-header") != null) return@addEventListener
+        launchCmd(WindowCommand.RaisePane(paneId = paneId))
+    })
 
     val header = cell.querySelector(".terminal-header") as? HTMLElement
     if (header != null) {
@@ -476,8 +459,18 @@ fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
         header.addEventListener("mousedown", drag@{ ev ->
             val mouse = ev as MouseEvent
             if (mouse.button.toInt() != 0) return@drag
-            val target = ev.target
-            if (target != null && (target as HTMLElement).closest(".pane-actions") != null) return@drag
+            val target = ev.target as? HTMLElement
+            if (target != null && target.closest(".pane-actions") != null) return@drag
+            // The pane-type icon in the upper-left is reserved for HTML5
+            // cross-tab drag — don't start an in-tab move when the user
+            // grabs it.
+            if (target != null && target.closest(".pane-header-icon") != null) return@drag
+            // First click on an unfocused pane only activates it; the user
+            // must release and click again on the titlebar to start dragging.
+            if (!wasFocusedAtMousedown) return@drag
+            // A maximized pane has no meaningful smaller geometry to drag to;
+            // users restore first via the toolbar button.
+            if (pane.classList.contains("maximized")) return@drag
             mouse.preventDefault()
 
             val sectionRect = tabSection.asDynamic().getBoundingClientRect()
@@ -488,23 +481,23 @@ fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
             val paneRect = pane.asDynamic().getBoundingClientRect()
             val grabDx = mouse.clientX.toDouble() - (paneRect.left as Double)
             val grabDy = mouse.clientY.toDouble() - (paneRect.top as Double)
-            val paneWidth = (paneRect.width as Double); val paneHeight = (paneRect.height as Double)
+            // Freeze width/height during move so resize and move don't fight.
+            val curW = (paneRect.width as Double) / sectionWidth
+            val curH = (paneRect.height as Double) / sectionHeight
 
             pane.classList.add("dragging")
             val previousBodyCursor = document.body?.style?.cursor ?: ""
             document.body?.style?.cursor = "grabbing"
-            var latestX = x; var latestY = y
+            var latestX = initialX
+            var latestY = initialY
 
             val moveListener: (org.w3c.dom.events.Event) -> Unit = { evMove ->
                 val m = evMove as MouseEvent
-                var fx = (m.clientX.toDouble() - grabDx - (sectionRect.left as Double)) / sectionWidth
-                var fy = (m.clientY.toDouble() - grabDy - (sectionRect.top as Double)) / sectionHeight
-                val maxX = 1.0 - (paneWidth / sectionWidth)
-                val maxY = 1.0 - (paneHeight / sectionHeight)
-                if (fx < 0.0) fx = 0.0; if (fy < 0.0) fy = 0.0
-                if (fx > maxX) fx = maxX; if (fy > maxY) fy = maxY
-                latestX = fx; latestY = fy
-                pane.style.left = "${fx * 100}%"; pane.style.top = "${fy * 100}%"
+                val rawX = (m.clientX.toDouble() - grabDx - (sectionRect.left as Double)) / sectionWidth
+                val rawY = (m.clientY.toDouble() - grabDy - (sectionRect.top as Double)) / sectionHeight
+                val box = PaneGeometry.normalize(rawX, rawY, curW, curH)
+                latestX = box.x; latestY = box.y
+                setPaneGeomVars(pane, box.x, box.y, box.width, box.height)
             }
             lateinit var upListener: (org.w3c.dom.events.Event) -> Unit
             upListener = { _ ->
@@ -512,8 +505,9 @@ fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
                 document.removeEventListener("mouseup", upListener)
                 pane.classList.remove("dragging")
                 document.body?.style?.cursor = previousBodyCursor
-                launchCmd(WindowCommand.SetFloatingGeom(paneId = paneId, x = latestX, y = latestY,
-                    width = paneWidth / sectionWidth, height = paneHeight / sectionHeight))
+                launchCmd(WindowCommand.SetPaneGeom(
+                    paneId = paneId, x = latestX, y = latestY, width = curW, height = curH,
+                ))
             }
             document.addEventListener("mousemove", moveListener)
             document.addEventListener("mouseup", upListener)
@@ -526,6 +520,12 @@ fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
     grip.addEventListener("mousedown", resize@{ ev ->
         val mouse = ev as MouseEvent
         if (mouse.button.toInt() != 0) return@resize
+        // Guard: resize only on the focused, non-maximized pane. The CSS
+        // already hides the grip unless the pane is focused, but a stale
+        // mousedown could still arrive (e.g. via scripted dispatch), so
+        // enforce the same invariant here.
+        if (!wasFocusedAtMousedown) return@resize
+        if (pane.classList.contains("maximized")) return@resize
         mouse.preventDefault(); mouse.stopPropagation()
 
         val sectionRect = tabSection.asDynamic().getBoundingClientRect()
@@ -540,17 +540,19 @@ fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
         pane.classList.add("dragging")
         val previousBodyCursor = document.body?.style?.cursor ?: ""
         document.body?.style?.cursor = "nwse-resize"
-        var latestW = w; var latestH = h
+        var latestW = initialW
+        var latestH = initialH
 
         val moveListener: (org.w3c.dom.events.Event) -> Unit = { evMove ->
             val m = evMove as MouseEvent
-            var fw = (m.clientX.toDouble() - (sectionRect.left as Double)) / sectionWidth - fxOrigin
-            var fh = (m.clientY.toDouble() - (sectionRect.top as Double)) / sectionHeight - fyOrigin
-            if (fw < 0.05) fw = 0.05; if (fh < 0.05) fh = 0.05
-            if (fw > 1.0 - fxOrigin) fw = 1.0 - fxOrigin
-            if (fh > 1.0 - fyOrigin) fh = 1.0 - fyOrigin
-            latestW = fw; latestH = fh
-            pane.style.width = "${fw * 100}%"; pane.style.height = "${fh * 100}%"
+            val rawW = (m.clientX.toDouble() - (sectionRect.left as Double)) / sectionWidth - fxOrigin
+            val rawH = (m.clientY.toDouble() - (sectionRect.top as Double)) / sectionHeight - fyOrigin
+            // Cap size so the pane's bottom-right corner never leaves the tab area.
+            val capW = kotlin.math.min(rawW, 1.0 - fxOrigin)
+            val capH = kotlin.math.min(rawH, 1.0 - fyOrigin)
+            val box = PaneGeometry.normalize(fxOrigin, fyOrigin, capW, capH)
+            latestW = box.width; latestH = box.height
+            setPaneGeomVars(pane, box.x, box.y, box.width, box.height)
         }
         lateinit var upListener: (org.w3c.dom.events.Event) -> Unit
         upListener = { _ ->
@@ -558,7 +560,9 @@ fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
             document.removeEventListener("mouseup", upListener)
             pane.classList.remove("dragging")
             document.body?.style?.cursor = previousBodyCursor
-            launchCmd(WindowCommand.SetFloatingGeom(paneId = paneId, x = fxOrigin, y = fyOrigin, width = latestW, height = latestH))
+            launchCmd(WindowCommand.SetPaneGeom(
+                paneId = paneId, x = fxOrigin, y = fyOrigin, width = latestW, height = latestH,
+            ))
         }
         document.addEventListener("mousemove", moveListener)
         document.addEventListener("mouseup", upListener)
@@ -567,120 +571,3 @@ fun buildFloatingPane(floater: dynamic, tabSection: HTMLElement): HTMLElement {
     return pane
 }
 
-/**
- * Restores a maximized pane back to its original position within the split layout.
- *
- * Optionally animates the transition from full-tab to original size using CSS
- * transitions. Removes the maximized backdrop and updates the maximize button icon.
- *
- * @param tabId the tab containing the maximized pane
- * @param animate whether to animate the restore transition (default true)
- * @see maximizePane
- */
-fun restorePane(tabId: String, animate: Boolean = true) {
-    val paneId = maximizedPaneIds.remove(tabId) ?: return
-    val cell = document.querySelector(".terminal-cell[data-pane=\"$paneId\"]") as? HTMLElement ?: return
-    val tabPane = findTabPane(cell) ?: return
-    val backdrop = tabPane.querySelector(".maximized-backdrop") as? HTMLElement
-    val btn = cell.querySelector(".pane-maximize-btn") as? HTMLElement
-    btn?.innerHTML = ICON_MAXIMIZE; btn?.setAttribute("title", "Maximize pane")
-
-    if (animate) {
-        val splitChild = cell.parentElement as? HTMLElement
-        val tabRect = tabPane.getBoundingClientRect()
-        val targetRect = splitChild?.getBoundingClientRect()
-        val targetTop = (targetRect?.top ?: 0.0) - tabRect.top
-        val targetLeft = (targetRect?.left ?: 0.0) - tabRect.left
-        val targetWidth = targetRect?.width ?: tabRect.width
-        val targetHeight = targetRect?.height ?: tabRect.height
-
-        cell.classList.remove("maximized")
-        cell.style.position = "absolute"; cell.style.zIndex = "20"
-        cell.style.top = "0px"; cell.style.left = "0px"
-        cell.style.width = "${tabRect.width}px"; cell.style.height = "${tabRect.height}px"
-        cell.classList.add("restoring")
-        cell.offsetHeight // reflow
-        backdrop?.classList?.remove("visible")
-        cell.style.top = "${targetTop}px"; cell.style.left = "${targetLeft}px"
-        cell.style.width = "${targetWidth}px"; cell.style.height = "${targetHeight}px"
-
-        var restored = false
-        cell.addEventListener("transitionend", { ev ->
-            if (restored) return@addEventListener
-            if ((ev.target as? HTMLElement) !== cell) return@addEventListener
-            restored = true
-            cell.classList.remove("restoring")
-            cell.style.removeProperty("position"); cell.style.removeProperty("z-index")
-            cell.style.removeProperty("top"); cell.style.removeProperty("left")
-            cell.style.removeProperty("width"); cell.style.removeProperty("height")
-            backdrop?.remove(); fitVisible()
-        })
-    } else {
-        cell.classList.remove("maximized")
-        cell.style.removeProperty("position"); cell.style.removeProperty("z-index")
-        cell.style.removeProperty("top"); cell.style.removeProperty("left")
-        cell.style.removeProperty("width"); cell.style.removeProperty("height")
-        backdrop?.remove(); fitVisible()
-    }
-}
-
-/**
- * Maximizes a pane to fill its entire tab area, overlaying all other panes.
- *
- * Optionally animates the transition from original size to full-tab. Adds a
- * backdrop overlay that can be clicked to restore. Only one pane per tab can
- * be maximized at a time; maximizing a different pane restores the previous one.
- *
- * @param paneId the pane to maximize
- * @param animate whether to animate the maximize transition (default true)
- * @see restorePane
- */
-fun maximizePane(paneId: String, animate: Boolean = true) {
-    val cell = document.querySelector(".terminal-cell[data-pane=\"$paneId\"]") as? HTMLElement ?: return
-    val tabPane = findTabPane(cell) ?: return
-    val tabId = tabPane.id
-    val prev = maximizedPaneIds[tabId]
-    if (prev != null && prev != paneId) restorePane(tabId, animate = false)
-    maximizedPaneIds[tabId] = paneId
-
-    var backdrop = tabPane.querySelector(".maximized-backdrop") as? HTMLElement
-    if (backdrop == null) {
-        backdrop = document.createElement("div") as HTMLElement
-        backdrop.className = "maximized-backdrop"
-        backdrop.addEventListener("click", { _ -> restorePane(tabId) })
-        tabPane.appendChild(backdrop)
-    }
-
-    if (animate) {
-        val tabRect = tabPane.getBoundingClientRect()
-        val cellRect = cell.getBoundingClientRect()
-        cell.style.position = "absolute"; cell.style.zIndex = "20"
-        cell.style.top = "${cellRect.top - tabRect.top}px"; cell.style.left = "${cellRect.left - tabRect.left}px"
-        cell.style.width = "${cellRect.width}px"; cell.style.height = "${cellRect.height}px"
-        cell.classList.add("maximizing")
-        cell.offsetHeight // reflow
-        backdrop.classList.add("visible")
-        cell.style.top = "0px"; cell.style.left = "0px"
-        cell.style.width = "100%"; cell.style.height = "100%"
-        cell.classList.add("focused")
-
-        var maximized = false
-        cell.addEventListener("transitionend", { ev ->
-            if (maximized) return@addEventListener
-            if ((ev.target as? HTMLElement) !== cell) return@addEventListener
-            maximized = true
-            cell.classList.remove("maximizing"); cell.classList.add("maximized")
-            cell.style.removeProperty("top"); cell.style.removeProperty("left")
-            cell.style.removeProperty("width"); cell.style.removeProperty("height")
-            cell.style.removeProperty("position"); cell.style.removeProperty("z-index")
-            markPaneFocused(cell)
-            terminals[paneId]?.term?.focus(); fitVisible()
-        })
-    } else {
-        cell.classList.add("maximized"); backdrop.classList.add("visible")
-        markPaneFocused(cell); terminals[paneId]?.term?.focus(); fitVisible()
-    }
-
-    val btn = cell.querySelector(".pane-maximize-btn") as? HTMLElement
-    btn?.innerHTML = ICON_RESTORE; btn?.setAttribute("title", "Restore pane")
-}

@@ -19,14 +19,10 @@ import kotlinx.serialization.json.JsonObject
  * Envelopes pushed over the `/window` websocket from server → client. Each
  * message is a JSON Text frame serialized with [windowJson]. The polymorphic
  * discriminator is `"type"` here — different from the `"kind"` discriminator
- * [windowJson] uses globally for the nested `PaneNode` / `LeafContent`
- * hierarchies. We override per-class with [JsonClassDiscriminator] so the
- * outer envelope still serializes as `{"type":"config", …}` while nested
- * `config.tabs[…].root` panes stay on `"kind":"leaf" | "split"`. That
- * preserves byte-for-byte compatibility with the legacy wire format the
- * hand-built `buildJsonObject { put("type", …) }` server code produced, and
- * with the web client's `dynamic`-path incoming parser that still reads
- * `parsed.type`.
+ * [windowJson] uses globally for the nested [LeafContent] hierarchy. We
+ * override per-class with [JsonClassDiscriminator] so the outer envelope
+ * serialises as `{"type":"config", …}` while nested content stays on
+ * `{"kind":"terminal" | "fileBrowser" | "git"}`.
  */
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable

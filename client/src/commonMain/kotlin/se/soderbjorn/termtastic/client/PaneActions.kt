@@ -1,8 +1,8 @@
 /**
- * Shared helper functions for pane-level layout mutations (splitting, adding
- * tabs, finding leaves) that are used by both platform UI code and ViewModels.
+ * Shared helper functions for pane-level layout mutations (adding panes/tabs,
+ * finding leaves) that are used by both platform UI code and ViewModels.
  *
- * These functions operate on [WindowConfig] trees and send [WindowCommand]s
+ * These functions operate on [WindowConfig] snapshots and send [WindowCommand]s
  * through a [WindowSocket] to let the server apply the canonical layout change.
  *
  * @see WindowSocket
@@ -13,17 +13,12 @@ package se.soderbjorn.termtastic.client
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
-import se.soderbjorn.termtastic.LeafNode
-import se.soderbjorn.termtastic.PaneNode
-import se.soderbjorn.termtastic.SplitDirection
-import se.soderbjorn.termtastic.SplitNode
 import se.soderbjorn.termtastic.WindowCommand
 import se.soderbjorn.termtastic.WindowConfig
 
 /**
- * Walk [config] and return every leaf ID (docked, floating, and popped-out)
- * across all tabs. Used by the sidebar to determine which PTY sockets need to
- * be open.
+ * Walk [config] and return every leaf ID (visible and popped-out) across all
+ * tabs. Used by the sidebar to determine which PTY sockets need to be open.
  *
  * @param config the current window layout snapshot, or `null`.
  * @return a set of all leaf pane IDs, or an empty set if [config] is `null`.
@@ -31,16 +26,8 @@ import se.soderbjorn.termtastic.WindowConfig
 fun collectLeafIds(config: WindowConfig?): Set<String> {
     if (config == null) return emptySet()
     val out = HashSet<String>()
-    fun walk(node: PaneNode?) {
-        when (node) {
-            is LeafNode -> out.add(node.id)
-            is SplitNode -> { walk(node.first); walk(node.second) }
-            null -> Unit
-        }
-    }
     for (tab in config.tabs) {
-        walk(tab.root)
-        tab.floating.forEach { out.add(it.leaf.id) }
+        tab.panes.forEach { out.add(it.leaf.id) }
         tab.poppedOut.forEach { out.add(it.leaf.id) }
     }
     return out
@@ -48,8 +35,8 @@ fun collectLeafIds(config: WindowConfig?): Set<String> {
 
 /**
  * Return the pane ID for the leaf whose session ID matches [sessionId], or
- * `null` if no such leaf exists. Searches docked, floating, and popped-out
- * leaves across all tabs.
+ * `null` if no such leaf exists. Searches visible and popped-out leaves
+ * across all tabs.
  *
  * @param config    the current window layout, or `null` (returns `null`).
  * @param sessionId the PTY session identifier to look up.
@@ -57,59 +44,82 @@ fun collectLeafIds(config: WindowConfig?): Set<String> {
  */
 fun findPaneIdBySession(config: WindowConfig?, sessionId: String): String? {
     if (config == null || sessionId.isEmpty()) return null
-    fun walk(node: PaneNode?): String? = when (node) {
-        is LeafNode -> if (node.sessionId == sessionId) node.id else null
-        is SplitNode -> walk(node.first) ?: walk(node.second)
-        null -> null
-    }
     for (tab in config.tabs) {
-        walk(tab.root)?.let { return it }
-        tab.floating.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.id }
+        tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.id }
         tab.poppedOut.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.id }
     }
     return null
 }
 
 /**
- * Add a sibling terminal pane next to [anchorPaneId] by splitting rightwards.
- * Sends a [WindowCommand.SplitTerminal] to the server via [socket].
+ * Return the tab ID that currently holds [paneId], or `null` if the pane
+ * isn't found. Searches visible and popped-out panes across all tabs.
  *
- * @param socket        the live window WebSocket connection.
- * @param anchorPaneId  the pane ID to split next to.
+ * @param config the current window layout, or `null`.
+ * @param paneId the pane ID to locate.
+ * @return the owning tab ID, or `null`.
+ */
+fun findTabIdOfPane(config: WindowConfig?, paneId: String): String? {
+    if (config == null || paneId.isEmpty()) return null
+    for (tab in config.tabs) {
+        if (tab.panes.any { it.leaf.id == paneId } ||
+            tab.poppedOut.any { it.leaf.id == paneId }
+        ) return tab.id
+    }
+    return null
+}
+
+/**
+ * Add a new terminal pane to the tab that currently holds [anchorPaneId].
+ * Sends a [WindowCommand.AddPaneToTab] to the server via [socket]. No-op if
+ * the anchor pane can't be located.
+ *
+ * @param socket         the live window WebSocket connection.
+ * @param anchorPaneId   the pane ID whose tab should receive the new pane.
+ * @param config         the current window layout snapshot used to resolve
+ *                       the anchor pane's tab id.
  */
 suspend fun addSiblingTerminal(
     socket: WindowSocket,
     anchorPaneId: String,
+    config: WindowConfig?,
 ) {
-    socket.send(WindowCommand.SplitTerminal(anchorPaneId, SplitDirection.Right))
+    val tabId = findTabIdOfPane(config, anchorPaneId) ?: return
+    socket.send(WindowCommand.AddPaneToTab(tabId))
 }
 
 /**
- * Add a sibling file-browser pane next to [anchorPaneId] by splitting rightwards.
- * Sends a [WindowCommand.SplitFileBrowser] to the server via [socket].
+ * Add a new file-browser pane to the tab that currently holds [anchorPaneId].
+ * Sends a [WindowCommand.AddFileBrowserToTab] to the server via [socket].
  *
- * @param socket        the live window WebSocket connection.
- * @param anchorPaneId  the pane ID to split next to.
+ * @param socket         the live window WebSocket connection.
+ * @param anchorPaneId   the pane ID whose tab should receive the new pane.
+ * @param config         the current window layout snapshot.
  */
 suspend fun addSiblingFileBrowser(
     socket: WindowSocket,
     anchorPaneId: String,
+    config: WindowConfig?,
 ) {
-    socket.send(WindowCommand.SplitFileBrowser(anchorPaneId, SplitDirection.Right))
+    val tabId = findTabIdOfPane(config, anchorPaneId) ?: return
+    socket.send(WindowCommand.AddFileBrowserToTab(tabId))
 }
 
 /**
- * Add a sibling git pane next to [anchorPaneId] by splitting rightwards.
- * Sends a [WindowCommand.SplitGit] to the server via [socket].
+ * Add a new git pane to the tab that currently holds [anchorPaneId].
+ * Sends a [WindowCommand.AddGitToTab] to the server via [socket].
  *
- * @param socket        the live window WebSocket connection.
- * @param anchorPaneId  the pane ID to split next to.
+ * @param socket         the live window WebSocket connection.
+ * @param anchorPaneId   the pane ID whose tab should receive the new pane.
+ * @param config         the current window layout snapshot.
  */
 suspend fun addSiblingGit(
     socket: WindowSocket,
     anchorPaneId: String,
+    config: WindowConfig?,
 ) {
-    socket.send(WindowCommand.SplitGit(anchorPaneId, SplitDirection.Right))
+    val tabId = findTabIdOfPane(config, anchorPaneId) ?: return
+    socket.send(WindowCommand.AddGitToTab(tabId))
 }
 
 /**

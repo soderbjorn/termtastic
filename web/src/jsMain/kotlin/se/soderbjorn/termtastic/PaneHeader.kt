@@ -4,10 +4,12 @@
  * Builds the header bar that appears at the top of each pane, containing:
  * - A renameable title (hover + click or double-click to rename)
  * - A connection status dot (for terminal panes)
- * - Action buttons: split/float/dock, maximize/restore, copy path, reformat, close
- * - A split flyout with compass-style directional split buttons
+ * - Action buttons: new window, maximize/restore, copy path, reformat, close
  *
- * The header also supports drag-and-drop for pane reordering (via [attachPaneTabDrag]).
+ * The "new window" button opens the pane-type modal scoped to the current
+ * tab, letting the user create another pane (terminal, file browser, git,
+ * linked view). The header also supports drag-and-drop for pane reordering
+ * (via [attachPaneTabDrag]).
  *
  * @see buildPaneHeader
  * @see buildLeafCell
@@ -19,16 +21,18 @@ import kotlinx.browser.window
 import kotlinx.serialization.encodeToString
 import org.w3c.dom.HTMLElement
 
-/** SVG icon for the maximize button. Shared with [LayoutBuilder] for the restore animation. */
-val ICON_MAXIMIZE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1.5"/></svg>"""
-/** SVG icon for the restore button, shown when a pane is maximized. */
-val ICON_RESTORE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="15" height="15" rx="1.5"/><path d="M6 7H4.5A1.5 1.5 0 0 0 3 8.5V21a1.5 1.5 0 0 0 1.5 1.5H17A1.5 1.5 0 0 0 18.5 21v-1.5"/></svg>"""
+/** Material Symbols "open_in_full": two diagonal arrows pointing outward. */
+val ICON_MAXIMIZE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 20H4v-6"/><line x1="20" y1="4" x2="14" y2="10"/><line x1="4" y1="20" x2="10" y2="14"/></svg>"""
+/** Material Symbols "close_fullscreen": two diagonal arrows pointing inward. */
+val ICON_RESTORE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><line x1="10" y1="14" x2="4" y2="20"/><line x1="14" y1="10" x2="20" y2="4"/></svg>"""
 
-private val ICON_SPLIT = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><line x1="12" y1="4" x2="12" y2="20"/></svg>"""
-private val ICON_FLOAT = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="13" rx="1.5"/><line x1="4" y1="9" x2="20" y2="9"/></svg>"""
+/** Material Symbols "splitscreen_add" style: a split rect with a plus in one half. */
+private val ICON_NEW_WINDOW = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1.5"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="15" y1="12" x2="21" y2="12"/><line x1="18" y1="9" x2="18" y2="15"/></svg>"""
+/** SVG icon for the "Dock" button shown only in popout mode. */
 private val ICON_DOCK = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1.5"/><line x1="3" y1="9" x2="21" y2="9"/></svg>"""
 private val ICON_POP_OUT = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><line x1="10" y1="14" x2="20" y2="4"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>"""
-private val ICON_COPY = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>"""
+/** Material Symbols "content_copy": foreground page with a back page peeking out. */
+private val ICON_COPY = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="13" height="13" rx="1.5"/><path d="M16 8V4.5A1.5 1.5 0 0 0 14.5 3H4.5A1.5 1.5 0 0 0 3 4.5v10A1.5 1.5 0 0 0 4.5 16H8"/></svg>"""
 private val ICON_REFORMAT = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="1.5"/><polyline points="7 10 4 12 7 14"/><polyline points="17 10 20 12 17 14"/></svg>"""
 private val ICON_CLOSE = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>"""
 /** SVG icon for the "Create worktree" button: a git branch with a plus sign. */
@@ -79,6 +83,7 @@ fun buildPaneHeader(
     sessionId: String? = null,
     popoutMode: Boolean = false,
     isLink: Boolean = false,
+    maximized: Boolean = false,
     extraControls: List<HTMLElement> = emptyList(),
 ): HTMLElement {
     val header = document.createElement("div") as HTMLElement
@@ -141,13 +146,9 @@ fun buildPaneHeader(
             if (hasLinks) "Close all" else "Close",
         ) {
             val cell = (header.parentElement as? HTMLElement)
-            val splitChild = cell?.parentElement as? HTMLElement
-            val animTarget: HTMLElement? = when {
-                splitChild?.classList?.contains("split-child") == true -> splitChild
-                cell?.parentElement?.classList?.contains("floating-pane") == true ->
-                    cell.parentElement as? HTMLElement
-                else -> cell
-            }
+            val animTarget: HTMLElement? = if (cell?.parentElement?.classList?.contains("floating-pane") == true) {
+                cell.parentElement as? HTMLElement
+            } else cell
             animTarget?.classList?.add("leaving")
             window.setTimeout({
                 if (hasLinks && sessionId != null) {
@@ -159,6 +160,9 @@ fun buildPaneHeader(
         }
     }
 
+    // Pane-scoped action buttons (operating on this pane's type/context)
+    // come first, followed by a [pane-actions-sep] spacer, then the
+    // window-level buttons (pop out, new window, maximize, close).
     if (sessionId != null) {
         actions.appendChild(makeIconBtn("Reformat", ICON_REFORMAT, { _ ->
             val entry = terminals[paneId] ?: return@makeIconBtn
@@ -166,95 +170,9 @@ fun buildPaneHeader(
         }, "reformat"))
     }
 
-    if (popoutMode) {
-        actions.appendChild(makeIconBtn("Dock", ICON_DOCK, { _ ->
-            launchCmd(WindowCommand.DockPoppedOut(paneId = paneId))
-            val api = window.asDynamic().electronApi
-            if (api?.closePopout != null) api.closePopout(paneId) else window.close()
-        }))
-    } else {
-        val floating = isPaneFloating(paneId)
-        val splitWrap = document.createElement("div") as HTMLElement
-        splitWrap.className = "pane-split-wrap"
-
-        val flyout = document.createElement("div") as HTMLElement
-        flyout.className = "pane-split-flyout"
-
-        val splitBtn = makeIconBtn("Pane layout", ICON_SPLIT, { ev ->
-            val btn = ev.currentTarget as HTMLElement
-            val openFlyouts = document.querySelectorAll(".pane-split-flyout.open")
-            for (i in 0 until openFlyouts.length) {
-                val other = openFlyouts.item(i) as HTMLElement
-                if (other !== flyout) other.classList.remove("open")
-            }
-            val opening = !flyout.classList.contains("open")
-            flyout.classList.toggle("open")
-            if (opening) {
-                val rect = btn.asDynamic().getBoundingClientRect()
-                val right = rect.right as Double
-                val bottom = rect.bottom as Double
-                val flyoutWidth = flyout.asDynamic().offsetWidth as Number
-                val leftPos = (right - flyoutWidth.toDouble()).coerceAtLeast(4.0)
-                flyout.style.left = "${leftPos}px"
-                flyout.style.top = "${bottom + 4}px"
-            }
-        })
-        splitWrap.appendChild(splitBtn)
-
-        if (!floating) {
-            val compass = document.createElement("div") as HTMLElement
-            compass.className = "pane-split-compass"
-            fun addDir(cssCls: String, titleTxt: String, arrowSvg: String, dir: SplitDirection) {
-                val b = makeIconBtn(titleTxt, arrowSvg, { _ ->
-                    flyout.classList.remove("open")
-                    showPaneTypeModal(paneId, dir, null)
-                }, cssCls)
-                compass.appendChild(b)
-            }
-            val arrowUp = """<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 14 12 8 18 14"/></svg>"""
-            val arrowDown = """<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 10 12 16 18 10"/></svg>"""
-            val arrowLeft = """<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="14 6 8 12 14 18"/></svg>"""
-            val arrowRight = """<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 6 16 12 10 18"/></svg>"""
-            addDir("dir-up", "Split up", arrowUp, SplitDirection.Up)
-            addDir("dir-left", "Split left", arrowLeft, SplitDirection.Left)
-            addDir("dir-right", "Split right", arrowRight, SplitDirection.Right)
-            addDir("dir-down", "Split down", arrowDown, SplitDirection.Down)
-            flyout.appendChild(compass)
-
-            val sep = document.createElement("div") as HTMLElement
-            sep.className = "pane-split-sep"
-            flyout.appendChild(sep)
-        }
-
-        fun addMenuItem(label: String, svg: String, onClick: () -> Unit) {
-            val item = document.createElement("button") as HTMLElement
-            item.className = "pane-split-item"
-            item.setAttribute("type", "button")
-            item.innerHTML = """<span class="pane-split-item-icon">$svg</span><span class="pane-split-item-label">$label</span>"""
-            item.addEventListener("click", { ev ->
-                ev.stopPropagation()
-                flyout.classList.remove("open")
-                onClick()
-            })
-            flyout.appendChild(item)
-        }
-
-        addMenuItem(
-            if (floating) "Dock pane" else "Float pane",
-            if (floating) ICON_DOCK else ICON_FLOAT,
-        ) { launchCmd(WindowCommand.ToggleFloating(paneId = paneId)) }
-
-        val electronApi = window.asDynamic().electronApi
-        if (electronApi?.popOutPane != null) {
-            addMenuItem("Pop out to window", ICON_POP_OUT) {
-                launchCmd(WindowCommand.PopOut(paneId = paneId))
-                electronApi.popOutPane(paneId, title)
-            }
-        }
-
-        document.body?.appendChild(flyout)
-        actions.appendChild(splitWrap)
-    }
+    actions.appendChild(makeIconBtn("Create worktree", ICON_WORKTREE, { _ ->
+        launchCmd(WindowCommand.GetWorktreeDefaults(paneId = paneId))
+    }))
 
     if (fileBrowserPaneStates.containsKey(paneId)) {
         actions.appendChild(makeIconBtn("Copy path", ICON_COPY, { _ ->
@@ -263,21 +181,44 @@ fun buildPaneHeader(
         }))
     }
 
-    actions.appendChild(makeIconBtn("Create worktree", ICON_WORKTREE, { _ ->
-        launchCmd(WindowCommand.GetWorktreeDefaults(paneId = paneId))
-    }))
+    val sep = document.createElement("div") as HTMLElement
+    sep.className = "pane-actions-sep"
+    actions.appendChild(sep)
 
-    if (!popoutMode && !isPaneFloating(paneId)) {
-        val isMaximized = maximizedPaneIds.values.contains(paneId)
+    if (popoutMode) {
+        actions.appendChild(makeIconBtn("Dock", ICON_DOCK, { _ ->
+            launchCmd(WindowCommand.DockPoppedOut(paneId = paneId))
+            val api = window.asDynamic().electronApi
+            if (api?.closePopout != null) api.closePopout(paneId) else window.close()
+        }))
+    } else {
+        val electronApi = window.asDynamic().electronApi
+        if (electronApi?.popOutPane != null) {
+            actions.appendChild(makeIconBtn("Pop out to window", ICON_POP_OUT, { _ ->
+                launchCmd(WindowCommand.PopOut(paneId = paneId))
+                electronApi.popOutPane(paneId, title)
+            }))
+        }
+    }
+
+    if (!popoutMode) {
+        actions.appendChild(makeIconBtn("New window", ICON_NEW_WINDOW, { _ ->
+            val tabPane = findTabPane(header) ?: return@makeIconBtn
+            val tabId = tabPane.id
+            if (tabId.isNotEmpty()) showPaneTypeModal(anchorPaneId = paneId, emptyTabId = tabId)
+        }))
+
+        // The authoritative maximized state lives on the server; the flag
+        // flows in through [maximized] so the icon and tooltip render
+        // correctly on the very first paint (before the pane is attached
+        // to the DOM, so we can't read the `.maximized` class off an
+        // ancestor here). Clicking dispatches [ToggleMaximized]; the
+        // server flips the flag and re-pushes the config, which triggers
+        // a full pane rebuild with the new icon/tooltip.
         val maxBtn = makeIconBtn(
-            if (isMaximized) "Restore pane" else "Maximize pane",
-            if (isMaximized) ICON_RESTORE else ICON_MAXIMIZE,
-            { _ ->
-                val tabPane = findTabPane(header)
-                val tabId = tabPane?.id ?: return@makeIconBtn
-                if (maximizedPaneIds[tabId] == paneId) restorePane(tabId)
-                else maximizePane(paneId)
-            },
+            if (maximized) "Restore pane" else "Maximize pane",
+            if (maximized) ICON_RESTORE else ICON_MAXIMIZE,
+            { _ -> launchCmd(WindowCommand.ToggleMaximized(paneId = paneId)) },
             "pane-maximize-btn",
         )
         actions.appendChild(maxBtn)

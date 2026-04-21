@@ -1,15 +1,17 @@
 /**
- * Data model for the window/tab/pane layout tree in Termtastic. Defines the
- * complete structure that the server persists and pushes to clients: tabs
- * containing binary split trees of leaf panes (terminals, file browsers, git
- * views), plus floating and popped-out pane overlays.
+ * Data model for the free-form pane layout in Termtastic. Each tab owns a
+ * flat list of [Pane]s, each with an absolute `(x, y, width, height, z)` in
+ * fractions of the tab content area. Panes may overlap; higher [Pane.z] wins
+ * the stacking order. There is no split tree — geometry is the only layout
+ * language now.
  *
  * The server is the single source of truth. Clients render this model and
- * send [WindowCommand] mutations; the server applies them and broadcasts
- * the updated [WindowConfig] via [WindowEnvelope.Config].
+ * send [WindowCommand] mutations; the server applies them and broadcasts the
+ * updated [WindowConfig] via [WindowEnvelope.Config].
  *
  * @see WindowCommand for client-to-server mutations
  * @see WindowEnvelope.Config for the server-to-client push
+ * @see PaneGeometry for the snap-and-clamp policy every pane obeys
  * @see windowJson for the shared serialization configuration
  */
 package se.soderbjorn.termtastic
@@ -18,9 +20,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Window configuration: an ordered list of tabs, each holding a binary tree of
- * panes. Leaves are bound to a terminal session id; splits hold an orientation
- * and the relative size of the first child.
+ * Window configuration: an ordered list of tabs, each holding a flat list of
+ * absolutely-positioned panes.
  *
  * The server is the single source of truth for this structure. Clients render
  * it and send mutation commands; the server pushes the updated config back to
@@ -39,9 +40,9 @@ data class WindowConfig(
 )
 
 /**
- * Configuration for a single tab in the window layout. Each tab contains an
- * optional binary split tree of docked panes, plus independent lists of
- * floating and popped-out panes.
+ * Configuration for a single tab. Each tab contains zero or more free-form
+ * [Pane]s (ordered by creation; stacking is determined by [Pane.z]) plus an
+ * independent list of panes currently displayed in their own OS window.
  *
  * @see WindowConfig.tabs
  */
@@ -50,31 +51,19 @@ data class TabConfig(
     val id: String,
     val title: String,
     /**
-     * The split tree for this tab, or `null` if the tab currently has no docked
-     * panes (e.g. the user closed every pane in the tree). An empty tab is
-     * still represented in [WindowConfig.tabs] — it just shows an empty-state
-     * placeholder client-side. A tab with `root == null` may still hold
-     * [floating] panes; conversely, a tab with no root *and* no floating panes
-     * is fine and renders the "New pane" placeholder.
+     * Every visible pane in this tab. May be empty (the client renders an
+     * empty-state placeholder). Panes may overlap; the rendering client sorts
+     * by [Pane.z] ascending so higher-z panes draw on top.
      */
-    val root: PaneNode?,
+    val panes: List<Pane> = emptyList(),
     /**
-     * Free-floating panes that live on top of [root] within the tab area.
-     * Each entry stores its position/size as fractions of the tab's bounding
-     * box so window resizes preserve relative geometry. Z-order is the entry
-     * order (last entry renders on top); [FloatingPane.z] is the persisted
-     * stacking key used to compute that order on rehydrate.
-     */
-    val floating: List<FloatingPane> = emptyList(),
-    /**
-     * Panes that have been detached from both the split tree and the floating
-     * layer and are now displayed in a separate OS window (a new Electron
+     * Panes that have been detached into a separate OS window (an Electron
      * BrowserWindow). The server only tracks which panes are popped out so
-     * that (a) the main window can omit them from the layout and (b) their
-     * PTY sessions are kept alive. The new window's size/position is managed
-     * by the OS and not persisted here — popped-out panes dock back into the
-     * tree on server rehydrate, since the Electron windows don't survive a
-     * server restart.
+     * that (a) the main window can omit them from [panes] and (b) their PTY
+     * sessions are kept alive. The new window's geometry is managed by the
+     * OS and not persisted here — popped-out panes dock back into [panes]
+     * on server rehydrate since the Electron windows don't survive a server
+     * restart.
      */
     val poppedOut: List<PoppedOutPane> = emptyList(),
     /**
@@ -87,61 +76,56 @@ data class TabConfig(
 )
 
 /**
- * A pane that has been detached from both the split tree and the floating
- * layer and is being rendered in its own OS-level window (a separate
- * Electron BrowserWindow). Only the [leaf] is tracked server-side; window
- * geometry is owned by the OS / Electron.
+ * A free-form pane within a tab. Position and size are fractions of the
+ * tab content area's width and height; [z] is the stacking key (higher
+ * renders on top). All geometry is snapped to a 10% grid — see
+ * [PaneGeometry].
+ */
+@Serializable
+data class Pane(
+    /** The content descriptor for this pane (terminal, file browser, git). */
+    val leaf: LeafNode,
+    /** Top-left x as a fraction of the tab area's width, snapped to [PaneGeometry.SNAP]. */
+    val x: Double,
+    /** Top-left y as a fraction of the tab area's height, snapped to [PaneGeometry.SNAP]. */
+    val y: Double,
+    /** Width as a fraction of the tab area's width, snapped. */
+    val width: Double,
+    /** Height as a fraction of the tab area's height, snapped. */
+    val height: Double,
+    /** Stacking order key — higher renders on top. Raised by [WindowCommand.RaisePane]. */
+    val z: Long,
+    /**
+     * Whether this pane is currently maximized (drawn fullscreen on top of its
+     * tab regardless of [x]/[y]/[width]/[height]). The stored geometry is
+     * preserved unchanged so toggling this off restores the pane to its prior
+     * size and position. At most one pane per tab should have this set; the
+     * server enforces the mutual exclusion in `toggleMaximized`.
+     */
+    val maximized: Boolean = false,
+)
+
+/**
+ * A pane that has been detached from its tab's [TabConfig.panes] list and is
+ * being rendered in its own OS-level window (a separate Electron
+ * BrowserWindow). Only the [leaf] is tracked server-side; window geometry is
+ * owned by the OS / Electron.
  */
 @Serializable
 data class PoppedOutPane(val leaf: LeafNode)
 
 /**
- * A pane that has been detached from its tab's split tree and is rendered as
- * a draggable, free-positioned window inside the tab area. Geometry is stored
- * in *relative* units (fractions of the tab area, all in `[0, 1]`) so the
- * pane keeps its visual position when the browser window is resized.
- */
-@Serializable
-data class FloatingPane(
-    val leaf: LeafNode,
-    /** Top-left x as a fraction of the tab area's width. */
-    val x: Double,
-    /** Top-left y as a fraction of the tab area's height. */
-    val y: Double,
-    /** Width as a fraction of the tab area's width. */
-    val width: Double,
-    /** Height as a fraction of the tab area's height. */
-    val height: Double,
-    /** Stacking order key — higher renders on top. Updated by raiseFloating. */
-    val z: Long,
-)
-
-/**
- * A node in the binary split tree that defines the pane layout within a tab.
- * Either a [LeafNode] (a single pane displaying content) or a [SplitNode]
- * (a container that divides space between two children).
+ * The content descriptor for a [Pane]. Each leaf carries its own id
+ * (distinct from the tab and from other leaves in the same tab), the PTY
+ * session id (for terminal leaves), a display title, and content-specific
+ * state in [content].
  *
- * @see LeafNode
- * @see SplitNode
+ * Until the free-form refactor this was a subtype of a sealed `PaneNode`
+ * class alongside `SplitNode`. Splits are gone; leaves are now stand-alone.
  */
 @Serializable
-sealed class PaneNode {
-    /** Unique identifier for this node, used in [WindowCommand] messages to target it. */
-    abstract val id: String
-}
-
-/**
- * A terminal leaf in the pane tree representing a single visible pane. The
- * [content] field determines what the pane displays (terminal, file browser,
- * or git overview).
- *
- * @see LeafContent
- * @see SplitNode
- */
-@Serializable
-@SerialName("leaf")
 data class LeafNode(
-    override val id: String,
+    val id: String,
     /**
      * For terminal leaves, the live PTY session id. Kept as a top-level field
      * (rather than only inside [TerminalContent]) so persisted blobs from
@@ -171,18 +155,16 @@ data class LeafNode(
     val content: LeafContent? = null,
     /**
      * `true` when this pane is a linked view into another pane's session
-     * (created via [SplitLink] or [AddLinkToTab]). Closing a link only
-     * removes that single view; closing the *original* (non-link) pane
-     * cascades to close all linked views of the same session.
+     * (created via [WindowCommand.AddLinkToTab]). Closing a link only removes
+     * that single view; closing the *original* (non-link) pane cascades to
+     * close all linked views of the same session.
      */
     val isLink: Boolean = false,
-) : PaneNode()
+)
 
 /**
  * What a [LeafNode] is actually showing. The discriminator is the shared
- * `"kind"` field configured in [windowJson], which is fine because
- * [LeafContent] always appears nested inside a [LeafNode] — not at the same
- * object level as [PaneNode]'s discriminator.
+ * `"kind"` field configured in [windowJson].
  */
 @Serializable
 sealed class LeafContent
@@ -271,40 +253,3 @@ enum class GitDiffMode {
     /** Side-by-side diff with old content on the left and new on the right. */
     Split
 }
-
-/**
- * An interior node in the pane tree that divides its space between two children.
- * The [orientation] determines whether children are laid out horizontally or
- * vertically, and [ratio] controls the relative size of the first child.
- *
- * @see PaneNode
- * @see SplitOrientation
- */
-@Serializable
-@SerialName("split")
-data class SplitNode(
-    override val id: String,
-    val orientation: SplitOrientation,
-    /** Relative size of [first], in (0, 1). [second] gets `1 - ratio`. */
-    val ratio: Double,
-    val first: PaneNode,
-    val second: PaneNode
-) : PaneNode()
-
-/**
- * Orientation of a [SplitNode], determining how its two children are arranged.
- */
-@Serializable
-enum class SplitOrientation {
-    /** Children laid out side-by-side (CSS `flex-direction: row`). */
-    Horizontal,
-    /** Children stacked top-to-bottom (CSS `flex-direction: column`). */
-    Vertical
-}
-
-/**
- * Direction in which a pane is split when creating a new sibling pane.
- * Used by split commands (e.g. [WindowCommand.SplitTerminal]) to specify
- * where the new pane appears relative to the existing one.
- */
-enum class SplitDirection { Left, Right, Up, Down }

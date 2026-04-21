@@ -86,9 +86,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import se.soderbjorn.termtastic.LeafNode
-import se.soderbjorn.termtastic.PaneNode
-import se.soderbjorn.termtastic.SplitNode
 import se.soderbjorn.termtastic.WindowConfig
 import android.content.Context
 import android.view.inputmethod.InputMethodManager
@@ -146,14 +143,8 @@ private data class AndroidGridDims(
  */
 private fun findLeafTitle(config: WindowConfig?, sessionId: String): String? {
     if (config == null) return null
-    fun walk(node: PaneNode?): String? = when (node) {
-        is LeafNode -> if (node.sessionId == sessionId) node.title else null
-        is SplitNode -> walk(node.first) ?: walk(node.second)
-        null -> null
-    }
     for (tab in config.tabs) {
-        walk(tab.root)?.let { return it }
-        tab.floating.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.title }
+        tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.title }
         tab.poppedOut.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.title }
     }
     return null

@@ -56,7 +56,15 @@ internal val gitPaneVms = HashMap<String, Pair<GitPaneBackingViewModel, Job>>()
 // ── Rendering-only state (client-local, not in VMs) ─────────────────
 internal var activeTabId: String? = null
 internal var currentConfig: dynamic = null
-internal val maximizedPaneIds = mutableMapOf<String, String>()
+/**
+ * Per-pane maximized state captured just before `renderConfig` wipes the DOM,
+ * so that [buildPane] can rebuild the pane in its PREVIOUS class state first
+ * and then schedule a `requestAnimationFrame` flip to the new state — that
+ * triggers the `.floating-pane` left/top/width/height CSS transition and
+ * gives us the old animated maximize/restore back even though each config
+ * update recreates every pane element.
+ */
+internal val previousMaximizedStates = HashMap<String, Boolean>()
 internal val collapsedTabs = HashSet<String>()
 internal val previousTabIds = HashSet<String>()
 internal val previousPaneIds = HashSet<String>()
@@ -119,22 +127,6 @@ internal fun updateAggregateStatus() {
 }
 
 /**
- * Checks whether a pane is currently in floating mode (detached from the split tree).
- *
- * @param paneId the pane identifier to check
- * @return true if the pane is in any tab's floating list
- */
-internal fun isPaneFloating(paneId: String): Boolean {
-    val cfg = appVm.stateFlow.value.config ?: return false
-    for (tab in cfg.tabs) {
-        for (fp in tab.floating) {
-            if (fp.leaf.id == paneId) return true
-        }
-    }
-    return false
-}
-
-/**
  * Walks up the DOM tree from the given element to find the nearest ancestor
  * with the "tab-pane" CSS class.
  *
@@ -162,14 +154,8 @@ internal fun countPanesForSession(sessionId: String?): Int {
     if (sessionId.isNullOrEmpty()) return 0
     val cfg = appVm.stateFlow.value.config ?: return 0
     var count = 0
-    fun walk(node: PaneNode?) {
-        if (node == null) return
-        if (node is LeafNode) { if (node.sessionId == sessionId) count++ }
-        else if (node is SplitNode) { walk(node.first); walk(node.second) }
-    }
     for (tab in cfg.tabs) {
-        walk(tab.root)
-        for (fp in tab.floating) if (fp.leaf.sessionId == sessionId) count++
+        for (p in tab.panes) if (p.leaf.sessionId == sessionId) count++
         for (po in tab.poppedOut) if (po.leaf.sessionId == sessionId) count++
     }
     return count
@@ -185,16 +171,6 @@ internal fun countPanesForSession(sessionId: String?): Int {
  */
 internal fun shellQuote(p: String): String = "'" + p.replace("'", "'\\''") + "'"
 
-/**
- * Recursively collects all pane IDs from a pane tree node into a set.
- *
- * @param node a dynamic pane tree node (leaf or split)
- * @param into the mutable set to add pane IDs to
- */
-internal fun collectPaneIds(node: dynamic, into: HashSet<String>) {
-    if (node.kind == "leaf") into.add(node.id as String)
-    else { collectPaneIds(node.first, into); collectPaneIds(node.second, into) }
-}
 
 /**
  * Looks up the server-persisted focused pane ID for a given tab.
@@ -219,7 +195,9 @@ internal fun savedFocusedPaneId(tabId: String): String? {
  * Marks a pane cell as focused, removing the "focused" class from all other cells.
  *
  * Also updates the sidebar active-pane highlight and sends a [WindowCommand.SetFocusedPane]
- * to persist the focus on the server.
+ * to persist the focus on the server. Does *not* raise the pane — raising on click is
+ * handled by the pane-level mousedown listener in [buildPane], which only raises when
+ * the pane was already focused before the click (i.e. a second click on the active pane).
  *
  * @param cell the pane cell DOM element to mark as focused
  */
@@ -264,7 +242,12 @@ internal fun focusFirstPaneInActiveTab(): Boolean {
     if (rememberedPaneId != null) {
         val entry = terminals[rememberedPaneId]
         if (entry != null) { entry.term.focus(); return true }
-        val cell = activePane.querySelector("[data-pane=\"$rememberedPaneId\"]") as? HTMLElement
+        // Scope to `.terminal-cell` — the outer `.floating-pane` also
+        // carries `data-pane`, and an unscoped selector would match it
+        // first, feeding `markPaneFocused` the wrong element (which would
+        // strip `focused` from every real cell and add it to the wrapper
+        // where the `.terminal-cell.focused` CSS rule doesn't apply).
+        val cell = activePane.querySelector(".terminal-cell[data-pane=\"$rememberedPaneId\"]") as? HTMLElement
         if (cell != null) { markPaneFocused(cell); return true }
     }
     val paneCells = activePane.querySelectorAll("[data-pane]")
@@ -715,15 +698,10 @@ internal fun updateStateIndicators(sessionStates: Map<String, String?>) {
         }
     }
     val cfg = appVm.stateFlow.value.config ?: return
-    fun collectSids(node: PaneNode?, into: MutableList<String>) {
-        if (node is LeafNode) into.add(node.sessionId)
-        else if (node is SplitNode) { collectSids(node.first, into); collectSids(node.second, into) }
-    }
     for (tab in cfg.tabs) {
         val tabId = tab.id
         val sids = mutableListOf<String>()
-        if (tab.root != null) collectSids(tab.root, sids)
-        for (fp in tab.floating) sids.add(fp.leaf.sessionId)
+        for (p in tab.panes) sids.add(p.leaf.sessionId)
         var tabState: String? = null
         for (sid in sids) {
             when (effective[sid]) {

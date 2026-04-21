@@ -12,8 +12,8 @@
  *  - [Application.module] installs Ktor plugins (ContentNegotiation, WebSockets)
  *    and defines all HTTP routes and WebSocket endpoints.
  *  - `/pty/{id}` WebSocket: bidirectional terminal I/O for a single PTY session.
- *  - `/window` WebSocket: pushes the live [WindowConfig] tree and handles all
- *    UI commands (split, close, rename, file-browser, git, settings, etc.).
+ *  - `/window` WebSocket: pushes the live [WindowConfig] and handles all
+ *    UI commands (new pane, close, rename, drag/resize, file-browser, git, etc.).
  *  - `/api/ui-settings` REST: get/merge the client-side UI preferences blob.
  *
  * Also contains [TerminalSessions] (the process-wide PTY registry) and
@@ -129,25 +129,19 @@ fun main() {
     val lastSavedBytes = ConcurrentHashMap<String, Long>()
 
     suspend fun saveAllScrollback(force: Boolean) {
-        fun walk(node: PaneNode, out: MutableList<Pair<String, String>>) {
-            when (node) {
-                is LeafNode -> {
-                    val content = node.content
-                    val sid = when (content) {
-                        is TerminalContent -> content.sessionId
-                        null -> node.sessionId.takeIf { it.isNotEmpty() }
-                        else -> null
-                    }
-                    if (sid != null && sid.isNotEmpty()) out.add(node.id to sid)
-                }
-                is SplitNode -> { walk(node.first, out); walk(node.second, out) }
+        fun collect(leaf: LeafNode, out: MutableList<Pair<String, String>>) {
+            val content = leaf.content
+            val sid = when (content) {
+                is TerminalContent -> content.sessionId
+                null -> leaf.sessionId.takeIf { it.isNotEmpty() }
+                else -> null
             }
+            if (sid != null && sid.isNotEmpty()) out.add(leaf.id to sid)
         }
         val pairs = mutableListOf<Pair<String, String>>()
         for (tab in WindowState.config.value.tabs) {
-            tab.root?.let { walk(it, pairs) }
-            tab.floating.forEach { walk(it.leaf, pairs) }
-            tab.poppedOut.forEach { walk(it.leaf, pairs) }
+            tab.panes.forEach { collect(it.leaf, pairs) }
+            tab.poppedOut.forEach { collect(it.leaf, pairs) }
         }
         for ((leafId, sessionId) in pairs) {
             val session = TerminalSessions.get(sessionId) ?: continue
@@ -662,20 +656,6 @@ private fun buildGitListEnvelope(paneId: String, cwd: String?): WindowEnvelope.G
 private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionContext) {
     val cmd = runCatching { windowJson.decodeFromString<WindowCommand>(text) }.getOrNull() ?: return
     when (cmd) {
-        is WindowCommand.SplitTerminal -> WindowState.splitTerminal(cmd.paneId, cmd.direction)
-        is WindowCommand.SplitFileBrowser -> {
-            val newLeaf = WindowState.splitFileBrowser(cmd.paneId, cmd.direction)
-            if (newLeaf != null) {
-                ctx.send(buildFileBrowserDirEnvelope(newLeaf.id, newLeaf.cwd, ""))
-            }
-        }
-        is WindowCommand.SplitGit -> {
-            val newLeaf = WindowState.splitGit(cmd.paneId, cmd.direction)
-            if (newLeaf != null) {
-                ctx.send(buildGitListEnvelope(newLeaf.id, newLeaf.cwd))
-            }
-        }
-        is WindowCommand.SplitLink -> WindowState.splitLink(cmd.paneId, cmd.direction, cmd.targetSessionId)
         is WindowCommand.FileBrowserListDir -> {
             val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             val content = leaf.content as? FileBrowserContent ?: return
@@ -869,7 +849,7 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             ctx.setGitWatcher(cmd.paneId, handle)
         }
         is WindowCommand.AddGitToTab -> {
-            val newLeaf = WindowState.addGitToEmptyTab(cmd.tabId)
+            val newLeaf = WindowState.addGitToTab(cmd.tabId)
             if (newLeaf != null) {
                 ctx.send(buildGitListEnvelope(newLeaf.id, newLeaf.cwd))
             }
@@ -890,20 +870,20 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
         is WindowCommand.CloseTab -> WindowState.closeTab(cmd.tabId)
         is WindowCommand.RenameTab -> WindowState.renameTab(cmd.tabId, cmd.title)
         is WindowCommand.MoveTab -> WindowState.moveTab(cmd.tabId, cmd.targetTabId, cmd.before)
-        is WindowCommand.SetRatio -> WindowState.setSplitRatio(cmd.splitId, cmd.ratio)
-        is WindowCommand.ResizePane -> WindowState.resizePane(cmd.paneId, cmd.delta)
-        is WindowCommand.AddPaneToTab -> WindowState.addPaneToEmptyTab(cmd.tabId)
+        is WindowCommand.AddPaneToTab -> WindowState.addPaneToTab(cmd.tabId)
         is WindowCommand.AddFileBrowserToTab -> {
-            val newLeaf = WindowState.addFileBrowserToEmptyTab(cmd.tabId)
+            val newLeaf = WindowState.addFileBrowserToTab(cmd.tabId)
             if (newLeaf != null) {
                 ctx.send(buildFileBrowserDirEnvelope(newLeaf.id, newLeaf.cwd, ""))
             }
         }
-        is WindowCommand.AddLinkToTab -> WindowState.addLinkToEmptyTab(cmd.tabId, cmd.targetSessionId)
-        is WindowCommand.ToggleFloating -> WindowState.toggleFloating(cmd.paneId)
-        is WindowCommand.SetFloatingGeom ->
-            WindowState.setFloatingGeometry(cmd.paneId, cmd.x, cmd.y, cmd.width, cmd.height)
-        is WindowCommand.RaiseFloating -> WindowState.raiseFloating(cmd.paneId)
+        is WindowCommand.AddLinkToTab -> WindowState.addLinkToTab(cmd.tabId, cmd.targetSessionId)
+        is WindowCommand.SetPaneGeom ->
+            WindowState.setPaneGeometry(cmd.paneId, cmd.x, cmd.y, cmd.width, cmd.height)
+        is WindowCommand.RaisePane -> WindowState.raisePane(cmd.paneId)
+        is WindowCommand.ToggleMaximized -> WindowState.toggleMaximized(cmd.paneId)
+        is WindowCommand.ApplyLayout ->
+            WindowState.applyLayout(cmd.tabId, cmd.layout, cmd.primaryPaneId)
         is WindowCommand.PopOut -> WindowState.popOutPane(cmd.paneId)
         is WindowCommand.DockPoppedOut -> WindowState.dockPoppedOut(cmd.paneId)
         is WindowCommand.MovePaneToTab -> WindowState.movePaneToTab(cmd.paneId, cmd.targetTabId)
@@ -1005,17 +985,17 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
                 }
             }
 
-            // Split the originating pane and spawn a fresh terminal rooted
-            // directly in the new worktree. Avoids writing `cd` to an existing
-            // PTY, which would be silently swallowed whenever a TUI (claude,
-            // vim, less, …) holds the foreground because the keystrokes go to
-            // the TUI's stdin instead of the shell sitting behind it.
+            // Spawn a fresh terminal pane in the same tab as the originating
+            // pane, rooted directly in the new worktree. Avoids writing `cd`
+            // to an existing PTY, which would be silently swallowed whenever
+            // a TUI (claude, vim, less, …) holds the foreground because the
+            // keystrokes go to the TUI's stdin instead of the shell sitting
+            // behind it.
             val newCwd = worktreePath.toAbsolutePath().toString()
-            WindowState.splitTerminal(
-                paneId = cmd.paneId,
-                direction = SplitDirection.Right,
-                initialCwd = newCwd,
-            )
+            val hostTabId = WindowState.tabIdOfPane(cmd.paneId)
+            if (hostTabId != null) {
+                WindowState.addPaneToTab(hostTabId, initialCwd = newCwd)
+            }
             ctx.send(WindowEnvelope.WorktreeCreated(paneId = cmd.paneId, newCwd = newCwd))
         }
     }

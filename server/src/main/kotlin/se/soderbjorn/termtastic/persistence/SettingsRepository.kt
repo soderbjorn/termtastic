@@ -30,9 +30,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
+import se.soderbjorn.termtastic.FileBrowserContent
+import se.soderbjorn.termtastic.GitContent
+import se.soderbjorn.termtastic.LeafContent
+import se.soderbjorn.termtastic.LeafNode
+import se.soderbjorn.termtastic.Pane
+import se.soderbjorn.termtastic.PaneGeometry
+import se.soderbjorn.termtastic.PoppedOutPane
+import se.soderbjorn.termtastic.TabConfig
+import se.soderbjorn.termtastic.TerminalContent
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.db.TermtasticDatabase
 import se.soderbjorn.termtastic.windowJson
@@ -88,40 +99,130 @@ class SettingsRepository(dbFile: File) {
     /**
      * Load the persisted window layout configuration.
      *
-     * Prefers the v2 key (post file-browser migration); falls back to v1
-     * once, migrating `MarkdownContent` discriminators to `FileBrowserContent`,
-     * and re-persists under the v2 key. Returns null if no config has been
-     * saved yet. Corrupt blobs are quarantined under a timestamped key.
+     * Prefers the v3 key (free-form pane layout); otherwise falls back to v2
+     * (split tree + floating layer) and flattens the split tree into a flat
+     * list of absolute panes; v1 first renames MarkdownContent → FileBrowserContent,
+     * then flattens. Migrated configs are re-persisted under v3 so subsequent
+     * boots skip the rewrite. Corrupt blobs are quarantined under a
+     * timestamped key.
      *
      * @return the deserialised [WindowConfig], or null if none exists
      * @see saveWindowConfig
      */
     fun loadWindowConfig(): WindowConfig? {
-        // Prefer v2 (post file-browser migration). Fall back to v1 once, rewrite
-        // any legacy MarkdownContent leaves as FileBrowserContent, and persist
-        // the migrated blob under the new key so the fallback only ever runs
-        // one time per SQLite DB.
+        // Prefer v3 (current format).
+        val v3 = database.settingsQueries
+            .selectByKey(WINDOW_CONFIG_KEY_V3)
+            .executeAsOneOrNull()
+        if (v3 != null) {
+            return decodeOrQuarantine(v3, WINDOW_CONFIG_KEY_V3)
+        }
+        // Fall back to v2 (split tree). Flatten and re-persist under v3.
         val v2 = database.settingsQueries
             .selectByKey(WINDOW_CONFIG_KEY_V2)
             .executeAsOneOrNull()
         if (v2 != null) {
-            return decodeOrQuarantine(v2, WINDOW_CONFIG_KEY_V2)
+            val migrated = migrateV2ToV3(v2) ?: return null
+            val encoded = windowJson.encodeToString(WindowConfig.serializer(), migrated)
+            database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V3, encoded)
+            database.settingsQueries.deleteByKey(WINDOW_CONFIG_KEY_V2)
+            return migrated
         }
+        // Fall back to v1 (pre-file-browser). Rename discriminator, then flatten.
         val v1 = database.settingsQueries
             .selectByKey(WINDOW_CONFIG_KEY_V1)
             .executeAsOneOrNull()
             ?: return null
-        // The legacy MarkdownContent and the new FileBrowserContent share all
-        // field names that were previously persisted (selectedRelPath,
-        // leftColumnWidthPx, autoRefresh, fontSize), so the cheapest migration
-        // is a literal rename of the polymorphic discriminator value.
-        val migrated = v1.replace("\"kind\":\"markdown\"", "\"kind\":\"fileBrowser\"")
-        val decoded = decodeOrQuarantine(migrated, WINDOW_CONFIG_KEY_V1) ?: return null
-        // Persist the migrated form under v2 so next boot skips the rewrite.
-        val encoded = windowJson.encodeToString(WindowConfig.serializer(), decoded)
-        database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V2, encoded)
+        val v1Migrated = v1.replace("\"kind\":\"markdown\"", "\"kind\":\"fileBrowser\"")
+        val flattened = migrateV2ToV3(v1Migrated) ?: return null
+        val encoded = windowJson.encodeToString(WindowConfig.serializer(), flattened)
+        database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V3, encoded)
         database.settingsQueries.deleteByKey(WINDOW_CONFIG_KEY_V1)
-        return decoded
+        return flattened
+    }
+
+    /**
+     * Deserialise a legacy v2 blob (split-tree + floating layer) and flatten
+     * it into a v3 [WindowConfig] with `TabConfig.panes`. Each leaf in the
+     * split tree is assigned an absolute `(x, y, width, height)` derived
+     * recursively from its ancestor ratios, snapped to the 10% grid. Floating
+     * panes are appended verbatim (also snapped). Z values are assigned in
+     * stable traversal order, tree-first then floating, so stacking is
+     * preserved.
+     *
+     * Returns null if the blob can't be parsed; the blob is quarantined as a
+     * side effect.
+     */
+    private fun migrateV2ToV3(raw: String): WindowConfig? {
+        val legacy = try {
+            legacyJson.decodeFromString(LegacyConfig.serializer(), raw)
+        } catch (t: Throwable) {
+            val ts = System.currentTimeMillis()
+            val quarantineKey = "$WINDOW_CONFIG_KEY_V2.corrupt.$ts"
+            log.warn(
+                "Failed to decode legacy v2 window config; quarantining as '{}'",
+                quarantineKey,
+                t,
+            )
+            database.settingsQueries.upsert(quarantineKey, raw)
+            database.settingsQueries.deleteByKey(WINDOW_CONFIG_KEY_V2)
+            return null
+        }
+        val migratedTabs = legacy.tabs.map { tab ->
+            val panes = mutableListOf<Pane>()
+            var zCounter = 0L
+            tab.root?.let { flattenLegacyNode(it, 0.0, 0.0, 1.0, 1.0, panes) { ++zCounter } }
+            for (fp in tab.floating) {
+                val box = PaneGeometry.normalize(fp.x, fp.y, fp.width, fp.height)
+                panes.add(
+                    Pane(
+                        leaf = fp.leaf.toLeafNode(),
+                        x = box.x, y = box.y,
+                        width = box.width, height = box.height,
+                        z = ++zCounter,
+                    )
+                )
+            }
+            TabConfig(
+                id = tab.id,
+                title = tab.title,
+                panes = panes,
+                poppedOut = tab.poppedOut.map { PoppedOutPane(leaf = it.leaf.toLeafNode()) },
+                focusedPaneId = tab.focusedPaneId,
+            )
+        }
+        return WindowConfig(tabs = migratedTabs, activeTabId = legacy.activeTabId)
+    }
+
+    private fun flattenLegacyNode(
+        node: LegacyNode,
+        x: Double, y: Double, w: Double, h: Double,
+        out: MutableList<Pane>,
+        nextZ: () -> Long,
+    ) {
+        when (node) {
+            is LegacyLeaf -> {
+                val box = PaneGeometry.normalize(x, y, w, h)
+                out.add(
+                    Pane(
+                        leaf = node.toLeafNode(),
+                        x = box.x, y = box.y,
+                        width = box.width, height = box.height,
+                        z = nextZ(),
+                    )
+                )
+            }
+            is LegacySplit -> {
+                val r = node.ratio.coerceIn(0.05, 0.95)
+                if (node.orientation.equals("Horizontal", ignoreCase = true)) {
+                    flattenLegacyNode(node.first, x, y, w * r, h, out, nextZ)
+                    flattenLegacyNode(node.second, x + w * r, y, w * (1.0 - r), h, out, nextZ)
+                } else {
+                    flattenLegacyNode(node.first, x, y, w, h * r, out, nextZ)
+                    flattenLegacyNode(node.second, x, y + h * r, w, h * (1.0 - r), out, nextZ)
+                }
+            }
+        }
     }
 
     private fun decodeOrQuarantine(raw: String, sourceKey: String): WindowConfig? {
@@ -152,7 +253,7 @@ class SettingsRepository(dbFile: File) {
      */
     suspend fun saveWindowConfig(config: WindowConfig) = withContext(Dispatchers.IO) {
         val json = windowJson.encodeToString(WindowConfig.serializer(), config)
-        database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V2, json)
+        database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V3, json)
     }
 
     /**
@@ -305,10 +406,82 @@ class SettingsRepository(dbFile: File) {
     companion object {
         internal const val WINDOW_CONFIG_KEY_V1 = "window.config.v1"
         internal const val WINDOW_CONFIG_KEY_V2 = "window.config.v2"
+        internal const val WINDOW_CONFIG_KEY_V3 = "window.config.v3"
         /** Current write key. Updated whenever the persisted schema rev bumps. */
-        const val WINDOW_CONFIG_KEY = WINDOW_CONFIG_KEY_V2
+        const val WINDOW_CONFIG_KEY = WINDOW_CONFIG_KEY_V3
         private const val UI_SETTINGS_KEY = "ui.settings.v1"
         private const val ALLOW_REMOTE_KEY = "network.allow_remote.v1"
         private const val CLAUDE_USAGE_POLL_KEY = "claude.usage_poll.v1"
     }
 }
+
+// ---------------------------------------------------------------------------
+// Legacy v2 wire format — throwaway types used only during migration so the
+// old split-tree JSON still deserialises after the real WindowConfig/LeafNode
+// dropped their `PaneNode`/`SplitNode`/`FloatingPane` counterparts.
+// ---------------------------------------------------------------------------
+
+/** Lenient decoder for legacy blobs: ignores any fields we no longer care about. */
+private val legacyJson: Json = Json {
+    ignoreUnknownKeys = true
+    classDiscriminator = "kind"
+}
+
+@Serializable
+private data class LegacyConfig(
+    val tabs: List<LegacyTab>,
+    val activeTabId: String? = null,
+)
+
+@Serializable
+private data class LegacyTab(
+    val id: String,
+    val title: String,
+    val root: LegacyNode? = null,
+    val floating: List<LegacyFloater> = emptyList(),
+    val poppedOut: List<LegacyPoppedOut> = emptyList(),
+    val focusedPaneId: String? = null,
+)
+
+@Serializable
+private sealed class LegacyNode
+
+@Serializable
+@SerialName("leaf")
+private data class LegacyLeaf(
+    val id: String,
+    val sessionId: String,
+    val title: String,
+    val customName: String? = null,
+    val cwd: String? = null,
+    val content: LeafContent? = null,
+    val isLink: Boolean = false,
+) : LegacyNode() {
+    fun toLeafNode(): LeafNode = LeafNode(
+        id = id, sessionId = sessionId, title = title,
+        customName = customName, cwd = cwd, content = content, isLink = isLink,
+    )
+}
+
+@Serializable
+@SerialName("split")
+private data class LegacySplit(
+    val id: String,
+    val orientation: String,
+    val ratio: Double,
+    val first: LegacyNode,
+    val second: LegacyNode,
+) : LegacyNode()
+
+@Serializable
+private data class LegacyFloater(
+    val leaf: LegacyLeaf,
+    val x: Double,
+    val y: Double,
+    val width: Double,
+    val height: Double,
+    val z: Long,
+)
+
+@Serializable
+private data class LegacyPoppedOut(val leaf: LegacyLeaf)

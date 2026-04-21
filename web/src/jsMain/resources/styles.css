@@ -685,7 +685,6 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
        against the window edges. (Setting padding on .terminal-wrap doesn't
        work — see comment there.) */
     inset: var(--terminal-padding);
-    display: flex;
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -706,117 +705,6 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     transition:
         opacity 280ms ease-in-out,
         visibility 0s linear 0s;
-}
-
-.tab-pane > * {
-    flex: 1 1 0;
-    min-width: 0;
-    min-height: 0;
-}
-
-/* Splits are nested flex containers; the orientation class controls the
-   direction. Each split-child wrapper carries a flex-grow value derived from
-   the configured ratio, so future ratio changes can animate / take effect by
-   simply mutating the inline style. */
-.split {
-    display: flex;
-    gap: 0;
-    min-width: 0;
-    min-height: 0;
-}
-
-.split-horizontal { flex-direction: row; }
-.split-vertical { flex-direction: column; }
-
-.split-child {
-    display: flex;
-    min-width: 0;
-    min-height: 0;
-}
-
-.split-child > * {
-    flex: 1 1 0;
-    min-width: 0;
-    min-height: 0;
-}
-
-/* Draggable seam between two split children. Occupies exactly the previous
-   gap width so it visually replaces the gutter, with an enlarged invisible
-   hit area via ::after for easier grabbing. */
-.split-divider {
-    flex: 0 0 var(--terminal-gap);
-    position: relative;
-    user-select: none;
-    z-index: 1;
-}
-
-.split-divider-horizontal {
-    cursor: col-resize;
-}
-
-.split-divider-vertical {
-    cursor: row-resize;
-}
-
-/* Visible centered line that mimics the original gutter look. */
-.split-divider::before {
-    content: "";
-    position: absolute;
-    background: var(--separator);
-    transition: background-color 120ms ease-in-out;
-}
-
-.split-divider-horizontal::before {
-    top: 0;
-    bottom: 0;
-    left: 50%;
-    width: 1px;
-    transform: translateX(-0.5px);
-}
-
-.split-divider-vertical::before {
-    left: 0;
-    right: 0;
-    top: 50%;
-    height: 1px;
-    transform: translateY(-0.5px);
-}
-
-/* Enlarged hit area so you don't have to land precisely on the gutter. */
-.split-divider::after {
-    content: "";
-    position: absolute;
-}
-
-.split-divider-horizontal::after {
-    top: 0;
-    bottom: 0;
-    left: -3px;
-    right: -3px;
-}
-
-.split-divider-vertical::after {
-    left: 0;
-    right: 0;
-    top: -3px;
-    bottom: -3px;
-}
-
-.split-divider:hover::before,
-.split-divider.dragging::before {
-    background: var(--accent, var(--text-secondary));
-}
-
-.split-divider-horizontal:hover::before,
-.split-divider-horizontal.dragging::before {
-    width: 2px;
-    transform: translateX(-1px);
-}
-
-.split-divider-vertical:hover::before,
-.split-divider-vertical.dragging::before {
-    height: 2px;
-    transform: translateY(-1px);
 }
 
 .terminal-cell {
@@ -889,9 +777,12 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     letter-spacing: 0.6px;
     padding: 2px 6px;
     border-radius: 4px;
-    /* No special cursor — rename is on hover-arm + click, and the title
-       doubles as a drag handle, so a text-caret cursor would be misleading. */
-    cursor: default;
+    /* Inherit cursor from the surrounding header — grab on the focused
+       pane's titlebar, default elsewhere. The title doubles as a drag
+       handle so the hand cursor is the right affordance, and a text-
+       caret cursor would be misleading since the title isn't editable
+       until the hover-arm + click rename gesture completes. */
+    cursor: inherit;
     /* Don't let dragging the title bar accidentally start a text selection. */
     user-select: none;
     -webkit-user-select: none;
@@ -1099,6 +990,14 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     flex-shrink: 0;
 }
 
+/* Visual gap separating per-pane-type action icons (left) from the
+   common pane actions (right). The flex gap already spaces siblings by
+   2px, so this adds the remaining width to form a clear divider. */
+.pane-actions-sep {
+    width: 10px;
+    flex-shrink: 0;
+}
+
 .pane-action-btn {
     appearance: none;
     background: transparent;
@@ -1129,8 +1028,8 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     margin-left: 0;
 }
 
-/* Generic flyout wrapper — reused for split menu and pane-settings flyouts. */
-.pane-flyout-wrap, .pane-split-wrap {
+/* Generic flyout wrapper — used for pane-settings flyouts. */
+.pane-flyout-wrap {
     position: relative;
     display: inline-flex;
 }
@@ -1168,104 +1067,6 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 .pane-action-btn.active:hover {
     color: var(--termtastic-orange, #f4b869);
     background: var(--separator);
-}
-
-.pane-split-flyout {
-    display: none;
-    /* The .terminal-header ancestor uses overflow:hidden, which would clip
-       an absolutely-positioned flyout. Render as a fixed-position layer and
-       let JS place it at the button's screen rect (same pattern as
-       .tab-menu-list). */
-    position: fixed;
-    top: 0;
-    left: 0;
-    min-width: 168px;
-    background: var(--surface);
-    border: 1px solid var(--separator);
-    border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    padding: 4px;
-    z-index: 1000;
-}
-
-.pane-split-flyout.open {
-    display: block;
-}
-
-.pane-split-compass {
-    position: relative;
-    width: 108px;
-    height: 108px;
-    margin: 2px auto;
-}
-
-.pane-split-compass .pane-action-btn {
-    position: absolute;
-    width: 36px;
-    height: 36px;
-}
-
-.pane-split-compass .pane-action-btn.dir-up {
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-}
-
-.pane-split-compass .pane-action-btn.dir-down {
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-}
-
-.pane-split-compass .pane-action-btn.dir-left {
-    top: 50%;
-    left: 0;
-    transform: translateY(-50%);
-}
-
-.pane-split-compass .pane-action-btn.dir-right {
-    top: 50%;
-    right: 0;
-    transform: translateY(-50%);
-}
-
-.pane-split-sep {
-    height: 1px;
-    background: var(--separator);
-    margin: 4px 2px;
-}
-
-.pane-split-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 6px 8px;
-    background: transparent;
-    border: none;
-    border-radius: 4px;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-}
-
-.pane-split-item:hover {
-    background: rgba(255, 255, 255, 0.08);
-}
-
-.pane-split-item-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
-    flex: 0 0 auto;
-}
-
-.pane-split-item-label {
-    font-size: 13px;
-    white-space: nowrap;
 }
 
 /* The .terminal element is intentionally just a transparent flex wrapper.
@@ -1346,6 +1147,69 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 
 .terminal-cell.focused .terminal-title {
     color: var(--t-text-secondary, rgba(244, 184, 105, 0.75));
+}
+
+/* ---------- Layout picker dropdown ------------------------------------ */
+
+/* Three-column grid of preview tiles, sized to content so the dropdown is
+   exactly wide enough for the tiles and tall enough to fit every layout
+   without scrolling. Uses the #id selector to outrank the generic
+   .dropdown.open .dropdown-menu rule further down this file. */
+.dropdown.open #layout-menu {
+    display: grid;
+    grid-template-columns: repeat(3, min-content);
+    gap: 4px;
+    padding: 6px;
+    min-width: 0;
+    width: max-content;
+    max-width: calc(100vw - 24px);
+    max-height: none;
+    overflow: visible;
+}
+
+.layout-option {
+    appearance: none;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+    font: inherit;
+    transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.layout-option:hover {
+    background: var(--separator);
+    border-color: var(--text-secondary);
+}
+
+.layout-preview {
+    display: block;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 3px;
+}
+
+.layout-preview-primary {
+    fill: var(--t-active-accent, var(--termtastic-orange, #f4b869));
+    stroke: none;
+}
+
+.layout-preview-other {
+    fill: var(--text-secondary, #888);
+    opacity: 0.5;
+    stroke: none;
+}
+
+.layout-menu-empty {
+    grid-column: 1 / -1;
+    padding: 12px 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: center;
 }
 
 /* Dropdowns in header */
@@ -1592,20 +1456,22 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     border-color: var(--text-secondary);
 }
 
-/* ---------- Floating panes ------------------------------------------ */
+/* ---------- Panes ----------------------------------------------------- */
 
-/* The layer covers the whole tab area but lets pointer events fall through
-   to the underlying split tree everywhere except inside an actual float. */
-.floating-layer {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 10;
-}
-
+/* Every pane lives as an absolutely-positioned child of .tab-pane. The
+   inline style sets `--px / --py / --pw / --ph` as percentages of the
+   tab area and the `z-index` from the server's stacking key. The pane's
+   rendered box is inset by `--pane-inset` on each side so two adjacent
+   snapped panes still have a visible gap between them — the geometry
+   percentages stay snap-aligned, only the visible frame shrinks. */
 .floating-pane {
     position: absolute;
     pointer-events: auto;
+    --pane-inset: 3px;
+    left: calc(var(--px, 0%) + var(--pane-inset));
+    top: calc(var(--py, 0%) + var(--pane-inset));
+    width: calc(var(--pw, 100%) - 2 * var(--pane-inset));
+    height: calc(var(--ph, 100%) - 2 * var(--pane-inset));
     background: var(--terminal-bg);
     border: 1px solid rgba(255, 255, 255, 0.32);
     border-radius: 8px;
@@ -1613,6 +1479,29 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    transition:
+        left 220ms cubic-bezier(.2, .8, .2, 1),
+        top 220ms cubic-bezier(.2, .8, .2, 1),
+        width 220ms cubic-bezier(.2, .8, .2, 1),
+        height 220ms cubic-bezier(.2, .8, .2, 1);
+}
+
+/* While the user is actively dragging/resizing, disable the geometry
+   transition so the pane tracks the cursor frame-perfectly. `.dragging`
+   is added by the move/resize handlers in LayoutBuilder. */
+.floating-pane.dragging {
+    transition: none;
+}
+
+/* Maximized panes override the stored geometry vars and fill the entire
+   tab area (minus the shared inset) on top of every other pane. The
+   transition above makes toggling this class animate in/out. */
+.floating-pane.maximized {
+    left: var(--pane-inset);
+    top: var(--pane-inset);
+    width: calc(100% - 2 * var(--pane-inset));
+    height: calc(100% - 2 * var(--pane-inset));
+    z-index: 1000 !important;
 }
 
 .floating-pane:has(.terminal-cell.focused) {
@@ -1660,9 +1549,16 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 
 .floating-header {
     cursor: grab;
-    background: var(--terminal-bg);
 }
 
+/* Only the focused pane shows its drag affordance. Hovering the titlebar of
+   a non-focused pane keeps the default cursor so it's obvious a click-to-
+   activate is required before a drag-to-move; dragging is also blocked in
+   the JS handler. */
+.floating-pane:not(:has(.terminal-cell.focused)) .floating-header,
+.floating-pane:not(:has(.terminal-cell.focused)) .floating-header .terminal-title {
+    cursor: default;
+}
 .floating-pane.dragging .floating-header {
     cursor: grabbing;
 }
@@ -1692,6 +1588,18 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 
 .floating-resize-handle:hover {
     opacity: 1;
+}
+
+/* Resize is only allowed on the active pane, so hide the grip on any pane
+   that isn't currently focused. Users have to click to activate first. */
+.floating-pane:not(:has(.terminal-cell.focused)) .floating-resize-handle {
+    display: none;
+}
+
+/* A maximized pane fills the whole tab; there's no smaller size to resize
+   back to except via the maximize button, so hide the grip. */
+.floating-pane.maximized .floating-resize-handle {
+    display: none;
 }
 
 /* ====================================================================== */
@@ -1779,31 +1687,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 
 /* ---------- Pane open / close ----------------------------------------- */
 
-/* Newly added split-children fade & scale in. Slightly slower than tab
-   enter so a tab-with-many-panes doesn't feel chaotic. */
-.split-child.entering > * {
-    animation: pane-enter 280ms cubic-bezier(.34, 1.4, .64, 1);
-    transform-origin: center;
-}
-
-@keyframes pane-enter {
-    from { opacity: 0; transform: scale(0.94); }
-    to   { opacity: 1; transform: scale(1); }
-}
-
-/* Removing a pane: opacity & scale collapse, then JS detaches on animationend. */
-.split-child.leaving {
-    animation: pane-leave 220ms cubic-bezier(.4, 0, 1, 1) forwards;
-    pointer-events: none;
-    transform-origin: center;
-}
-
-@keyframes pane-leave {
-    from { opacity: 1; transform: scale(1); }
-    to   { opacity: 0; transform: scale(0.92); }
-}
-
-/* Floating panes fade in too. */
+/* Panes fade & scale in on creation, and shrink out on close. */
 .floating-pane.entering {
     animation: floating-enter 260ms cubic-bezier(.34, 1.4, .64, 1);
 }
@@ -1813,86 +1697,15 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     to   { opacity: 1; transform: scale(1); }
 }
 
+@keyframes pane-leave {
+    from { opacity: 1; transform: scale(1); }
+    to   { opacity: 0; transform: scale(0.92); }
+}
+
 .floating-pane.leaving {
     animation: pane-leave 200ms cubic-bezier(.4, 0, 1, 1) forwards;
     pointer-events: none;
 }
-
-/* Allow split ratio changes to animate smoothly when the user (or the
-   server) updates the flex-grow inline style. */
-.split-child {
-    transition: flex-grow 240ms cubic-bezier(.2, .8, .2, 1);
-}
-
-/* Suppress the ratio transition while the user is actively dragging the
-   divider — we want frame-perfect tracking, not lag. The Kotlin drag
-   handler adds .resizing to .split during a drag. */
-.split.resizing > .split-child {
-    transition: none;
-}
-
-/* ---------- Split divider grab feedback ------------------------------- */
-
-.split-divider::before {
-    transition:
-        background-color 160ms ease-out,
-        box-shadow 160ms ease-out,
-        width 160ms ease-out,
-        height 160ms ease-out;
-}
-
-.split-divider.dragging::before {
-    background: var(--termtastic-orange);
-    box-shadow: 0 0 8px 2px rgba(244, 184, 105, 0.4);
-}
-
-.split-divider:hover::before {
-    background: var(--termtastic-orange-accent);
-}
-
-/* ---------- Pane maximize / restore ---------------------------------- */
-
-.maximized-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 15;
-    opacity: 0;
-    transition: opacity 300ms ease-out;
-    pointer-events: none;
-}
-
-.maximized-backdrop.visible {
-    opacity: 1;
-    pointer-events: auto;
-}
-
-.terminal-cell.maximizing,
-.terminal-cell.restoring {
-    position: absolute !important;
-    z-index: 20;
-    transition:
-        top 300ms cubic-bezier(.2, .8, .2, 1),
-        left 300ms cubic-bezier(.2, .8, .2, 1),
-        width 300ms cubic-bezier(.2, .8, .2, 1),
-        height 300ms cubic-bezier(.2, .8, .2, 1);
-}
-
-.terminal-cell.maximized {
-    position: absolute !important;
-    z-index: 20;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: var(--terminal-bg);
-}
-
-.terminal-cell.maximizing,
-.terminal-cell.restoring {
-    background: var(--terminal-bg);
-}
-
 
 /* ---------- First-paint fade ----------------------------------------- */
 
@@ -1940,19 +1753,14 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     .tab-button.leaving,
     .tab-button.flip-animating,
     .tab-close,
-    .split-child,
-    .split-child.entering > *,
-    .split-child.leaving,
+    .floating-pane,
     .floating-pane.entering,
     .floating-pane.leaving,
     .terminal-wrap,
     .app-header,
     .sidebar,
     .sidebar-tab-chevron,
-    .sidebar-tab-children,
-    .terminal-cell.maximizing,
-    .terminal-cell.restoring,
-    .maximized-backdrop {
+    .sidebar-tab-children {
         transition: none !important;
         animation: none !important;
     }
