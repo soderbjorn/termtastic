@@ -30,34 +30,50 @@ import org.w3c.dom.HTMLElement
  * @property detectFamily primary family name used by [detectInstalledFonts]
  *   to decide whether this preset is available on the current machine, or
  *   `null` for presets that are always considered available (e.g. the
- *   generic `system` stack).
+ *   generic `system` stack, or any preset with `bundled = true`).
+ * @property bundled `true` for presets whose font files are shipped with
+ *   the app under `/fonts/` via `@font-face` rules in `styles.css`. Bundled
+ *   presets are always available regardless of what's installed locally,
+ *   so [detectInstalledFonts] short-circuits them.
  */
 internal data class FontPreset(
     val key: String,
     val displayName: String,
     val cssStack: String,
     val detectFamily: String?,
+    val bundled: Boolean = false,
 )
 
 /**
  * Ordered list of font presets shown in the Settings panel. The first entry
- * (`system`) is the default when no preset is persisted.
+ * (`system`) is the default when no preset is persisted. Bundled presets
+ * (shipped as `.woff2` under `web/src/jsMain/resources/fonts/`) are grouped
+ * after the system-detected macOS built-ins — see `styles.css` for the
+ * `@font-face` declarations and `NOTICE` for licensing.
  */
 internal val fontPresets: List<FontPreset> = listOf(
     FontPreset("system", "System Default",
         "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", null),
+    // System-detected families — only shown when actually installed locally.
     FontPreset("menlo", "Menlo", "Menlo, monospace", "Menlo"),
     FontPreset("monaco", "Monaco", "Monaco, monospace", "Monaco"),
     FontPreset("sfMono", "SF Mono",
         "'SF Mono', ui-monospace, monospace", "SF Mono"),
     FontPreset("courier", "Courier New",
         "'Courier New', Courier, monospace", "Courier New"),
+    // Bundled families — always available, shipped under /fonts/.
     FontPreset("jetbrainsMono", "JetBrains Mono",
-        "'JetBrains Mono', ui-monospace, monospace", "JetBrains Mono"),
+        "'JetBrains Mono', ui-monospace, monospace", null, bundled = true),
     FontPreset("firaCode", "Fira Code",
-        "'Fira Code', ui-monospace, monospace", "Fira Code"),
+        "'Fira Code', ui-monospace, monospace", null, bundled = true),
     FontPreset("cascadiaCode", "Cascadia Code",
-        "'Cascadia Code', ui-monospace, monospace", "Cascadia Code"),
+        "'Cascadia Code', ui-monospace, monospace", null, bundled = true),
+    FontPreset("ibmPlexMono", "IBM Plex Mono",
+        "'IBM Plex Mono', ui-monospace, monospace", null, bundled = true),
+    FontPreset("geistMono", "Geist Mono",
+        "'Geist Mono', ui-monospace, monospace", null, bundled = true),
+    FontPreset("sourceCodePro", "Source Code Pro",
+        "'Source Code Pro', ui-monospace, monospace", null, bundled = true),
 )
 
 /** The `system` preset's CSS stack, used as the default when nothing is persisted. */
@@ -98,8 +114,9 @@ private var installedFontsCache: Set<String>? = null
  * mid-session.
  *
  * @return the set of preset keys ([FontPreset.key]) available on this client.
- *   Presets with `detectFamily == null` (currently `system`) are always in
- *   the returned set.
+ *   Presets with `detectFamily == null` (the `system` stack plus all
+ *   [FontPreset.bundled] families shipped under `/fonts/`) are always in the
+ *   returned set.
  */
 internal fun detectInstalledFonts(): Set<String> {
     installedFontsCache?.let { return it }
@@ -144,6 +161,14 @@ internal fun detectInstalledFonts(): Set<String> {
  * `<html>`, so CSS rules in `styles.css` (git diff panes, markdown `pre`/`code`)
  * pick up the new font too.
  *
+ * For bundled presets, waits for the font file to finish loading via the
+ * `document.fonts.load(...)` FontFaceSet API before refitting each terminal.
+ * xterm.js renders to canvas and caches character metrics on the first paint,
+ * so a late font load would not trigger a re-measure on its own — the user
+ * would see wrong cell dimensions until a manual resize. System-detected
+ * presets skip the wait because the font is either already present or the
+ * user gets graceful monospace fallback.
+ *
  * Called from [SettingsPanel] when the user clicks a font button, and from
  * the initial hydration path in `main.kt` once the server's `UiSettings`
  * envelope arrives.
@@ -155,6 +180,38 @@ internal fun detectInstalledFonts(): Set<String> {
  */
 internal fun applyGlobalFontFamily(key: String?) {
     val stack = resolveFontFamilyCss(key)
+    val preset = fontPresets.firstOrNull { it.key == key }
+    if (preset?.bundled == true) {
+        // Primary family is the first comma-separated entry in the stack
+        // (e.g. "'JetBrains Mono'" from "'JetBrains Mono', ui-monospace, …").
+        val primary = stack.substringBefore(',').trim()
+        val fonts = document.asDynamic().fonts
+        if (fonts != null) {
+            // Kick off loads for both weights xterm might use so bold output
+            // doesn't synthesise-bold until the real 700 weight lands.
+            fonts.load("400 16px $primary")
+            fonts.load("700 16px $primary").then({ _: dynamic ->
+                applyStackToTerminals(stack)
+            }, { _: dynamic ->
+                // Load failure is cosmetic — fall back to applying the stack
+                // anyway so the browser can do its best with whatever loaded.
+                applyStackToTerminals(stack)
+            })
+            return
+        }
+    }
+    applyStackToTerminals(stack)
+}
+
+/**
+ * Pushes a resolved CSS font stack to every live xterm.js terminal and to
+ * the `--t-font-mono` custom property. Factored out of [applyGlobalFontFamily]
+ * so the bundled-font code path can defer this call until the font has
+ * finished loading.
+ *
+ * @param stack the fully resolved CSS `font-family` stack to apply.
+ */
+private fun applyStackToTerminals(stack: String) {
     for ((_, entry) in terminals) {
         entry.term.options.fontFamily = stack
         try { safeFit(entry.term, entry.fit) } catch (_: Throwable) {}

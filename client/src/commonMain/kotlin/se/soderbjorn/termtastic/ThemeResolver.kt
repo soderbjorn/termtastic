@@ -21,6 +21,23 @@ package se.soderbjorn.termtastic
 /** Pure black as ARGB. */
 private const val BLACK = 0xFF000000L
 
+// Minimum WCAG contrast ratios for derived text-hierarchy tokens when
+// they are computed (not overridden).  A naive `mixColors(fg, bg, r)`
+// dims text toward bg at a fixed ratio, which looks right on neutral
+// high-luminance fg (Nord, Gruvbox, GitHub) but produces illegible
+// results on saturated low-luminance fg (Vapor pink, Plasma, Tron).
+// These floors keep the naive mix when it already reads well and walk
+// the mix back toward fg only when contrast against bg would fall below
+// the tier's floor.  Themes can still dictate exact values via
+// `text.secondary.*` / `text.tertiary.*` / `text.disabled.*` /
+// `sidebar.textDim.*` overrides — the floors only govern derivation.
+/** Minimum WCAG contrast for derived `text.secondary` against the scheme bg. */
+private const val TEXT_SECONDARY_MIN_CONTRAST = 5.0
+/** Minimum WCAG contrast for derived `text.tertiary` (and `sidebar.textDim`). */
+private const val TEXT_TERTIARY_MIN_CONTRAST = 3.5
+/** Minimum WCAG contrast for derived `text.disabled`. */
+private const val TEXT_DISABLED_MIN_CONTRAST = 2.5
+
 // ── Override key helpers ───────────────────────────────────────────────
 
 /**
@@ -75,11 +92,11 @@ fun TerminalTheme.resolve(isDark: Boolean): ResolvedPalette {
     // ── Text hierarchy ─────────────────────────────────────────────
     val textPrimary = overrideFor(ovr, "text.primary", isDark) ?: fg
     val textSecondary = overrideFor(ovr, "text.secondary", isDark)
-        ?: mixColors(fg, bg, 0.30)
+        ?: mixWithContrastFloor(fg, bg, 0.30, TEXT_SECONDARY_MIN_CONTRAST)
     val textTertiary = overrideFor(ovr, "text.tertiary", isDark)
-        ?: mixColors(fg, bg, 0.55)
+        ?: mixWithContrastFloor(fg, bg, 0.55, TEXT_TERTIARY_MIN_CONTRAST)
     val textDisabled = overrideFor(ovr, "text.disabled", isDark)
-        ?: mixColors(fg, bg, 0.72)
+        ?: mixWithContrastFloor(fg, bg, 0.72, TEXT_DISABLED_MIN_CONTRAST)
     val textInverse = overrideFor(ovr, "text.inverse", isDark) ?: bg
 
     // ── Borders ────────────────────────────────────────────────────
@@ -137,7 +154,7 @@ fun TerminalTheme.resolve(isDark: Boolean): ResolvedPalette {
     val sidebarText = overrideFor(ovr, "sidebar.text", isDark)
         ?: mixColors(fg, bg, 0.15)
     val sidebarTextDim = overrideFor(ovr, "sidebar.textDim", isDark)
-        ?: mixColors(fg, bg, 0.55)
+        ?: mixWithContrastFloor(fg, bg, 0.55, TEXT_TERTIARY_MIN_CONTRAST)
     val sidebarActiveBg = overrideFor(ovr, "sidebar.activeBg", isDark)
         ?: withAlpha(fg, if (isDark) 0.10 else 0.08)
     val sidebarActiveText = overrideFor(ovr, "sidebar.activeText", isDark) ?: fg

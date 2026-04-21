@@ -29,6 +29,8 @@ terminal-view module (modified fork)
 BUNDLED FONTS
 ================================================================================
 
+Android (androidApp/src/main/assets/fonts/):
+
 JetBrains Mono
   Copyright 2020 The JetBrains Mono Project Authors
   Source:  https://github.com/JetBrains/JetBrainsMono
@@ -40,6 +42,43 @@ Iosevka
   Source:  https://github.com/be5invis/Iosevka
   License: SIL Open Font License 1.1
   See:     androidApp/src/main/assets/fonts/Iosevka-OFL.txt
+
+Web / Electron (web/src/jsMain/resources/fonts/):
+
+  Six OFL-licensed monospace families (Regular + Bold, WOFF2) are bundled
+  with the web client and served at /fonts/ so they are available to every
+  user regardless of what is installed locally. Each family ships with its
+  upstream license text as <family>-LICENSE.txt in the same directory.
+
+JetBrains Mono
+  Copyright 2020 The JetBrains Mono Project Authors
+  Source:  https://github.com/JetBrains/JetBrainsMono
+  License: SIL Open Font License 1.1
+
+Fira Code
+  Copyright 2014-2023 The Fira Code Project Authors (Nikita Prokopov)
+  Source:  https://github.com/tonsky/FiraCode
+  License: SIL Open Font License 1.1
+
+Cascadia Code
+  Copyright 2019-2024 Microsoft Corporation
+  Source:  https://github.com/microsoft/cascadia-code
+  License: SIL Open Font License 1.1
+
+IBM Plex Mono
+  Copyright 2017 IBM Corp.
+  Source:  https://github.com/IBM/plex
+  License: SIL Open Font License 1.1
+
+Geist Mono
+  Copyright 2023 Vercel, in collaboration with basement.studio
+  Source:  https://github.com/vercel/geist-font
+  License: SIL Open Font License 1.1
+
+Source Code Pro
+  Copyright 2010-2019 Adobe (https://www.adobe.com/)
+  Source:  https://github.com/adobe-fonts/source-code-pro
+  License: SIL Open Font License 1.1
 
 ================================================================================
 LGPL DEPENDENCIES (server-side, dynamically linked via JVM classpath)
@@ -77,11 +116,17 @@ The following dependencies are used under the Apache License, Version 2.0
     Copyright JetBrains s.r.o. and Ktor contributors
 
   AndroidX libraries (activity-compose, navigation, datastore, webkit,
-  lifecycle, annotation)
+  core-ktx, appcompat, annotation)
     Copyright The Android Open Source Project
 
-  Jetpack Compose (UI, Material3, Foundation, Animation)
-    Copyright The Android Open Source Project
+  Compose Multiplatform (runtime, foundation, ui, material3, ui-tooling,
+  components-resources)
+    Copyright JetBrains s.r.o. and contributors
+    Source: https://github.com/JetBrains/compose-multiplatform
+
+  JetBrains Lifecycle (lifecycle-viewmodel-compose, lifecycle-runtime-compose)
+    Copyright JetBrains s.r.o.
+    Source: https://github.com/JetBrains/compose-multiplatform-core
 
   pty4j
     Copyright JetBrains s.r.o.
@@ -99,6 +144,7 @@ MIT DEPENDENCIES
 The following dependencies are used under the MIT License:
 
   xterm.js — https://github.com/xtermjs/xterm.js
+  xterm-addon-fit — https://github.com/xtermjs/xterm.js (addons/addon-fit)
   SwiftTerm — https://github.com/migueldeicaza/SwiftTerm
   jsoup — https://github.com/jhy/jsoup
   Electron — https://github.com/electron/electron

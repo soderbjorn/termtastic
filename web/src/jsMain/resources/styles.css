@@ -1,3 +1,97 @@
+/* ── Bundled monospace fonts ─────────────────────────────────────────
+   Six OFL-licensed monospace families are shipped under /fonts/ so they
+   are guaranteed available to every client (web + Electron) without
+   requiring the user to install anything locally.  See FontPresets.kt
+   for the preset list, NOTICE for licensing, and
+   web/src/jsMain/resources/fonts/*-LICENSE.txt for the full license
+   texts.  Regular (400) and Bold (700) are bundled; heavier/italic
+   weights fall back to synthesised glyphs which is fine for terminal
+   use.  `font-display: swap` avoids a blocking load on cold start. */
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/jetbrains-mono-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/jetbrains-mono-700.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Fira Code';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/fira-code-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Fira Code';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/fira-code-700.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Cascadia Code';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/cascadia-code-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Cascadia Code';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/cascadia-code-700.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/ibm-plex-mono-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/ibm-plex-mono-700.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Geist Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/geist-mono-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Geist Mono';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/geist-mono-700.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Source Code Pro';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/source-code-pro-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Source Code Pro';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/source-code-pro-700.woff2') format('woff2');
+}
+
 /* ── Semantic colour aliases ─────────────────────────────────────────
    The --t-* custom properties are set dynamically by Kotlin via
    applyAppearanceClass().  The legacy names (--background, --surface,
@@ -1522,7 +1616,18 @@ body.is-electron-mac.popout-mode .popout-cell > .pane-header .terminal-title {
     width: calc(var(--pw, 100%) - 2 * var(--pane-inset));
     height: calc(var(--ph, 100%) - 2 * var(--pane-inset));
     background: var(--terminal-bg);
-    border: 1px solid rgba(255, 255, 255, 0.32);
+    /* Outer frame tinted to match the titlebar gradient's lit top edge
+       (same color-mix as .terminal-header's 0% stop). The gradient then
+       fades down to flat --t-chrome-titlebar, which the .terminal-cell
+       paints on the sides and bottom — so the 1px border reads as a
+       continuation of the gradient's highlight wrapping the pane.
+       Hardcoding a flat white-alpha here breaks that linkage and renders
+       as a theme-agnostic gray seam. */
+    border: 1px solid color-mix(
+        in oklab,
+        var(--t-chrome-titlebar, var(--surface)),
+        var(--t-text-primary, #fff) 12%
+    );
     border-radius: 8px;
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
     display: flex;
@@ -2305,7 +2410,7 @@ body.appearance-light .pane-picker-btn:hover:not(.disabled) {
 .confirm-cancel:hover { background: var(--bg-elevated, #2d2d30); }
 .confirm-ok {
     background: var(--t-accent-primary, var(--termtastic-orange));
-    color: var(--t-accent-primary-fg, #fff);
+    color: var(--t-accent-onPrimary, #fff);
     border-color: transparent;
 }
 .confirm-ok:hover { filter: brightness(1.12); }
@@ -2435,11 +2540,6 @@ body.appearance-light .worktree-path-preview {
     max-width: 90vw;
     padding: 24px 28px 28px;
 }
-.about-version {
-    margin: 0 0 4px;
-    font-size: 13px;
-    color: var(--text-secondary, #999);
-}
 .about-copyright {
     margin: 0 0 12px;
     font-size: 13px;
@@ -2457,7 +2557,10 @@ body.appearance-light .worktree-path-preview {
     text-decoration: underline;
 }
 .about-section-title {
-    margin: 0 0 8px;
+    /* Top margin applies to every instance — when the Third-Party Libraries
+       title is the first on the page there's no visual competitor, and when
+       the Bundled Fonts title follows the deps list it needs the gap. */
+    margin: 16px 0 8px;
     font-size: 13px;
     font-weight: 600;
     color: var(--text-primary, #d4d4d4);
@@ -2485,6 +2588,24 @@ body.appearance-light .worktree-path-preview {
 .about-dep-version {
     color: var(--text-secondary, #999);
     font-family: monospace;
+}
+.about-fonts-blurb {
+    margin: 0 0 8px;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    line-height: 1.4;
+}
+.about-fonts li {
+    /* Font-rendered names can be taller than the default 12px line — give
+       a bit more vertical room so the bundled-font showcase breathes. */
+    padding: 6px 0;
+    font-size: 13px;
+}
+.about-footer {
+    margin: 16px 0 0;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    line-height: 1.4;
 }
 body.appearance-light .about-link {
     color: var(--accent, #0e639c);
@@ -3815,7 +3936,7 @@ body.appearance-light .settings-section-select {
     min-width: 0;
 }
 
-/* The "+ New theme/scheme" tiles share the sidebar's row layout so they
+/* The "+ New theme" / "+ New colour scheme" tiles share the sidebar's row layout so they
    match a normal card's size; the plus sign and label sit inline. */
 .theme-manager-sidebar .new-scheme-tile,
 .theme-manager-sidebar .new-theme-tile {
@@ -3874,7 +3995,7 @@ body.appearance-light .settings-section-select {
     font-size: 9px;
     font-weight: 700;
     background: var(--t-accent-primary, var(--termtastic-orange));
-    color: var(--t-accent-primary-fg, #fff);
+    color: var(--t-accent-onPrimary, #fff);
 }
 
 .theme-manager-star {
@@ -3966,6 +4087,9 @@ body.appearance-light .settings-section-select {
     background: var(--t-surface-overlay, rgba(255, 255, 255, 0.04));
     border: 2px dashed var(--t-border-strong, rgba(255, 255, 255, 0.18));
     justify-content: center;
+    /* Extra space above so the create-new action sits apart from the list,
+       rather than reading as another card in the grid. */
+    margin-top: 10px;
 }
 
 .new-scheme-plus,
@@ -4012,6 +4136,9 @@ body.appearance-light .settings-section-select {
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--t-text-tertiary, #888);
+    /* Match the input/select content inset (padding 10px + 1px border)
+       so the label text aligns with the value text below it. */
+    padding-left: 11px;
 }
 
 .theme-editor-input,
@@ -4073,6 +4200,133 @@ body.appearance-light .settings-section-select {
     font-size: 12px;
 }
 
+/* ── Per-section scheme picker (theme editor) ─────────────────────── */
+
+/* Custom popover replacing the native <select> for scheme rows. The
+   trigger shows a mini scheme swatch beside the name so the user can
+   see the colours at a glance; the menu mirrors the same row layout. */
+.section-scheme-picker {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    background: var(--t-surface-base, var(--surface));
+    color: var(--t-text-primary, var(--text-primary));
+    border: 1px solid var(--t-border-subtle, rgba(255, 255, 255, 0.12));
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+}
+
+.section-scheme-picker:hover:not(:disabled) {
+    border-color: var(--t-border-strong, rgba(255, 255, 255, 0.25));
+}
+
+.section-scheme-picker:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.section-scheme-picker-content {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.section-scheme-picker-chevron {
+    flex-shrink: 0;
+    color: var(--t-text-tertiary, #888);
+    font-size: 10px;
+    pointer-events: none;
+}
+
+/* Shared row primitives — inside both trigger and menu option. */
+.section-scheme-swatch {
+    flex-shrink: 0;
+    width: 120px;
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+}
+
+.section-scheme-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--t-text-primary, var(--text-primary));
+}
+
+.section-scheme-label.muted {
+    color: var(--t-text-secondary, var(--text-secondary));
+    font-style: italic;
+}
+
+/* Popover menu — attached to document.body so z-index must beat
+   .pane-modal-overlay (99998), matching .theme-manager-menu. */
+.section-scheme-menu {
+    position: fixed;
+    z-index: 100000;
+    max-height: 440px;
+    overflow-y: auto;
+    background: var(--t-surface-raised, #1e1f22);
+    border: 1px solid var(--t-border-subtle, rgba(255, 255, 255, 0.12));
+    border-radius: 8px;
+    padding: 4px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+    min-width: 300px;
+}
+
+.section-scheme-menu-header {
+    padding: 8px 10px 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--t-text-tertiary, #888);
+    user-select: none;
+}
+
+.section-scheme-option {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    background: transparent;
+    color: inherit;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-family: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+}
+
+.section-scheme-option:hover {
+    background: var(--t-surface-overlay, rgba(255, 255, 255, 0.06));
+}
+
+.section-scheme-option.selected {
+    border-color: var(--t-accent-primary, var(--termtastic-orange));
+    background: var(--t-surface-overlay, rgba(255, 255, 255, 0.05));
+}
+
+.section-scheme-option-content {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 .theme-editor-actions {
     display: flex;
     flex-wrap: wrap;
@@ -4089,21 +4343,29 @@ body.appearance-light .settings-section-select {
     padding: 6px 14px;
     font-size: 13px;
     cursor: pointer;
-    transition: background 0.12s, border-color 0.12s;
+    transition: background 0.12s, border-color 0.12s, opacity 0.12s;
 }
 
-.theme-editor-btn:hover {
+.theme-editor-btn:hover:not(:disabled):not(.is-disabled) {
     background: var(--t-surface-overlay, rgba(255, 255, 255, 0.08));
+}
+
+.theme-editor-btn:disabled,
+.theme-editor-btn.is-disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    filter: none;
+    pointer-events: none;
 }
 
 .theme-editor-btn.primary {
     background: var(--t-accent-primary, var(--termtastic-orange));
-    color: var(--t-accent-primary-fg, #fff);
+    color: var(--t-accent-onPrimary, #fff);
     border-color: transparent;
 }
 
-.theme-editor-btn.primary:hover {
-    filter: brightness(1.12);
+.theme-editor-btn.primary:hover:not(:disabled):not(.is-disabled) {
+    background: color-mix(in oklab, var(--t-accent-primary, var(--termtastic-orange)) 82%, white);
 }
 
 .theme-editor-btn.danger {
@@ -4111,7 +4373,7 @@ body.appearance-light .settings-section-select {
     border-color: rgba(255, 107, 107, 0.35);
 }
 
-.theme-editor-btn.danger:hover {
+.theme-editor-btn.danger:hover:not(:disabled):not(.is-disabled) {
     background: rgba(255, 107, 107, 0.12);
 }
 

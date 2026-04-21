@@ -455,6 +455,19 @@ fun buildPane(paneDesc: dynamic, tabSection: HTMLElement): HTMLElement {
         }
     }
 
+    // When the maximize/minimize (or edge-drag) geometry transition on
+    // `.floating-pane` finishes, re-assert the PTY size. The mid-transition
+    // ResizeObserver fits often land a row/col short due to floor-rounding
+    // in safeFit against a viewport that hasn't settled, which otherwise
+    // leaves the user needing to click Reformat manually.
+    pane.addEventListener("transitionend", { ev ->
+        val te = ev.asDynamic()
+        if (te.target !== pane) return@addEventListener
+        val prop = te.propertyName as? String ?: return@addEventListener
+        if (prop != "width" && prop != "height") return@addEventListener
+        terminals[paneId]?.let { forceReassert(it) }
+    })
+
     val cell = buildLeafCell(leaf, maximized = maximized)
     pane.appendChild(cell)
     attachPaneTabDrag(cell, paneId)

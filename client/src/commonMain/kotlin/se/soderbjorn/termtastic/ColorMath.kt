@@ -4,7 +4,9 @@
  * Every colour is encoded as `0xAARRGGBB` where each channel occupies one
  * byte.  The helpers here convert between hex-string and ARGB representations,
  * perform channel-wise linear interpolation ([mixColors]), apply alpha
- * ([withAlpha]), and compute relative luminance ([luminance]).
+ * ([withAlpha]), compute relative luminance ([luminance]) and WCAG contrast
+ * ratio ([contrastRatio]), and perform readability-preserving mixing
+ * ([mixWithContrastFloor]).
  *
  * These are used exclusively by the theme resolver ([resolve]) to derive
  * the full [ResolvedPalette] from a [TerminalTheme]'s seed fg/bg values.
@@ -133,3 +135,79 @@ fun luminance(color: Long): Double {
  * @return whether the colour is light
  */
 fun isColorLight(color: Long): Boolean = luminance(color) > 0.5
+
+/**
+ * Computes the WCAG 2.1 contrast ratio between two colours.
+ *
+ * Result ranges from `1.0` (identical luminance) to `21.0` (black on white).
+ * WCAG AA requires `≥ 4.5` for normal text and `≥ 3.0` for large text.
+ *
+ * Used by [mixWithContrastFloor] and by any caller that needs to gate a
+ * derived colour against a readability target.
+ *
+ * @param a first colour (ARGB)
+ * @param b second colour (ARGB)
+ * @return the contrast ratio between [a] and [b]
+ * @see luminance
+ * @see mixWithContrastFloor
+ */
+fun contrastRatio(a: Long, b: Long): Double {
+    val la = luminance(a)
+    val lb = luminance(b)
+    val hi = if (la >= lb) la else lb
+    val lo = if (la >= lb) lb else la
+    return (hi + 0.05) / (lo + 0.05)
+}
+
+/**
+ * Mixes [fg] toward [bg] by [ratio] (see [mixColors]), but guarantees the
+ * result has at least [minContrast] contrast against [bg].
+ *
+ * Called by [resolve] to derive `text.secondary`, `text.tertiary`,
+ * `text.disabled`, and `sidebar.textDim` when the theme hasn't supplied
+ * an explicit override.  For neutral high-luminance fg (e.g. Nord's
+ * `#d8dee9` on `#2e3440`) the naive mix already clears the floor and is
+ * returned unchanged, so hierarchy spacing is preserved.  For saturated
+ * low-luminance fg (e.g. Vapor pink's `#ff77ff` on `#000000`) the naive
+ * mix falls short; [ratio] is reduced via bisection until the contrast
+ * floor is met.
+ *
+ * If even `ratio = 0` (pure [fg]) can't meet [minContrast] — i.e. the
+ * theme has deliberately low-contrast primary text — [fg] is returned
+ * as-is. There is no brighter option available, and themes that want
+ * a specific value can set an explicit override.
+ *
+ * The bisection assumes contrast is monotonic in [ratio]: as the mix
+ * drifts from [fg] to [bg], contrast against [bg] only decreases. This
+ * holds whenever [fg] and [bg] differ in luminance.
+ *
+ * @param fg          the foreground seed colour (ARGB)
+ * @param bg          the background against which readability is measured
+ * @param ratio       the desired mix amount toward [bg] in `[0.0, 1.0]`
+ * @param minContrast the minimum acceptable WCAG contrast against [bg]
+ * @return the contrast-preserving mix result
+ * @see mixColors
+ * @see contrastRatio
+ */
+fun mixWithContrastFloor(
+    fg: Long,
+    bg: Long,
+    ratio: Double,
+    minContrast: Double,
+): Long {
+    val naive = mixColors(fg, bg, ratio)
+    if (contrastRatio(naive, bg) >= minContrast) return naive
+    if (contrastRatio(fg, bg) < minContrast) return fg
+    // Bisect on r ∈ [0, ratio]: largest r where contrast still meets the floor.
+    var lo = 0.0
+    var hi = ratio
+    repeat(12) {
+        val mid = (lo + hi) / 2.0
+        if (contrastRatio(mixColors(fg, bg, mid), bg) >= minContrast) {
+            lo = mid
+        } else {
+            hi = mid
+        }
+    }
+    return mixColors(fg, bg, lo)
+}

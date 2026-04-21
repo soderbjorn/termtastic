@@ -13,7 +13,7 @@
  *    renamed, have their compatibility mode changed, and have per-section
  *    colour-scheme assignments edited. Default themes are read-only and
  *    expose a prominent `Clone to edit` action.
- *  - **Color schemes**: grid of palette swatches with `+ New scheme` tile.
+ *  - **Color schemes**: grid of palette swatches with `+ New colour scheme` tile.
  *    Clicking a scheme opens an editor with dark/light fg+bg pickers and a
  *    flat, per-token list of semantic overrides (one row per
  *    [ResolvedPalette] token × appearance). Default schemes are read-only.
@@ -28,6 +28,7 @@
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
+import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
@@ -271,7 +272,7 @@ fun showThemeManager(
         backBar.appendChild(backBtn)
         val backLabel = document.createElement("span") as HTMLElement
         backLabel.className = "theme-manager-back-label"
-        backLabel.textContent = destination
+        backLabel.textContent = "Back to list"
         backBar.appendChild(backLabel)
         container.appendChild(backBar)
 
@@ -717,6 +718,7 @@ private fun showCloneThemePrompt(source: ThemeConfigPreset) {
         validate = { candidate ->
             when {
                 candidate.isBlank() -> "Name is required"
+                candidate.equals("Default", ignoreCase = true) -> "\"Default\" is reserved"
                 candidate in existing -> "A theme with that name already exists"
                 else -> null
             }
@@ -764,6 +766,7 @@ private fun promptNewTheme(onCreated: (String) -> Unit) {
         validate = { candidate ->
             when {
                 candidate.isBlank() -> "Name is required"
+                candidate.equals("Default", ignoreCase = true) -> "\"Default\" is reserved"
                 candidate in existing -> "A theme with that name already exists"
                 else -> null
             }
@@ -808,7 +811,14 @@ private fun renderThemeEditor(
     val isDefault = preset.name !in state.customThemes
     // Fresh open — no pending edits yet. Any input change below flips it on.
     isEditorDirty = false
-    val markDirty: () -> Unit = { isEditorDirty = true }
+    // Wired up after the Save/Revert buttons are created below so both
+    // reflect [isEditorDirty] — stays a no-op until then and for default
+    // (read-only) themes, which never build those buttons.
+    var syncActionsEnabled: () -> Unit = {}
+    val markDirty: () -> Unit = {
+        isEditorDirty = true
+        syncActionsEnabled()
+    }
 
     val header = document.createElement("div") as HTMLElement
     header.className = "theme-editor-header"
@@ -848,7 +858,7 @@ private fun renderThemeEditor(
         opt.textContent = when (m) {
             ConfigMode.Dark -> "Dark mode"
             ConfigMode.Light -> "Light mode"
-            ConfigMode.Both -> "Both modes"
+            ConfigMode.Both -> "Both dark and light mode"
         }
         if (m == preset.mode) opt.selected = true
         modeSelect.appendChild(opt)
@@ -874,11 +884,22 @@ private fun renderThemeEditor(
     sectionValues["windows"] = preset.windows
     sectionValues["active"] = preset.active
 
+    // Collected so the main row's onChange can re-render sibling triggers
+    // whose selection is "Default" (they inherit the main's swatch).
+    val rowRefreshers = mutableListOf<() -> Unit>()
     for ((key, label) in MANAGER_SECTIONS) {
-        val row = buildSectionRow(key, label, sectionValues[key] ?: "", isDefault) { newName ->
+        val (row, refresh) = buildSectionRow(
+            sectionKey = key,
+            sectionLabel = label,
+            currentSchemeName = sectionValues[key] ?: "",
+            isReadonly = isDefault,
+            getMainSchemeName = { sectionValues[""] ?: "" },
+        ) { newName ->
             sectionValues[key] = newName
+            if (key == "") rowRefreshers.forEach { it() }
             markDirty()
         }
+        rowRefreshers += refresh
         sectionsWrap.appendChild(row)
     }
     container.appendChild(sectionsWrap)
@@ -940,6 +961,16 @@ private fun renderThemeEditor(
         })
         actions.appendChild(revertBtn)
 
+        syncActionsEnabled = {
+            val clean = !isEditorDirty
+            console.log("[theme-editor] syncActionsEnabled theme clean=$clean isEditorDirty=$isEditorDirty")
+            saveBtn.asDynamic().disabled = clean
+            revertBtn.asDynamic().disabled = clean
+            saveBtn.classList.toggle("is-disabled", clean)
+            revertBtn.classList.toggle("is-disabled", clean)
+        }
+        syncActionsEnabled()
+
         val deleteBtn = document.createElement("button") as HTMLElement
         deleteBtn.className = "theme-editor-btn danger"
         deleteBtn.textContent = "Delete"
@@ -962,14 +993,155 @@ private fun renderThemeEditor(
     container.appendChild(actions)
 }
 
-/** Build a single "label + scheme dropdown" row for the theme editor. */
+/**
+ * Resolve a colour-scheme name to its [TerminalTheme], checking custom
+ * schemes first and falling back to [recommendedThemes]. Returns `null`
+ * when the name is empty or unknown.
+ */
+private fun resolveSchemeByName(name: String): TerminalTheme? {
+    if (name.isEmpty()) return null
+    val state = appVm.stateFlow.value
+    return state.customSchemes[name]?.toTerminalTheme()
+        ?: recommendedThemes.firstOrNull { it.name == name }
+}
+
+/**
+ * Populate [container] with the visual row content for [schemeName]: a
+ * mini swatch and the scheme name. An empty [schemeName] renders the
+ * "Default" (inherit from main) variant with [mainSchemeName]'s swatch so
+ * the user can see what it resolves to. Custom-vs-recommended distinction
+ * is conveyed via group headers in the picker menu, not a per-row marker.
+ */
+private fun fillSchemeRowContent(
+    container: HTMLElement,
+    schemeName: String,
+    mainSchemeName: String,
+) {
+    container.innerHTML = ""
+    val isDefault = schemeName.isEmpty()
+    val effectiveName = if (isDefault) mainSchemeName else schemeName
+    val resolved = resolveSchemeByName(effectiveName)
+
+    val swatchWrap = document.createElement("span") as HTMLElement
+    swatchWrap.className = "section-scheme-swatch"
+    if (resolved != null) swatchWrap.innerHTML = renderThemeSwatch(resolved)
+    container.appendChild(swatchWrap)
+
+    val labelWrap = document.createElement("span") as HTMLElement
+    labelWrap.className = "section-scheme-label" + if (isDefault) " muted" else ""
+    labelWrap.textContent = if (isDefault) "Default" else schemeName
+    container.appendChild(labelWrap)
+}
+
+/**
+ * Open the scheme-picker popover anchored below [anchor]. Lists every
+ * recommended and custom scheme as a rich row (swatch + name), grouped
+ * under "Custom" and "Default" headers. Non-main sections get a leading
+ * "Default" entry that inherits from the main scheme.
+ *
+ * Selection invokes [onPick]; outside click and Escape dismiss without
+ * change. Only one picker menu may be open at a time.
+ */
+private fun openSectionSchemeMenu(
+    anchor: HTMLElement,
+    sectionKey: String,
+    selected: String,
+    getMainSchemeName: () -> String,
+    onPick: (String) -> Unit,
+) {
+    document.querySelectorAll(".section-scheme-menu").let { nl ->
+        for (i in 0 until nl.length) (nl.item(i) as? HTMLElement)?.remove()
+    }
+
+    val menu = document.createElement("div") as HTMLElement
+    menu.className = "section-scheme-menu"
+
+    fun addOption(schemeName: String) {
+        val item = document.createElement("button") as HTMLElement
+        item.className = "section-scheme-option" + if (schemeName == selected) " selected" else ""
+        item.setAttribute("type", "button")
+        val inner = document.createElement("span") as HTMLElement
+        inner.className = "section-scheme-option-content"
+        fillSchemeRowContent(inner, schemeName, getMainSchemeName())
+        item.appendChild(inner)
+        item.addEventListener("click", { ev: Event ->
+            ev.stopPropagation()
+            menu.remove()
+            onPick(schemeName)
+        })
+        menu.appendChild(item)
+    }
+
+    fun addHeader(text: String) {
+        val h = document.createElement("div") as HTMLElement
+        h.className = "section-scheme-menu-header"
+        h.textContent = text
+        menu.appendChild(h)
+    }
+
+    // Non-main sections can inherit from the main scheme.
+    if (sectionKey.isNotEmpty()) {
+        addHeader("Inherit")
+        addOption("")
+    }
+
+    val customNames = appVm.stateFlow.value.customSchemes.keys.sorted()
+    if (customNames.isNotEmpty()) {
+        addHeader("Custom")
+        for (n in customNames) addOption(n)
+    }
+    addHeader("Default")
+    for (t in recommendedThemes) addOption(t.name)
+
+    val rect = anchor.getBoundingClientRect()
+    menu.style.position = "fixed"
+    menu.style.left = "${rect.left}px"
+    menu.style.top = "${rect.bottom + 4}px"
+    menu.style.minWidth = "${rect.width}px"
+    document.body?.appendChild(menu)
+
+    // Flip above when clipped by the viewport bottom; else cap height so
+    // the menu remains scrollable inside the visible area.
+    val viewportH = window.innerHeight
+    val menuH = menu.getBoundingClientRect().height
+    if (rect.bottom + 4 + menuH > viewportH - 8) {
+        val above = rect.top - menuH - 4
+        if (above >= 8) {
+            menu.style.top = "${above}px"
+        } else {
+            menu.style.maxHeight = "${(viewportH - rect.bottom - 12).coerceAtLeast(120.0)}px"
+        }
+    }
+
+    // Mirrors [showSchemeCardMenu]: a single once-listener dismisses on
+    // any subsequent document click. The opening click used
+    // stopPropagation so this listener is registered only after it.
+    val dismiss = { _: Event -> menu.remove() }
+    document.addEventListener("click", dismiss, js("({once:true})"))
+}
+
+/**
+ * Build a single "label + scheme picker" row for the theme editor. The
+ * picker is a custom popover (not a native `<select>`) that renders each
+ * option as a real scheme swatch + name, mirroring the Tab B scheme list.
+ *
+ * Returns the row element paired with a `refresh` lambda the caller can
+ * invoke when the main scheme changes — this lets sibling rows whose
+ * selection is "Default" re-render their inherited swatch without the
+ * full editor re-rendering.
+ *
+ * @param getMainSchemeName lazy accessor for the preset's main scheme,
+ *   consulted both at [refresh] time and at menu-open time so the
+ *   "Default" option always shows the current main's swatch.
+ */
 private fun buildSectionRow(
     sectionKey: String,
     sectionLabel: String,
     currentSchemeName: String,
     isReadonly: Boolean,
+    getMainSchemeName: () -> String,
     onChange: (String) -> Unit,
-): HTMLElement {
+): Pair<HTMLElement, () -> Unit> {
     val row = document.createElement("div") as HTMLElement
     row.className = "theme-editor-section-row"
 
@@ -978,46 +1150,51 @@ private fun buildSectionRow(
     label.textContent = sectionLabel
     row.appendChild(label)
 
-    val select = document.createElement("select") as HTMLSelectElement
-    select.className = "theme-editor-section-select"
-    select.disabled = isReadonly
+    val trigger = document.createElement("button") as HTMLElement
+    trigger.className = "section-scheme-picker"
+    trigger.setAttribute("type", "button")
+    trigger.asDynamic().disabled = isReadonly
 
-    if (sectionKey.isNotEmpty()) {
-        val def = document.createElement("option") as org.w3c.dom.HTMLOptionElement
-        def.value = ""
-        def.textContent = "— Use main —"
-        if (currentSchemeName.isEmpty()) def.selected = true
-        select.appendChild(def)
-    }
+    val content = document.createElement("span") as HTMLElement
+    content.className = "section-scheme-picker-content"
+    trigger.appendChild(content)
 
-    // Custom schemes first, then recommended.
-    val customSchemes = appVm.stateFlow.value.customSchemes.keys.sorted()
-    for (name in customSchemes) {
-        val opt = document.createElement("option") as org.w3c.dom.HTMLOptionElement
-        opt.value = name
-        opt.textContent = "★ $name"
-        if (name == currentSchemeName) opt.selected = true
-        select.appendChild(opt)
-    }
-    for (t in recommendedThemes) {
-        val opt = document.createElement("option") as org.w3c.dom.HTMLOptionElement
-        opt.value = t.name
-        opt.textContent = t.name
-        if (t.name == currentSchemeName) opt.selected = true
-        select.appendChild(opt)
-    }
+    val chevron = document.createElement("span") as HTMLElement
+    chevron.className = "section-scheme-picker-chevron"
+    chevron.textContent = "▾"
+    trigger.appendChild(chevron)
 
-    select.addEventListener("change", {
-        onChange(select.value)
+    var selected = currentSchemeName
+    val refreshTrigger = {
+        fillSchemeRowContent(content, selected, getMainSchemeName())
+    }
+    refreshTrigger()
+
+    trigger.addEventListener("click", { ev: Event ->
+        ev.stopPropagation()
+        if (isReadonly) return@addEventListener
+        openSectionSchemeMenu(
+            anchor = trigger,
+            sectionKey = sectionKey,
+            selected = selected,
+            getMainSchemeName = getMainSchemeName,
+        ) { picked ->
+            if (picked != selected) {
+                selected = picked
+                refreshTrigger()
+                onChange(picked)
+            }
+        }
     })
-    row.appendChild(select)
-    return row
+
+    row.appendChild(trigger)
+    return row to refreshTrigger
 }
 
 // ── Color-schemes tab (Tab B) ─────────────────────────────────────
 
 /**
- * Render the left pane of Tab B: filter pills + a `+ New scheme` tile
+ * Render the left pane of Tab B: filter pills + a `+ New colour scheme` tile
  * followed by a grid of colour-scheme cards.
  */
 private fun renderSchemesLeft(
@@ -1066,12 +1243,12 @@ private fun renderSchemesLeft(
         grid.appendChild(buildSchemeCard(row.scheme, row.isDefault, row.scheme.name == selected, onSelect))
     }
 
-    // "+ New scheme" tile — sits at the very end as a regular card-sized row.
+    // "+ New colour scheme" tile — sits at the very end as a regular card-sized row.
     if (filter != SchemeFilter.Default) {
         val newTile = document.createElement("div") as HTMLElement
         newTile.className = "theme-manager-card-item new-scheme-tile"
         newTile.innerHTML =
-            """<span class="new-scheme-plus">+</span><span class="new-scheme-label">New scheme</span>"""
+            """<span class="new-scheme-plus">+</span><span class="new-scheme-label">New colour scheme</span>"""
         newTile.addEventListener("click", {
             promptNewScheme { name -> onSelect(name) }
         })
@@ -1083,7 +1260,7 @@ private fun renderSchemesLeft(
     if (filtered.isEmpty() && filter == SchemeFilter.Custom) {
         val empty = document.createElement("div") as HTMLElement
         empty.className = "theme-manager-empty"
-        empty.textContent = "No custom schemes yet — click + New scheme to create one."
+        empty.textContent = "No custom schemes yet — click + New colour scheme to create one."
         container.appendChild(empty)
     }
 }
@@ -1194,11 +1371,12 @@ private fun showCloneSchemePrompt(source: TerminalTheme) {
     }
     showNamePrompt(
         title = "Clone colour scheme",
-        label = "New scheme name",
+        label = "New colour scheme name",
         initial = defaultName,
         validate = { candidate ->
             when {
                 candidate.isBlank() -> "Name is required"
+                candidate.equals("Default", ignoreCase = true) -> "\"Default\" is reserved"
                 candidate in existing -> "A scheme with that name already exists"
                 else -> null
             }
@@ -1237,10 +1415,10 @@ private fun promptNewScheme(onCreated: (String) -> Unit) {
     }
     val defaultName = run {
         var n = 1
-        var candidate = "New scheme"
+        var candidate = "New colour scheme"
         while (candidate in existing) {
             n += 1
-            candidate = "New scheme $n"
+            candidate = "New colour scheme $n"
         }
         candidate
     }
@@ -1251,6 +1429,7 @@ private fun promptNewScheme(onCreated: (String) -> Unit) {
         validate = { candidate ->
             when {
                 candidate.isBlank() -> "Name is required"
+                candidate.equals("Default", ignoreCase = true) -> "\"Default\" is reserved"
                 candidate in existing -> "A scheme with that name already exists"
                 else -> null
             }
@@ -1300,7 +1479,14 @@ private fun renderSchemeEditor(
     val isDefault = custom == null
     // Fresh open — no pending edits. Input handlers below flip it on.
     isEditorDirty = false
-    val markDirty: () -> Unit = { isEditorDirty = true }
+    // Wired up after the Save/Revert buttons are created below so both
+    // reflect [isEditorDirty] — stays a no-op until then and for default
+    // (read-only) schemes, which never build those buttons.
+    var syncActionsEnabled: () -> Unit = {}
+    val markDirty: () -> Unit = {
+        isEditorDirty = true
+        syncActionsEnabled()
+    }
 
     val header = document.createElement("div") as HTMLElement
     header.className = "theme-editor-header"
@@ -1570,6 +1756,16 @@ private fun renderSchemeEditor(
         })
         actions.appendChild(revertBtn)
 
+        syncActionsEnabled = {
+            val clean = !isEditorDirty
+            console.log("[theme-editor] syncActionsEnabled scheme clean=$clean isEditorDirty=$isEditorDirty")
+            saveBtn.asDynamic().disabled = clean
+            revertBtn.asDynamic().disabled = clean
+            saveBtn.classList.toggle("is-disabled", clean)
+            revertBtn.classList.toggle("is-disabled", clean)
+        }
+        syncActionsEnabled()
+
         val deleteBtn = document.createElement("button") as HTMLElement
         deleteBtn.className = "theme-editor-btn danger"
         deleteBtn.textContent = "Delete"
@@ -1767,12 +1963,35 @@ private fun showNamePrompt(
     val okBtn = document.createElement("button") as HTMLElement
     okBtn.className = "confirm-btn confirm-ok"
     okBtn.textContent = "OK"
+
+    // Re-run [validate] on every input change so OK reflects validity
+    // upfront, rather than only surfacing the error after a click. We only
+    // show the error text once the user has touched the field so the
+    // initial prompt (which may start with a valid default) stays quiet.
+    var dirty = false
+    val syncValidity = {
+        val err = validate(input.value.trim())
+        okBtn.asDynamic().disabled = err != null
+        if (dirty && err != null) {
+            errorEl.textContent = err
+            errorEl.style.display = ""
+        } else {
+            errorEl.textContent = ""
+            errorEl.style.display = "none"
+        }
+    }
+    input.addEventListener("input", { _: Event ->
+        dirty = true
+        syncValidity()
+    })
+    syncValidity()
+
     val doCommit = {
         val v = input.value.trim()
         val err = validate(v)
         if (err != null) {
-            errorEl.textContent = err
-            errorEl.style.display = ""
+            dirty = true
+            syncValidity()
         } else {
             overlay.remove()
             onCommit(v)

@@ -1,23 +1,19 @@
 /**
  * About dialog for the Termtastic web frontend.
  *
- * Displays application information including version, copyright, a link to the
- * GitHub repository, and a list of third-party dependencies. The dialog reuses
- * the same modal overlay pattern as [showConfirmDialog] and [showPaneTypeModal].
+ * Displays application information including copyright, a link to the GitHub
+ * repository, and a list of third-party dependencies. The dialog reuses the
+ * same modal overlay pattern as [showConfirmDialog] and [showPaneTypeModal].
  *
  * @see showAboutDialog
  */
 package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
-import kotlinx.browser.window
 import org.w3c.dom.HTMLAnchorElement
 import org.w3c.dom.HTMLElement
 import org.w3c.dom.events.Event
 import org.w3c.dom.events.KeyboardEvent
-
-/** Application version displayed in the about dialog. */
-private const val APP_VERSION = "0.1.0"
 
 /** Copyright notice displayed in the about dialog. */
 private const val COPYRIGHT = "Copyright \u00A9 2026 Robert S\u00F6derbjorn"
@@ -25,28 +21,57 @@ private const val COPYRIGHT = "Copyright \u00A9 2026 Robert S\u00F6derbjorn"
 /** GitHub repository URL. */
 private const val GITHUB_URL = "https://github.com/soderbjorn/termtastic"
 
-/**
- * Third-party dependency entry shown in the about dialog.
- *
- * @property name the library display name
- * @property version the version string
- */
-private data class Dependency(val name: String, val version: String)
+/** Link to the NOTICE file on GitHub (main branch), used for the "full license texts" pointer. */
+private const val NOTICE_URL = "https://github.com/soderbjorn/termtastic/blob/main/NOTICE"
 
-/** Third-party libraries used by Termtastic. */
+/**
+ * Third-party libraries used by Termtastic across all platforms
+ * (Android, iOS, Web/Electron, server). Versions intentionally omitted —
+ * they drift and are not useful to end users. Full attribution per
+ * library (license, copyright, source URL) lives in the `NOTICE` file.
+ */
 private val DEPENDENCIES = listOf(
-    Dependency("Kotlin", "2.3.20"),
-    Dependency("Ktor", "3.4.1"),
-    Dependency("xterm.js", "5.3.0"),
-    Dependency("Electron", "32.x"),
-    Dependency("kotlinx.serialization", "1.9.0"),
-    Dependency("kotlinx.coroutines", "1.10.2"),
-    Dependency("SQLDelight", "2.0.2"),
-    Dependency("pty4j", "0.13.8"),
-    Dependency("JediTerm", "3.49"),
-    Dependency("Flexmark", "0.64.8"),
-    Dependency("Jsoup", "1.17.2"),
-    Dependency("Logback", "1.5.32"),
+    "Kotlin",
+    "kotlinx.coroutines",
+    "kotlinx.serialization",
+    "Ktor",
+    "Jetpack Compose / Compose Multiplatform",
+    "AndroidX",
+    "SwiftTerm",
+    "xterm.js",
+    "xterm-addon-fit",
+    "Electron",
+    "Chromium",
+    "pty4j",
+    "JediTerm",
+    "SQLDelight",
+    "Flexmark",
+    "Jsoup",
+    "Logback",
+    "terminal-emulator / terminal-view",
+)
+
+/**
+ * Bundled font credit shown in the about dialog.
+ *
+ * @property name the font family display name
+ * @property holder short attribution line (copyright holder / designers)
+ * @property license the license short name (e.g. "OFL 1.1")
+ */
+private data class FontCredit(val name: String, val holder: String, val license: String)
+
+/**
+ * Monospace font families bundled with the web/Electron client under
+ * `/fonts/`. Mirrored in `NOTICE` → "Web / Electron" and in
+ * `web/src/jsMain/resources/fonts/<family>-LICENSE.txt`.
+ */
+private val BUNDLED_FONTS = listOf(
+    FontCredit("JetBrains Mono", "JetBrains", "OFL 1.1"),
+    FontCredit("Fira Code", "Nikita Prokopov", "OFL 1.1"),
+    FontCredit("Cascadia Code", "Microsoft", "OFL 1.1"),
+    FontCredit("IBM Plex Mono", "IBM Corp.", "OFL 1.1"),
+    FontCredit("Geist Mono", "Vercel × basement.studio", "OFL 1.1"),
+    FontCredit("Source Code Pro", "Adobe", "OFL 1.1"),
 )
 
 /**
@@ -84,12 +109,6 @@ fun showAboutDialog() {
     title.textContent = "Termtastic"
     card.appendChild(title)
 
-    // Version.
-    val version = document.createElement("p") as HTMLElement
-    version.className = "about-version"
-    version.textContent = "Version $APP_VERSION"
-    card.appendChild(version)
-
     // Copyright.
     val copyright = document.createElement("p") as HTMLElement
     copyright.className = "about-copyright"
@@ -120,15 +139,63 @@ fun showAboutDialog() {
         val li = document.createElement("li") as HTMLElement
         val nameSpan = document.createElement("span") as HTMLElement
         nameSpan.className = "about-dep-name"
-        nameSpan.textContent = dep.name
-        val versionSpan = document.createElement("span") as HTMLElement
-        versionSpan.className = "about-dep-version"
-        versionSpan.textContent = dep.version
+        nameSpan.textContent = dep
         li.appendChild(nameSpan)
-        li.appendChild(versionSpan)
         depsList.appendChild(li)
     }
     card.appendChild(depsList)
+
+    // Bundled fonts.
+    val fontsTitle = document.createElement("h3") as HTMLElement
+    fontsTitle.className = "about-section-title"
+    fontsTitle.textContent = "Bundled Fonts"
+    card.appendChild(fontsTitle)
+
+    // Short blurb above the list: fonts are shipped under the SIL Open Font
+    // License 1.1, so users know why the app ships with its own type without
+    // phoning home.
+    val fontsBlurb = document.createElement("p") as HTMLElement
+    fontsBlurb.className = "about-fonts-blurb"
+    fontsBlurb.textContent = "Monospace families shipped with the client, " +
+        "rendered in the terminal, git diff, and markdown panes. Each font is " +
+        "used under its upstream license."
+    card.appendChild(fontsBlurb)
+
+    val fontsList = document.createElement("ul") as HTMLElement
+    // Reuse the about-deps list styling — same "name on the left, tag on
+    // the right" shape works for both dependencies and font credits.
+    fontsList.className = "about-deps about-fonts"
+    for (font in BUNDLED_FONTS) {
+        val li = document.createElement("li") as HTMLElement
+        val nameSpan = document.createElement("span") as HTMLElement
+        nameSpan.className = "about-dep-name"
+        // Render each credit line in its own typeface so users can eyeball
+        // the actual shapes without having to flip through Settings.
+        nameSpan.style.fontFamily = "'${font.name}', ui-monospace, monospace"
+        nameSpan.textContent = "${font.name} — ${font.holder}"
+        val licenseSpan = document.createElement("span") as HTMLElement
+        licenseSpan.className = "about-dep-version"
+        licenseSpan.textContent = font.license
+        li.appendChild(nameSpan)
+        li.appendChild(licenseSpan)
+        fontsList.appendChild(li)
+    }
+    card.appendChild(fontsList)
+
+    // Footer pointer to the NOTICE file on GitHub — one canonical place where
+    // every library and font has its full license text.
+    val footer = document.createElement("p") as HTMLElement
+    footer.className = "about-footer"
+    footer.appendChild(document.createTextNode("Full license texts are in the "))
+    val noticeLink = document.createElement("a") as HTMLAnchorElement
+    noticeLink.className = "about-link"
+    noticeLink.href = NOTICE_URL
+    noticeLink.target = "_blank"
+    noticeLink.rel = "noopener noreferrer"
+    noticeLink.textContent = "NOTICE"
+    footer.appendChild(noticeLink)
+    footer.appendChild(document.createTextNode(" file."))
+    card.appendChild(footer)
 
     overlay.appendChild(card)
 

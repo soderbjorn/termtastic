@@ -3,7 +3,8 @@
  *
  * Builds and manages a slide-in sidebar panel with controls for:
  * - Text size (font size presets from 10px to 24px)
- * - Font family (monospace preset picker; uninstalled fonts are omitted)
+ * - Font family (monospace preset picker; bundled fonts are always shown,
+ *   system-detected fonts are only shown when installed locally)
  * - Desktop notifications toggle
  * - Custom title bar toggle (Electron only)
  * - Hidden developer tools (activated by 5 rapid clicks on "Settings" title)
