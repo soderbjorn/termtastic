@@ -3,9 +3,9 @@
  *
  * This file contains the [WindowState] singleton, which is the authoritative
  * source of truth for the entire window layout: tabs, the free-form list of
- * panes in each tab, their popped-out siblings, and the per-pane file-browser
- * and git state. Every mutation flows through this object so the resulting
- * [WindowConfig] StateFlow is the single stream clients subscribe to.
+ * panes in each tab, and the per-pane file-browser and git state. Every
+ * mutation flows through this object so the resulting [WindowConfig]
+ * StateFlow is the single stream clients subscribe to.
  *
  * Also contains helper functions:
  *  - [prettifyPath] -- collapses `$HOME` to `~` for display titles.
@@ -36,7 +36,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
 
 // The @Serializable data classes (WindowConfig, TabConfig, Pane, LeafNode,
-// LeafContent + subclasses, PoppedOutPane) live in the :clientServer KMP
+// LeafContent + subclasses) live in the :clientServer KMP
 // module so the web and android clients can deserialize the same wire types
 // the server produces. See clientServer/src/commonMain/kotlin/se/soderbjorn/termtastic/.
 //
@@ -89,7 +89,6 @@ internal fun WindowConfig.withBlankSessionIds(): WindowConfig {
         tabs = tabs.map { tab ->
             tab.copy(
                 panes = tab.panes.map { p -> p.copy(leaf = stripLeaf(p.leaf)) },
-                poppedOut = tab.poppedOut.map { po -> po.copy(leaf = stripLeaf(po.leaf)) },
             )
         }
     )
@@ -157,7 +156,6 @@ object WindowState {
             val live = HashSet<String>()
             for (tab in cfg.tabs) {
                 tab.panes.forEach { live.add(it.leaf.id) }
-                tab.poppedOut.forEach { live.add(it.leaf.id) }
             }
             for (stale in repo.allScrollbackLeafIds() - live) {
                 repo.deleteScrollback(stale)
@@ -169,9 +167,7 @@ object WindowState {
      * Walk a freshly-loaded config and:
      *  1. mint a new [TerminalSessions] for every leaf, replacing the stale id;
      *  2. retarget the node/tab id counters past the highest persisted ids so
-     *     subsequent panes/tabs don't collide;
-     *  3. dock any popped-out panes back into the tab's [TabConfig.panes] list
-     *     (the Electron windows that displayed them don't survive a restart).
+     *     subsequent panes/tabs don't collide.
      */
     private fun rehydrate(loaded: WindowConfig, repo: SettingsRepository): WindowConfig {
         var maxNodeId = 0L
@@ -207,28 +203,7 @@ object WindowState {
                     x = box.x, y = box.y, width = box.width, height = box.height,
                 )
             }
-            var running = rebuiltPanes.toMutableList()
-            var nextZ = (running.maxOfOrNull { it.z } ?: 0L) + 1L
-
-            // Popped-out panes dock back: Electron windows don't survive a
-            // server restart, so leaving them in `poppedOut` would orphan the
-            // PTY. They land on top of the existing panes at a random snapped
-            // origin so the user can see and drag them.
-            for (po in tab.poppedOut) {
-                val leaf = rebuildLeaf(po.leaf)
-                val (ox, oy) = randomSnappedOrigin()
-                running.add(
-                    Pane(
-                        leaf = leaf,
-                        x = ox, y = oy,
-                        width = PaneGeometry.DEFAULT_SIZE,
-                        height = PaneGeometry.DEFAULT_SIZE,
-                        z = nextZ,
-                    )
-                )
-                nextZ += 1
-            }
-            tab.copy(panes = running.toList(), poppedOut = emptyList())
+            tab.copy(panes = rebuiltPanes)
         }
 
         // Counters use incrementAndGet, so set them to the current max — the
@@ -391,7 +366,6 @@ object WindowState {
         // a stale reference that rehydrate() would have to clean up later.
         val livePanes = HashSet<String>()
         tab.panes.forEach { livePanes.add(it.leaf.id) }
-        tab.poppedOut.forEach { livePanes.add(it.leaf.id) }
         if (paneId !in livePanes) return@synchronized
         if (tab.focusedPaneId == paneId) return@synchronized
         val newTabs = cfg.tabs.toMutableList()
@@ -446,15 +420,14 @@ object WindowState {
     }
 
     /**
-     * Find a leaf by id across visible and popped-out panes. Returns null if
-     * no leaf with [paneId] exists. Used by file-browser / git command
-     * handlers that need a leaf's cwd or current content state.
+     * Find a leaf by id across all panes. Returns null if no leaf with
+     * [paneId] exists. Used by file-browser / git command handlers that need
+     * a leaf's cwd or current content state.
      */
     fun findLeaf(paneId: String): LeafNode? = synchronized(this) {
         val cfg = _config.value
         for (tab in cfg.tabs) {
             tab.panes.firstOrNull { it.leaf.id == paneId }?.let { return@synchronized it.leaf }
-            tab.poppedOut.firstOrNull { it.leaf.id == paneId }?.let { return@synchronized it.leaf }
         }
         null
     }
@@ -467,9 +440,7 @@ object WindowState {
     fun tabIdOfPane(paneId: String): String? = synchronized(this) {
         val cfg = _config.value
         for (tab in cfg.tabs) {
-            if (tab.panes.any { it.leaf.id == paneId } ||
-                tab.poppedOut.any { it.leaf.id == paneId }
-            ) return@synchronized tab.id
+            if (tab.panes.any { it.leaf.id == paneId }) return@synchronized tab.id
         }
         null
     }
@@ -478,7 +449,6 @@ object WindowState {
     private fun findLeafBySession(cfg: WindowConfig, sessionId: String): LeafNode? {
         for (tab in cfg.tabs) {
             tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
-            tab.poppedOut.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
         }
         return null
     }
@@ -508,7 +478,6 @@ object WindowState {
                 tabs = cfg.tabs.map { tab ->
                     tab.copy(
                         panes = tab.panes.map { p -> p.copy(leaf = mutate(p.leaf)) },
-                        poppedOut = tab.poppedOut.map { po -> po.copy(leaf = mutate(po.leaf)) },
                     )
                 }
             )
@@ -596,7 +565,6 @@ object WindowState {
                 tabs = cfg.tabs.map { tab ->
                     tab.copy(
                         panes = tab.panes.map { p -> p.copy(leaf = mutate(p.leaf)) },
-                        poppedOut = tab.poppedOut.map { po -> po.copy(leaf = mutate(po.leaf)) },
                     )
                 }
             )
@@ -631,7 +599,6 @@ object WindowState {
                 tabs = cfg.tabs.map { tab ->
                     tab.copy(
                         panes = tab.panes.map { p -> p.copy(leaf = mutate(p.leaf)) },
-                        poppedOut = tab.poppedOut.map { po -> po.copy(leaf = mutate(po.leaf)) },
                     )
                 }
             )
@@ -683,15 +650,13 @@ object WindowState {
         val before = collectSessionIds(cfg)
         val newTabs = cfg.tabs.map { tab ->
             val newPanes = tab.panes.filterNot { it.leaf.id == paneId }
-            val newPoppedOut = tab.poppedOut.filterNot { it.leaf.id == paneId }
             // Drop the tab's saved focus if it pointed at the pane we're
             // killing — otherwise the next render would chase a ghost.
             val newFocus = if (tab.focusedPaneId == paneId) null else tab.focusedPaneId
             if (newPanes.size == tab.panes.size &&
-                newPoppedOut.size == tab.poppedOut.size &&
                 newFocus == tab.focusedPaneId
             ) tab
-            else tab.copy(panes = newPanes, poppedOut = newPoppedOut, focusedPaneId = newFocus)
+            else tab.copy(panes = newPanes, focusedPaneId = newFocus)
         }
         val newCfg = cfg.copy(tabs = newTabs)
         if (newCfg == cfg) return@synchronized
@@ -712,12 +677,10 @@ object WindowState {
 
         val newTabs = cfg.tabs.map { tab ->
             val newPanes = tab.panes.filterNot { it.leaf.sessionId == sessionId }
-            val newPoppedOut = tab.poppedOut.filterNot { it.leaf.sessionId == sessionId }
             val liveIds = HashSet<String>()
             newPanes.forEach { liveIds.add(it.leaf.id) }
-            newPoppedOut.forEach { liveIds.add(it.leaf.id) }
             val newFocus = tab.focusedPaneId?.takeIf { it in liveIds }
-            tab.copy(panes = newPanes, poppedOut = newPoppedOut, focusedPaneId = newFocus)
+            tab.copy(panes = newPanes, focusedPaneId = newFocus)
         }
         val newCfg = cfg.copy(tabs = newTabs)
         if (newCfg == cfg) return@synchronized
@@ -752,7 +715,6 @@ object WindowState {
             tabs = cfg.tabs.map { tab ->
                 tab.copy(
                     panes = tab.panes.map { p -> p.copy(leaf = renameLeaf(p.leaf)) },
-                    poppedOut = tab.poppedOut.map { po -> po.copy(leaf = renameLeaf(po.leaf)) },
                 )
             }
         )
@@ -778,7 +740,6 @@ object WindowState {
             tabs = cfg.tabs.map { tab ->
                 tab.copy(
                     panes = tab.panes.map { p -> p.copy(leaf = maybeUpdate(p.leaf)) },
-                    poppedOut = tab.poppedOut.map { po -> po.copy(leaf = maybeUpdate(po.leaf)) },
                 )
             }
         )
@@ -811,6 +772,30 @@ object WindowState {
             changed = true
             val newPanes = tab.panes.toMutableList()
             newPanes[idx] = current.copy(x = box.x, y = box.y, width = box.width, height = box.height)
+            tab.copy(panes = newPanes)
+        }
+        if (changed) _config.value = cfg.copy(tabs = newTabs)
+    }
+
+    /**
+     * Override or clear the per-pane color-scheme assignment.
+     *
+     * @param paneId the pane whose [Pane.colorScheme] to set
+     * @param scheme the scheme name, or `null` to clear the override
+     * @see WindowCommand.SetPaneColorScheme
+     * @see setPaneGeometry for the sibling pane-level mutator pattern
+     */
+    fun setPaneColorScheme(paneId: String, scheme: String?) = synchronized(this) {
+        val cfg = _config.value
+        var changed = false
+        val newTabs = cfg.tabs.map { tab ->
+            val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+            if (idx < 0) return@map tab
+            val current = tab.panes[idx]
+            if (current.colorScheme == scheme) return@map tab
+            changed = true
+            val newPanes = tab.panes.toMutableList()
+            newPanes[idx] = current.copy(colorScheme = scheme)
             tab.copy(panes = newPanes)
         }
         if (changed) _config.value = cfg.copy(tabs = newTabs)
@@ -1265,63 +1250,6 @@ object WindowState {
     }
 
     /**
-     * Detach [paneId] from its tab's visible panes and move it into the
-     * tab's [TabConfig.poppedOut] list. The caller (Electron main process)
-     * is responsible for opening a new BrowserWindow that renders just this
-     * pane. No-op if the pane isn't found or is already popped out.
-     */
-    fun popOutPane(paneId: String) = synchronized(this) {
-        val cfg = _config.value
-        for ((tabIdx, tab) in cfg.tabs.withIndex()) {
-            if (tab.poppedOut.any { it.leaf.id == paneId }) return@synchronized
-            val paneIdx = tab.panes.indexOfFirst { it.leaf.id == paneId }
-            if (paneIdx < 0) continue
-            val leaf = tab.panes[paneIdx].leaf
-            val newPanes = tab.panes.toMutableList().also { it.removeAt(paneIdx) }
-            val newTabs = cfg.tabs.toMutableList()
-            // If the popped pane was the focused pane, clear it — focus
-            // follows the pane into the new window.
-            val newFocus = if (tab.focusedPaneId == paneId) null else tab.focusedPaneId
-            newTabs[tabIdx] = tab.copy(
-                panes = newPanes,
-                poppedOut = tab.poppedOut + PoppedOutPane(leaf),
-                focusedPaneId = newFocus,
-            )
-            _config.value = cfg.copy(tabs = newTabs)
-            return@synchronized
-        }
-    }
-
-    /**
-     * Re-dock a popped-out pane back into its tab. Called when the user
-     * clicks "Dock" in the popout window, or when the popout window is
-     * closed via the OS close button. The returning pane lands at a random
-     * snapped origin on top of any existing panes so it's easy to find.
-     */
-    fun dockPoppedOut(paneId: String) = synchronized(this) {
-        val cfg = _config.value
-        for ((tabIdx, tab) in cfg.tabs.withIndex()) {
-            val idx = tab.poppedOut.indexOfFirst { it.leaf.id == paneId }
-            if (idx < 0) continue
-            val leaf = tab.poppedOut[idx].leaf
-            val newPoppedOut = tab.poppedOut.toMutableList().also { it.removeAt(idx) }
-            val (ox, oy) = randomSnappedOrigin()
-            val newPane = Pane(
-                leaf = leaf,
-                x = ox, y = oy,
-                width = PaneGeometry.DEFAULT_SIZE,
-                height = PaneGeometry.DEFAULT_SIZE,
-                z = nextZ(tab),
-            )
-            val newTabs = cfg.tabs.toMutableList()
-            val demoted = demoteMaximized(tab)
-            newTabs[tabIdx] = demoted.copy(panes = demoted.panes + newPane, poppedOut = newPoppedOut)
-            _config.value = cfg.copy(tabs = newTabs)
-            return@synchronized
-        }
-    }
-
-    /**
      * Move the pane [paneId] from whichever tab currently holds it into
      * [targetTabId]. The pane lands at a random snapped origin on top of
      * any existing panes in the target.
@@ -1433,7 +1361,6 @@ object WindowState {
         }
         cfg.tabs.forEach { tab ->
             tab.panes.forEach { add(it.leaf) }
-            tab.poppedOut.forEach { add(it.leaf) }
         }
         return out
     }

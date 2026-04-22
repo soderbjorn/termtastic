@@ -97,6 +97,14 @@ class AppBackingViewModel(
      *   clients ignore the value.
      * @property sidebarWidth       persisted sidebar width in pixels, or `null`.
      * @property sidebarCollapsed    whether the sidebar is currently collapsed.
+     * @property headerCollapsed     whether the app header (tab bar + toolbar)
+     *   is currently hidden. Toggled by dragging the horizontal divider below
+     *   the header to 0 px; the divider stays visible so the user can drag the
+     *   header back into view.
+     * @property usageBarCollapsed   whether the Claude usage bar is currently
+     *   hidden. Toggled by dragging the horizontal divider above the bar to
+     *   0 px; only applies when the server has pushed usage data — if no data
+     *   is available, the bar and its divider are hidden regardless.
      * @property desktopNotifications whether desktop notifications are enabled.
      * @property electronCustomTitleBar whether the Electron window should hide
      *   the native OS title bar in favour of the themed chrome (`true`) or
@@ -135,6 +143,8 @@ class AppBackingViewModel(
         val paneFontFamily: String? = null,
         val sidebarWidth: Int? = null,
         val sidebarCollapsed: Boolean = false,
+        val headerCollapsed: Boolean = false,
+        val usageBarCollapsed: Boolean = false,
         val desktopNotifications: Boolean = true,
         val electronCustomTitleBar: Boolean = false,
         val sidebarTheme: TerminalTheme? = null,
@@ -145,6 +155,7 @@ class AppBackingViewModel(
         val chromeTheme: TerminalTheme? = null,
         val windowsTheme: TerminalTheme? = null,
         val activeTheme: TerminalTheme? = null,
+        val bottomBarTheme: TerminalTheme? = null,
         val uiSettingsHydrated: Boolean = false,
         /**
          * Name of the theme (default or custom) to apply when the resolved
@@ -164,6 +175,12 @@ class AppBackingViewModel(
          * dropped on next save.
          */
         val favoriteThemes: List<String> = emptyList(),
+        /**
+         * Ordered list of favourited colour-scheme names. Mirrors
+         * [favoriteThemes]; used by the Theme Manager's Color-schemes tab
+         * and the per-pane palette dropdown to surface favourites first.
+         */
+        val favoriteSchemes: List<String> = emptyList(),
         /**
          * User-defined custom colour schemes, keyed by name. Schemes in
          * this map take precedence over same-named [recommendedThemes]
@@ -300,6 +317,31 @@ class AppBackingViewModel(
     }
 
     /**
+     * Collapse or expand the app header (tab bar + toolbar). The header is
+     * hidden with `display: none` when collapsed; the drag divider below the
+     * header stays visible so the user can drag the header back into view.
+     *
+     * @param collapsed `true` to hide the header, `false` to show it.
+     */
+    suspend fun setHeaderCollapsed(collapsed: Boolean) {
+        emit(_stateFlow.value.copy(headerCollapsed = collapsed))
+        persistSetting("headerCollapsed", collapsed.toString())
+    }
+
+    /**
+     * Collapse or expand the Claude usage bar at the bottom of the window.
+     * Mirrors [setHeaderCollapsed]; only takes visual effect while usage data
+     * is available, but the preference is persisted regardless so reloads
+     * respect the user's last choice.
+     *
+     * @param collapsed `true` to hide the bar, `false` to show it.
+     */
+    suspend fun setUsageBarCollapsed(collapsed: Boolean) {
+        emit(_stateFlow.value.copy(usageBarCollapsed = collapsed))
+        persistSetting("usageBarCollapsed", collapsed.toString())
+    }
+
+    /**
      * Enable or disable desktop notifications and persist the preference.
      *
      * @param enabled `true` to enable notifications.
@@ -326,7 +368,7 @@ class AppBackingViewModel(
      * Set a per-section theme override and persist it. Pass `null` to clear
      * the override and fall back to the global theme.
      *
-     * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"active"`
+     * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"windows"`, `"active"`, `"bottomBar"`
      * @param theme   the override theme, or `null` to clear
      */
     suspend fun setSectionTheme(section: String, theme: TerminalTheme?) {
@@ -340,6 +382,7 @@ class AppBackingViewModel(
             "chrome" -> cur.copy(chromeTheme = theme)
             "windows" -> cur.copy(windowsTheme = theme)
             "active" -> cur.copy(activeTheme = theme)
+            "bottomBar" -> cur.copy(bottomBarTheme = theme)
             else -> cur
         }
         emit(updated)
@@ -369,6 +412,7 @@ class AppBackingViewModel(
             chromeTheme = sections["chrome"],
             windowsTheme = sections["windows"],
             activeTheme = sections["active"],
+            bottomBarTheme = sections["bottomBar"],
         )
         emit(updated)
         val batch = buildMap {
@@ -463,16 +507,6 @@ class AppBackingViewModel(
         windowSocket.send(WindowCommand.MovePaneToTab(paneId = paneId, targetTabId = targetTabId))
     }
 
-    /** Pop [paneId] out into its own OS-level window. */
-    suspend fun popOut(paneId: String) {
-        windowSocket.send(WindowCommand.PopOut(paneId = paneId))
-    }
-
-    /** Dock a previously popped-out [paneId] back into the main window. */
-    suspend fun dockPoppedOut(paneId: String) {
-        windowSocket.send(WindowCommand.DockPoppedOut(paneId = paneId))
-    }
-
     /** Ask the server to re-send Claude AI usage data. */
     suspend fun refreshUsage() {
         windowSocket.send(WindowCommand.RefreshUsage)
@@ -520,6 +554,8 @@ class AppBackingViewModel(
             ?.ifEmpty { null } ?: cur.paneFontFamily
         val sidebarW = settings["sidebarWidth"]?.jsonPrimitive?.intOrNull ?: cur.sidebarWidth
         val sidebarCol = settings["sidebarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: cur.sidebarCollapsed
+        val headerCol = settings["headerCollapsed"]?.jsonPrimitive?.booleanOrNull ?: cur.headerCollapsed
+        val usageBarCol = settings["usageBarCollapsed"]?.jsonPrimitive?.booleanOrNull ?: cur.usageBarCollapsed
         val desktopNotif = settings["desktopNotifications"]?.jsonPrimitive?.booleanOrNull ?: cur.desktopNotifications
         val electronCustom = settings["electronCustomTitleBar"]?.jsonPrimitive?.booleanOrNull ?: cur.electronCustomTitleBar
 
@@ -553,6 +589,7 @@ class AppBackingViewModel(
         val hasLegacySectionKey = listOf(
             "theme.sidebar", "theme.terminal", "theme.diff", "theme.fileBrowser",
             "theme.tabs", "theme.chrome", "theme.windows", "theme.active",
+            "theme.bottomBar",
         ).any { (settings[it]?.jsonPrimitive?.contentOrNull).orEmpty().isNotEmpty() }
         if (firstLoadMigration || hasLegacySectionKey) {
             settingsPersister?.fireAndForgetPutSettings(buildMap {
@@ -566,12 +603,14 @@ class AppBackingViewModel(
                 put("theme.chrome", "")
                 put("theme.windows", "")
                 put("theme.active", "")
+                put("theme.bottomBar", "")
             })
             lastLocalSettingsChange = TimeSource.Monotonic.markNow()
         }
 
         // ── Favourites ────────────────────────────────────────────────
         val favorites = parseStringList(settings["favorites.themes"]) ?: cur.favoriteThemes
+        val favoriteSchemes = parseStringList(settings["favorites.schemes"]) ?: cur.favoriteSchemes
 
         emit(cur.copy(
             theme = theme,
@@ -580,6 +619,8 @@ class AppBackingViewModel(
             paneFontFamily = fontFamily,
             sidebarWidth = sidebarW,
             sidebarCollapsed = sidebarCol,
+            headerCollapsed = headerCol,
+            usageBarCollapsed = usageBarCol,
             desktopNotifications = desktopNotif,
             electronCustomTitleBar = electronCustom,
             // Section overrides are intentionally untouched — they are
@@ -592,6 +633,7 @@ class AppBackingViewModel(
             lightThemeName = lightName,
             darkThemeName = darkName,
             favoriteThemes = favorites,
+            favoriteSchemes = favoriteSchemes,
             customSchemes = customSchemes,
             customThemes = customThemes,
         ))
@@ -651,6 +693,7 @@ class AppBackingViewModel(
                 chrome = o["theme.chrome"]?.jsonPrimitive?.contentOrNull ?: "",
                 windows = o["theme.windows"]?.jsonPrimitive?.contentOrNull ?: "",
                 active = o["theme.active"]?.jsonPrimitive?.contentOrNull ?: "",
+                bottomBar = o["theme.bottomBar"]?.jsonPrimitive?.contentOrNull ?: "",
             )
         }
         return out
@@ -739,6 +782,7 @@ class AppBackingViewModel(
             chromeTheme = sec(preset.chrome),
             windowsTheme = sec(preset.windows),
             activeTheme = sec(preset.active),
+            bottomBarTheme = sec(preset.bottomBar),
         ))
     }
 
@@ -796,6 +840,43 @@ class AppBackingViewModel(
     }
 
     /**
+     * Toggle the favourite status of a colour scheme. Mirrors
+     * [toggleFavoriteTheme] but writes to `favorites.schemes`.
+     *
+     * @param name the scheme name to flip
+     * @see toggleFavoriteTheme
+     */
+    suspend fun toggleFavoriteScheme(name: String) {
+        val cur = _stateFlow.value
+        val next = if (name in cur.favoriteSchemes)
+            cur.favoriteSchemes - name
+        else
+            cur.favoriteSchemes + name
+        emit(cur.copy(favoriteSchemes = next))
+        persistSchemeFavorites(next)
+    }
+
+    /**
+     * Replace the full ordered list of favourite schemes. Mirrors
+     * [setFavoriteThemes].
+     *
+     * @param ordered the new favourites list, in display order
+     * @see setFavoriteThemes
+     */
+    suspend fun setFavoriteSchemes(ordered: List<String>) {
+        emit(_stateFlow.value.copy(favoriteSchemes = ordered))
+        persistSchemeFavorites(ordered)
+    }
+
+    private suspend fun persistSchemeFavorites(list: List<String>) {
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        val obj = buildJsonObject {
+            put("favorites.schemes", JsonArray(list.map { JsonPrimitive(it) }))
+        }
+        settingsPersister?.putJsonSettings(obj)
+    }
+
+    /**
      * Insert or replace a custom colour scheme by name, and persist the
      * full [State.customSchemes] map.
      */
@@ -810,12 +891,38 @@ class AppBackingViewModel(
      * Remove a custom scheme. Does not touch themes that still reference
      * it — those will transparently fall back to built-in lookup and
      * render as the default theme if the name has no built-in either.
+     *
+     * Drops the name from [State.favoriteSchemes] and clears any pane
+     * override that was pointing at it (via [WindowCommand.SetPaneColorScheme]
+     * with `scheme = null`) so no dead references survive the delete.
      */
     suspend fun deleteCustomScheme(name: String) {
         val cur = _stateFlow.value
         val next = cur.customSchemes.toMutableMap().apply { remove(name) }
-        emit(cur.copy(customSchemes = next))
+        val nextFavs = cur.favoriteSchemes - name
+        // Find every docked pane currently using this scheme; fire a clear
+        // for each before the local state change so the server authoritative
+        // state matches once the broadcast round-trips back.
+        val orphanPanes = buildList {
+            val cfg = cur.config ?: return@buildList
+            for (tab in cfg.tabs) {
+                for (pane in tab.panes) {
+                    if (pane.colorScheme == name) add(pane.leaf.id)
+                }
+            }
+        }
+        for (paneId in orphanPanes) {
+            windowSocket.send(WindowCommand.SetPaneColorScheme(paneId = paneId, scheme = null))
+        }
+        emit(cur.copy(customSchemes = next, favoriteSchemes = nextFavs))
         persistCustomSchemes(next)
+        // Favourites piggyback on the next UI-settings write so a single
+        // round-trip to the server covers both changes.
+        lastLocalSettingsChange = TimeSource.Monotonic.markNow()
+        val meta = buildJsonObject {
+            put("favorites.schemes", JsonArray(nextFavs.map { JsonPrimitive(it) }))
+        }
+        settingsPersister?.putJsonSettings(meta)
     }
 
     private suspend fun persistCustomSchemes(schemes: Map<String, CustomScheme>) {
@@ -888,6 +995,7 @@ class AppBackingViewModel(
                     put("theme.chrome", JsonPrimitive(t.chrome))
                     put("theme.windows", JsonPrimitive(t.windows))
                     put("theme.active", JsonPrimitive(t.active))
+                    put("theme.bottomBar", JsonPrimitive(t.bottomBar))
                 }
             }))
         }
@@ -909,7 +1017,7 @@ fun AppBackingViewModel.State.resolvedPalette(systemIsDark: Boolean): ResolvedPa
  * Resolves the semantic palette for a specific app section, using the
  * section-specific theme override if set, or falling back to the global theme.
  *
- * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"windows"`, `"active"`
+ * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"windows"`, `"active"`, `"bottomBar"`
  * @param systemIsDark whether the host OS is currently in dark mode
  * @return the resolved [ResolvedPalette] for that section
  * @see resolvedPalette
@@ -924,6 +1032,7 @@ fun AppBackingViewModel.State.sectionPalette(section: String, systemIsDark: Bool
         "chrome" -> chromeTheme
         "windows" -> windowsTheme
         "active" -> activeTheme
+        "bottomBar" -> bottomBarTheme
         else -> null
     }
     return (sectionTheme ?: theme).resolve(appearance, systemIsDark)

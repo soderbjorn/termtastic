@@ -144,9 +144,9 @@ private data class CollectedLeaf(
  * Flattens the hierarchical [WindowConfig] into a linear list of [TreeRow] items
  * suitable for a [LazyColumn].
  *
- * For each tab, collects all leaves (including floating and popped-out panes),
- * computes an aggregate state dot (waiting > working > null), and emits a
- * [TreeRow.TabHeader] followed by [TreeRow.Leaf] rows.
+ * For each tab, collects all leaves, computes an aggregate state dot
+ * (waiting > working > null), and emits a [TreeRow.TabHeader] followed by
+ * [TreeRow.Leaf] rows.
  *
  * @param config the current window configuration from the server.
  * @param states map of session ID to state string ("working", "waiting", or null).
@@ -157,7 +157,6 @@ private fun flatten(config: WindowConfig, states: Map<String, String?>): List<Tr
     for (tab in config.tabs) {
         val leaves = mutableListOf<CollectedLeaf>()
         for (p in tab.panes) addLeaf(p.leaf, floating = false, out = leaves)
-        for (po in tab.poppedOut) addLeaf(po.leaf, floating = false, out = leaves)
 
         // "waiting" wins over "working" — matches updateStateIndicators() in WebState.kt.
         var tabState: String? = null

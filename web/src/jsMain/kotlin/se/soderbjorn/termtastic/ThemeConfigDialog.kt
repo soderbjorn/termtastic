@@ -31,5 +31,6 @@ fun ThemeConfigPreset.toDynamic(): dynamic {
     obj["theme.chrome"] = chrome
     obj["theme.windows"] = windows
     obj["theme.active"] = active
+    obj["theme.bottomBar"] = bottomBar
     return obj
 }

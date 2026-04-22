@@ -126,6 +126,7 @@ fun sectionPalette(section: String): ResolvedPalette {
         "chrome" -> state.chromeTheme
         "windows" -> state.windowsTheme
         "active" -> state.activeTheme
+        "bottomBar" -> state.bottomBarTheme
         else -> null
     }
     return (sectionTheme ?: state.theme).resolve(isDark)
@@ -227,6 +228,11 @@ fun ResolvedPalette.toCssVarMap(): Map<String, String> = buildMap {
     put("--t-sidebar-textDim", argbToCss(sidebar.textDim))
     put("--t-sidebar-activeBg", argbToCss(sidebar.activeBg))
     put("--t-sidebar-activeText", argbToCss(sidebar.activeText))
+    // Bottom bar (Claude usage footer)
+    put("--t-bottomBar-bg", argbToCss(bottomBar.bg))
+    put("--t-bottomBar-text", argbToCss(bottomBar.text))
+    put("--t-bottomBar-textDim", argbToCss(bottomBar.textDim))
+    put("--t-bottomBar-border", argbToCss(bottomBar.border))
     // Diff
     put("--t-diff-addBg", argbToCss(diff.addBg))
     put("--t-diff-addFg", argbToCss(diff.addFg))
@@ -294,4 +300,148 @@ fun activeAccentCssVars(): Map<String, String> {
  */
 fun clearActiveAccentVars(el: org.w3c.dom.HTMLElement) {
     for (prop in activeAccentProps) el.style.removeProperty(prop)
+}
+
+/**
+ * Resolve a scheme name against the user's custom schemes first, then the
+ * built-in `recommendedThemes` list. Returns `null` when the name is empty
+ * or cannot be resolved (e.g. the underlying custom scheme was deleted).
+ *
+ * @param name scheme name to resolve, or `null`
+ * @return the [TerminalTheme], or `null` if not found
+ */
+internal fun resolvePaneScheme(name: String?): TerminalTheme? {
+    if (name.isNullOrEmpty()) return null
+    val state = appVm.stateFlow.value
+    return state.customSchemes[name]?.toTerminalTheme()
+        ?: recommendedThemes.firstOrNull { it.name == name }
+}
+
+/**
+ * Build an xterm.js theme object from an explicit [palette] instead of the
+ * globally-resolved one. Mirrors [buildXtermTheme] but takes the palette
+ * as an argument so per-pane overrides can feed the pane's own scheme
+ * colours into xterm without mutating global state.
+ *
+ * @param palette already-resolved palette to read `terminal.*`, `accent.*`
+ *   from
+ * @return a dynamic object suitable for `term.options.theme`
+ * @see buildXtermTheme
+ */
+internal fun buildXtermThemeFromPalette(palette: ResolvedPalette): dynamic {
+    val bg = argbToHex(palette.terminal.bg)
+    val fg = argbToHex(palette.terminal.fg)
+    val bgLight = isColorLight(palette.terminal.bg)
+    val base = kotlin.js.json(
+        "background" to bg,
+        "foreground" to fg,
+        "cursor" to argbToHex(palette.terminal.cursor),
+        "cursorAccent" to argbToHex(palette.accent.onPrimary),
+        "selectionBackground" to argbToCss(palette.terminal.selection),
+    )
+    if (bgLight) {
+        base["white"] = "#3b3b3b"; base["brightWhite"] = "#5a5a5a"
+        base["yellow"] = "#866a00"; base["brightYellow"] = "#9d7e00"
+        base["green"] = "#116329"; base["brightGreen"] = "#1a7f37"
+        base["cyan"] = "#0b6e6e"; base["brightCyan"] = "#0f8585"
+        base["blue"] = "#0550ae"; base["brightBlue"] = "#0969da"
+        base["magenta"] = "#6e3996"; base["brightMagenta"] = "#8250df"
+        base["red"] = "#b3261e"; base["brightRed"] = "#cf222e"
+    } else {
+        base["black"] = "#5a5a5a"; base["brightBlack"] = "#8a8a8a"
+    }
+    return base
+}
+
+/**
+ * Apply (or clear) a per-pane colour-scheme override by scoping CSS
+ * variables on the pane's [.floating-pane] wrapper, [.terminal-cell] root,
+ * and content container. Child elements inherit the overridden `--t-*` vars
+ * via the CSS cascade, so the outer pane frame (border + background), the
+ * pane chrome (header, title), and the content area all pick up the chosen
+ * palette.
+ *
+ * The `.floating-pane` wrapper is the **parent** of `.terminal-cell`, and
+ * CSS custom properties inherit downward only — setting vars on the cell
+ * does NOT reach the wrapper's own `border`/`background` rules. The wrapper
+ * must be targeted explicitly; otherwise the outer 1px pane frame keeps
+ * reading the global theme even when a per-pane override is active. In
+ * popout mode the cell has no `.floating-pane` parent (see [PopoutMode]),
+ * so the wrapper lookup is optional.
+ *
+ * When a live terminal is hosted in the pane, its xterm.js theme is also
+ * rebuilt from the override palette — xterm reads `term.options.theme`
+ * directly, not CSS variables, so it needs its own update.
+ *
+ * @param cell   the pane's `.terminal-cell` element (must already be
+ *   attached to the DOM for the wrapper lookup to succeed)
+ * @param name   scheme name to apply, or `null` to clear the override
+ * @see applyAppearanceClass
+ * @see buildXtermThemeFromPalette
+ */
+internal fun applyPaneSchemeOverride(cell: org.w3c.dom.HTMLElement, name: String?) {
+    val resolved = resolvePaneScheme(name)
+    val state = appVm.stateFlow.value
+    val isDark = !isLightActive(state.appearance)
+
+    // Clear any previously-applied inline vars. The set of keys is computed
+    // against the current global palette — the key space is stable across
+    // all themes, so this reliably removes anything a prior call wrote.
+    val templateKeys = currentResolvedPalette().let { it.toCssVarMap().keys + it.toCssAliasMap().keys }
+
+    // `.floating-pane` wrapper: the ancestor that paints the outer pane
+    // border and background. Absent in popout mode.
+    val wrapper = (cell.parentElement as? org.w3c.dom.HTMLElement)
+        ?.takeIf { it.classList.contains("floating-pane") }
+
+    // Also target the content container inside the pane. [applyAppearanceClass]
+    // sets inline vars directly on these children (see section loop: `.terminal`,
+    // `.md-view`, `.git-view`) to block the global windows override from
+    // bleeding through — but those inline vars on the child would ALSO block
+    // the per-pane cascade from .terminal-cell, so the content area wouldn't
+    // recolor. We override them on the child too.
+    val contentKind = cell.getAttribute("data-content-kind")
+    val contentSelector = when (contentKind) {
+        "terminal" -> ".terminal"
+        "fileBrowser" -> ".md-view"
+        "git" -> ".git-view"
+        else -> null
+    }
+    val contentEl = contentSelector?.let { cell.querySelector(it) as? org.w3c.dom.HTMLElement }
+
+    for (prop in templateKeys) {
+        wrapper?.style?.removeProperty(prop)
+        cell.style.removeProperty(prop)
+        contentEl?.style?.removeProperty(prop)
+    }
+
+    if (resolved != null) {
+        val palette = resolved.resolve(isDark)
+        val cssVars = palette.toCssVarMap() + palette.toCssAliasMap()
+        for ((prop, value) in cssVars) {
+            wrapper?.style?.setProperty(prop, value)
+            cell.style.setProperty(prop, value)
+            contentEl?.style?.setProperty(prop, value)
+        }
+        // xterm theme — only relevant for terminal panes; [terminals] is a
+        // map of live xterm instances keyed by paneId.
+        val paneId = cell.getAttribute("data-pane")
+        if (paneId != null) {
+            terminals[paneId]?.let { entry ->
+                entry.term.options.theme = buildXtermThemeFromPalette(palette)
+            }
+        }
+    } else {
+        // Reverting: if this pane hosts a terminal, snap xterm back to the
+        // global theme so the selection/cursor/ANSI tints recover. The
+        // content-container inline vars get reasserted by the next
+        // [applyAppearanceClass] pass (which [applyAll] schedules after a
+        // server config push), so we don't try to restore them here.
+        val paneId = cell.getAttribute("data-pane")
+        if (paneId != null) {
+            terminals[paneId]?.let { entry ->
+                entry.term.options.theme = buildXtermTheme()
+            }
+        }
+    }
 }

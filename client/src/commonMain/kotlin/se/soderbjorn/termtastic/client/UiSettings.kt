@@ -54,11 +54,12 @@ data class UiSettings(
     val chromeTheme: TerminalTheme? = null,
     val windowsTheme: TerminalTheme? = null,
     val activeTheme: TerminalTheme? = null,
+    val bottomBarTheme: TerminalTheme? = null,
 ) {
     /**
      * Resolves the theme for a specific app section, falling back to the global theme.
      *
-     * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"active"`
+     * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"active"`, `"bottomBar"`
      * @return the [TerminalTheme] for that section
      */
     fun sectionTheme(section: String): TerminalTheme = when (section) {
@@ -70,6 +71,7 @@ data class UiSettings(
         "chrome" -> chromeTheme
         "windows" -> windowsTheme
         "active" -> activeTheme
+        "bottomBar" -> bottomBarTheme
         else -> null
     } ?: theme
 }
@@ -144,6 +146,7 @@ suspend fun TermtasticClient.fetchUiSettings(): UiSettings? {
         chromeTheme = parseSectionTheme("theme.chrome"),
         windowsTheme = parseSectionTheme("theme.windows"),
         activeTheme = parseSectionTheme("theme.active"),
+        bottomBarTheme = parseSectionTheme("theme.bottomBar"),
     )
 }
 

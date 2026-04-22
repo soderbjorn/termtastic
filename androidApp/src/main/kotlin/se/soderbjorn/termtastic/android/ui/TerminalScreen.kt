@@ -145,7 +145,6 @@ private fun findLeafTitle(config: WindowConfig?, sessionId: String): String? {
     if (config == null) return null
     for (tab in config.tabs) {
         tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.title }
-        tab.poppedOut.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.title }
     }
     return null
 }

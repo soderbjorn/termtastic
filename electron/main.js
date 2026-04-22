@@ -7,8 +7,6 @@
  * - Enforces single-instance: a second launch refocuses the existing window.
  * - Registers a global hotkey (Ctrl+Alt+Cmd+Space) to summon the app from any
  *   context (other app, other Space).
- * - Manages popout pane windows: each popped-out terminal/pane gets its own
- *   OS-level BrowserWindow; closing it docks the pane back in the main window.
  * - Builds the application menu (including a "Launch at Login" toggle on macOS).
  * - Handles macOS app-lifecycle conventions (keep alive on last window close,
  *   recreate window on dock click).
@@ -448,62 +446,6 @@ function buildAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// --- Popout windows ---------------------------------------------------------
-//
-// A "popped out" pane lives in its own BrowserWindow that loads the same web
-// app with ?popout=<paneId>. The renderer detects the query param and renders
-// only that single pane (no tabs, no sidebar), waiting for the server config
-// to resolve the pane's content kind (terminal / markdown / git). The server
-// is authoritative about which panes are popped out — see
-// WindowState.popOutPane / dockPoppedOut. Closing a popout window via the OS
-// close button is signalled back to the main window so the pane gets docked
-// back into the tree (otherwise the PTY would be orphaned).
-
-const popoutWindows = new Map(); // paneId -> BrowserWindow
-
-ipcMain.handle("popout-pane", (_event, { paneId, title }) => {
-  if (!paneId) return;
-  const existing = popoutWindows.get(paneId);
-  if (existing && !existing.isDestroyed()) {
-    existing.focus();
-    return;
-  }
-  const popout = new BrowserWindow({
-    width: 720,
-    height: 480,
-    minWidth: 400,
-    minHeight: 280,
-    title: title || "Termtastic",
-    // See the main window for why hiddenInset is needed for themed titlebars.
-    // Mirrors the main window's custom-title-bar toggle so popouts stay
-    // visually consistent with the parent.
-    titleBarStyle: chromePrefs.customTitleBar ? "hiddenInset" : "default",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  const url = `${TARGET_URL}?popout=${encodeURIComponent(paneId)}`;
-  popout.loadURL(url);
-  popoutWindows.set(paneId, popout);
-
-  popout.on("closed", () => {
-    popoutWindows.delete(paneId);
-    // User hit the red X (or the popout loaded a new URL). Tell the main
-    // window to dock the pane back so the PTY isn't orphaned. If the main
-    // window itself is gone (app quitting), skip the send.
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("popout-closed", paneId);
-    }
-  });
-});
-
-ipcMain.handle("close-popout", (_event, paneId) => {
-  const win = popoutWindows.get(paneId);
-  if (win && !win.isDestroyed()) win.close();
-});
-
 // --- Window chrome theming --------------------------------------------------
 //
 // The renderer computes the active theme's titlebar colour from the resolved
@@ -512,13 +454,10 @@ ipcMain.handle("close-popout", (_event, paneId) => {
 //
 // On macOS the *default* native title bar is opaque and system-drawn — it
 // ignores the window's backgroundColor entirely. For the theme tint to be
-// visible, the main and popout windows are created with
-// titleBarStyle: "hiddenInset": the native bar is hidden, the window
-// background shows through where it used to be, and the traffic lights stay
-// natively positioned on top. See createWindow() and the popout handler.
-//
-// We route the colour to whichever BrowserWindow sent the IPC so the same
-// handler serves both the main window and popouts.
+// visible, the main window is created with titleBarStyle: "hiddenInset":
+// the native bar is hidden, the window background shows through where it
+// used to be, and the traffic lights stay natively positioned on top. See
+// createWindow().
 
 /**
  * IPC handler: tints the sender's BrowserWindow background to the given CSS

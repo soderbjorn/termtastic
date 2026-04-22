@@ -141,7 +141,6 @@ fun main() {
         val pairs = mutableListOf<Pair<String, String>>()
         for (tab in WindowState.config.value.tabs) {
             tab.panes.forEach { collect(it.leaf, pairs) }
-            tab.poppedOut.forEach { collect(it.leaf, pairs) }
         }
         for ((leafId, sessionId) in pairs) {
             val session = TerminalSessions.get(sessionId) ?: continue
@@ -443,8 +442,7 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
             }
 
             // Push UI settings (theme, appearance, sidebar width) so every
-            // renderer — including popped-out pane windows — stays in sync
-            // when the user flips dark/light mode in the main window.
+            // renderer stays in sync when the user flips dark/light mode.
             val uiSettingsPushJob = launch {
                 settingsRepo.uiSettings.collect { s ->
                     val payload = windowJson.encodeToString<WindowEnvelope>(WindowEnvelope.UiSettings(s))
@@ -719,6 +717,7 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
         is WindowCommand.SetFileBrowserLeftWidth -> WindowState.setFileBrowserLeftWidth(cmd.paneId, cmd.px)
         is WindowCommand.SetFileBrowserFontSize -> WindowState.setFileBrowserFontSize(cmd.paneId, cmd.size)
         is WindowCommand.SetTerminalFontSize -> WindowState.setTerminalFontSize(cmd.paneId, cmd.size)
+        is WindowCommand.SetPaneColorScheme -> WindowState.setPaneColorScheme(cmd.paneId, cmd.scheme)
         is WindowCommand.SetFileBrowserAutoRefresh -> {
             // Filesystem watching is out of scope for the initial file-browser
             // cut — we just persist the flag. Reinstate a watcher here when it's
@@ -897,8 +896,6 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
         is WindowCommand.ToggleMaximized -> WindowState.toggleMaximized(cmd.paneId)
         is WindowCommand.ApplyLayout ->
             WindowState.applyLayout(cmd.tabId, cmd.layout, cmd.primaryPaneId)
-        is WindowCommand.PopOut -> WindowState.popOutPane(cmd.paneId)
-        is WindowCommand.DockPoppedOut -> WindowState.dockPoppedOut(cmd.paneId)
         is WindowCommand.MovePaneToTab -> WindowState.movePaneToTab(cmd.paneId, cmd.targetTabId)
         is WindowCommand.SwapPanes -> WindowState.swapPanes(cmd.paneAId, cmd.paneBId)
         is WindowCommand.SetActiveTab -> WindowState.setActiveTab(cmd.tabId)

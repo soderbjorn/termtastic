@@ -57,6 +57,7 @@ data class ThemeConfigPreset(
     val chrome: String = "",
     val windows: String = "",
     val active: String = "",
+    val bottomBar: String = "",
 )
 
 /**
@@ -70,6 +71,28 @@ data class ThemeConfigPreset(
  * @see ThemeConfigPreset
  */
 val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
+    // ── Dual-mode configurations ──────────────────────────────────────
+
+    // Cohesive single-theme preset — same Verdant scheme across every
+    // section, matching the uniform minimalist-IDE look in the source
+    // screenshots (near-black green-tinted dark / cream paper light).
+    // `active = "Verdant"` makes the accent/focus rings explicit so the
+    // picker shows the mint green in the indicator preview.
+    ThemeConfigPreset(
+        name = "Verdant",
+        mode = ConfigMode.Both,
+        theme = "Verdant",
+        sidebar = "Verdant",
+        terminal = "Verdant",
+        diff = "Verdant",
+        fileBrowser = "Verdant",
+        tabs = "Verdant",
+        chrome = "Verdant",
+        windows = "Verdant",
+        active = "Verdant",
+        bottomBar = "Verdant",
+    ),
+
     // ── Dark mode configurations ──────────────────────────────────────
 
     ThemeConfigPreset(

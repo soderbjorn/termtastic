@@ -46,7 +46,7 @@ private enum class ManagerTab { Themes, Schemes }
 private enum class ThemeFilter { All, Favorites, Default, Custom }
 
 /** Currently-active filter chip state for the scheme grid. */
-private enum class SchemeFilter { All, Default, Custom }
+private enum class SchemeFilter { All, Favorites, Default, Custom }
 
 /** Section keys (order matches the visual silhouette). */
 private val MANAGER_SECTIONS = listOf(
@@ -59,6 +59,7 @@ private val MANAGER_SECTIONS = listOf(
     "diff" to "Diff viewer",
     "fileBrowser" to "File browser",
     "chrome" to "Window chrome",
+    "bottomBar" to "Bottom bar",
 )
 
 /** Drill-down view state for a single tab in the sidebar. */
@@ -582,6 +583,14 @@ private fun buildThemeCard(
     val state = appVm.stateFlow.value
     val isFav = preset.name in state.favoriteThemes
 
+    // Per-card CSS vars so the star/kebab pick up this theme's primary
+    // scheme fg/bg instead of the hardcoded greys. Falls back to the
+    // recommended-themes default if the preset's main scheme can't be
+    // resolved (e.g. a user deleted the custom scheme but kept the theme).
+    val previewScheme = resolveSchemeByName(preset.theme)
+        ?: recommendedThemes.first()
+    applyCardPaletteVars(card, previewScheme)
+
     val star = document.createElement("button") as HTMLElement
     star.className = "theme-manager-star" + if (isFav) " active" else ""
     star.innerHTML = if (isFav) "★" else "☆"
@@ -616,24 +625,6 @@ private fun buildThemeCard(
     nameText.textContent = preset.name
     nameRow.appendChild(nameText)
 
-    // Slot indicators (L / D) when assigned. Skip the mark that matches the
-    // active mode on a selected card — the selection outline already conveys
-    // it, so showing the same letter would be redundant.
-    val activeLight = isLightActive(state.appearance)
-    if (state.lightThemeName == preset.name && !(isSelected && activeLight)) {
-        val lmark = document.createElement("span") as HTMLElement
-        lmark.className = "theme-manager-slot-mark theme-manager-slot-light"
-        lmark.textContent = "L"
-        lmark.title = "Assigned to the light slot"
-        nameRow.appendChild(lmark)
-    }
-    if (state.darkThemeName == preset.name && !(isSelected && !activeLight)) {
-        val dmark = document.createElement("span") as HTMLElement
-        dmark.className = "theme-manager-slot-mark theme-manager-slot-dark"
-        dmark.textContent = "D"
-        dmark.title = "Assigned to the dark slot"
-        nameRow.appendChild(dmark)
-    }
     card.appendChild(nameRow)
 
     card.addEventListener("click", { onAssign(preset.name) })
@@ -883,6 +874,7 @@ private fun renderThemeEditor(
     sectionValues["chrome"] = preset.chrome
     sectionValues["windows"] = preset.windows
     sectionValues["active"] = preset.active
+    sectionValues["bottomBar"] = preset.bottomBar
 
     // Collected so the main row's onChange can re-render sibling triggers
     // whose selection is "Default" (they inherit the main's swatch).
@@ -939,6 +931,7 @@ private fun renderThemeEditor(
                 chrome = sectionValues["chrome"] ?: "",
                 windows = sectionValues["windows"] ?: "",
                 active = sectionValues["active"] ?: "",
+                bottomBar = sectionValues["bottomBar"] ?: "",
             )
             GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 // Rename path: delete old, save new.
@@ -1034,13 +1027,43 @@ private fun fillSchemeRowContent(
 }
 
 /**
+ * Group scheme names for the picker dropdowns. Returns an ordered list of
+ * `(headerLabel, names)` pairs — Favorites first, then Custom, then Default
+ * (built-ins). Each group is alpha-sorted internally; empty groups are
+ * omitted. Reads `appVm.stateFlow.value` directly so callers don't need to
+ * pass state through.
+ *
+ * Shared between [openSectionSchemeMenu] (theme editor) and
+ * [openPanePaletteMenu] (per-pane palette dropdown) so the two surfaces
+ * stay visually consistent.
+ *
+ * @return ordered groups; callers render a header row followed by one
+ *   option per name
+ */
+internal fun buildSchemeGroups(): List<Pair<String, List<String>>> {
+    val state = appVm.stateFlow.value
+    val favs = state.favoriteSchemes.sorted()
+    val customs = state.customSchemes.keys.sorted()
+    val defaults = recommendedThemes.map { it.name }.sorted()
+    return buildList {
+        if (favs.isNotEmpty()) add("Favorites" to favs)
+        if (customs.isNotEmpty()) add("Custom" to customs)
+        add("Default" to defaults)
+    }
+}
+
+/**
  * Open the scheme-picker popover anchored below [anchor]. Lists every
- * recommended and custom scheme as a rich row (swatch + name), grouped
- * under "Custom" and "Default" headers. Non-main sections get a leading
- * "Default" entry that inherits from the main scheme.
+ * recommended, custom, and favourited scheme as a rich row (swatch + name),
+ * grouped under "Favorites", "Custom", and "Default" headers (in that
+ * order). Non-main sections get a leading "Inherit" entry that inherits
+ * from the main scheme.
  *
  * Selection invokes [onPick]; outside click and Escape dismiss without
  * change. Only one picker menu may be open at a time.
+ *
+ * @see buildSchemeGroups for the shared grouping/ordering
+ * @see openPanePaletteMenu for the sibling pane-level dropdown
  */
 private fun openSectionSchemeMenu(
     anchor: HTMLElement,
@@ -1085,13 +1108,10 @@ private fun openSectionSchemeMenu(
         addOption("")
     }
 
-    val customNames = appVm.stateFlow.value.customSchemes.keys.sorted()
-    if (customNames.isNotEmpty()) {
-        addHeader("Custom")
-        for (n in customNames) addOption(n)
+    for ((header, names) in buildSchemeGroups()) {
+        addHeader(header)
+        for (n in names) addOption(n)
     }
-    addHeader("Default")
-    for (t in recommendedThemes) addOption(t.name)
 
     val rect = anchor.getBoundingClientRect()
     menu.style.position = "fixed"
@@ -1211,6 +1231,7 @@ private fun renderSchemesLeft(
     for (f in SchemeFilter.values()) {
         val label = when (f) {
             SchemeFilter.All -> "All"
+            SchemeFilter.Favorites -> "★ Favorites"
             SchemeFilter.Default -> "Default"
             SchemeFilter.Custom -> "Custom"
         }
@@ -1234,12 +1255,18 @@ private fun renderSchemesLeft(
     val filtered = allRows.filter { row ->
         when (filter) {
             SchemeFilter.All -> true
+            SchemeFilter.Favorites -> row.scheme.name in state.favoriteSchemes
             SchemeFilter.Default -> row.isDefault
             SchemeFilter.Custom -> !row.isDefault
         }
     }
 
-    for (row in filtered) {
+    // Favourites float to the top within whatever filter view is active, so
+    // starred schemes are always surfaced first even in the All / Default /
+    // Custom pills (stable sort keeps the internal order otherwise).
+    val sorted = filtered.sortedByDescending { it.scheme.name in state.favoriteSchemes }
+
+    for (row in sorted) {
         grid.appendChild(buildSchemeCard(row.scheme, row.isDefault, row.scheme.name == selected, onSelect))
     }
 
@@ -1257,15 +1284,45 @@ private fun renderSchemesLeft(
 
     container.appendChild(grid)
 
-    if (filtered.isEmpty() && filter == SchemeFilter.Custom) {
+    if (filtered.isEmpty()) {
         val empty = document.createElement("div") as HTMLElement
         empty.className = "theme-manager-empty"
-        empty.textContent = "No custom schemes yet — click + New colour scheme to create one."
+        empty.textContent = when (filter) {
+            SchemeFilter.Favorites -> "No favorites yet — star a scheme to add it here."
+            SchemeFilter.Custom -> "No custom schemes yet — click + New colour scheme to create one."
+            else -> "No schemes match this filter."
+        }
         container.appendChild(empty)
     }
 }
 
-/** Build a single scheme card: swatch + name + kebab menu. */
+/**
+ * Apply per-card CSS variables so the absolutely-positioned star and kebab
+ * buttons adapt to the card's preview palette instead of hardcoded colours.
+ * Without these vars the star/kebab fall back to the global theme vars
+ * (still legible, just not card-tuned) — see `.theme-manager-star` and
+ * `.theme-manager-kebab` in styles.css.
+ *
+ * @param card           card element to style
+ * @param previewScheme  the scheme shown inside the card (for theme cards,
+ *                       the preset's main scheme; for scheme cards, the
+ *                       scheme itself). Resolved against the active
+ *                       appearance to pick dark- or light-mode colours.
+ */
+private fun applyCardPaletteVars(card: HTMLElement, previewScheme: TerminalTheme) {
+    val isDark = !isLightActive(appVm.stateFlow.value.appearance)
+    val p = previewScheme.resolve(isDark)
+    card.style.setProperty("--star-fg", argbToCss(p.text.secondary))
+    card.style.setProperty("--star-active-fg", argbToCss(p.accent.primary))
+    card.style.setProperty("--star-bg", argbToCss(p.surface.overlay))
+    card.style.setProperty("--star-bg-hover", argbToCss(p.surface.sunken))
+    card.style.setProperty("--kebab-fg", argbToCss(p.text.secondary))
+    card.style.setProperty("--kebab-fg-hover", argbToCss(p.text.primary))
+    card.style.setProperty("--kebab-bg", argbToCss(p.surface.overlay))
+    card.style.setProperty("--kebab-bg-hover", argbToCss(p.surface.sunken))
+}
+
+/** Build a single scheme card: swatch + name + favourite star + kebab menu. */
 private fun buildSchemeCard(
     scheme: TerminalTheme,
     isDefault: Boolean,
@@ -1279,6 +1336,27 @@ private fun buildSchemeCard(
     card.className = "theme-manager-card-item scheme-card" +
         if (isDefault) " default" else " custom"
     card.setAttribute("data-scheme-name", scheme.name)
+
+    // Per-card CSS vars so the star/kebab pick up this scheme's fg/bg
+    // instead of the hardcoded greys; readable across both light and dark
+    // previews on every card.
+    applyCardPaletteVars(card, scheme)
+
+    val state = appVm.stateFlow.value
+    val isFav = scheme.name in state.favoriteSchemes
+
+    val star = document.createElement("button") as HTMLElement
+    star.className = "theme-manager-star" + if (isFav) " active" else ""
+    star.innerHTML = if (isFav) "★" else "☆"
+    star.title = if (isFav) "Unfavorite" else "Favorite"
+    star.addEventListener("click", { ev: Event ->
+        ev.stopPropagation()
+        GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            appVm.toggleFavoriteScheme(scheme.name)
+        }
+        pokeManager()
+    })
+    card.appendChild(star)
 
     val kebab = document.createElement("button") as HTMLElement
     kebab.className = "theme-manager-kebab"
@@ -2014,4 +2092,122 @@ private fun showNamePrompt(
 
     document.body?.appendChild(overlay)
     input.focus(); input.select()
+}
+
+// ── Per-pane palette dropdown ──────────────────────────────────────────
+//
+// The palette icon in each pane header opens this popover. It mirrors
+// [openSectionSchemeMenu]'s visual style but is scoped to a single pane's
+// [Pane.colorScheme] override. The first row is an italicized "Default"
+// clear-action; then Favorites / Custom / Default groups via
+// [buildSchemeGroups] so it stays consistent with the theme-editor picker.
+
+/**
+ * Look up the current per-pane colour-scheme override for [paneId] by
+ * walking the live window config. Returns `null` when no override is
+ * stored (i.e. the pane inherits from the global theme).
+ *
+ * @param paneId the pane to inspect
+ * @return the scheme name stored on [Pane.colorScheme], or `null`
+ */
+private fun findPaneScheme(paneId: String): String? {
+    val cfg = appVm.stateFlow.value.config ?: return null
+    for (tab in cfg.tabs) {
+        tab.panes.firstOrNull { it.leaf.id == paneId }?.let { return it.colorScheme }
+    }
+    return null
+}
+
+/**
+ * Open the per-pane palette dropdown anchored below [anchor]. First row is
+ * an italicized "Default" that clears the override; followed by Favorites,
+ * Custom, and Default groups via [buildSchemeGroups]. Dismissed by outside
+ * click; only one menu may be open at a time.
+ *
+ * @param anchor the palette button the menu is anchored below
+ * @param paneId the pane whose [Pane.colorScheme] this menu controls
+ * @see openSectionSchemeMenu for the sibling theme-editor dropdown
+ * @see buildSchemeGroups for the shared grouping/ordering
+ */
+internal fun openPanePaletteMenu(anchor: HTMLElement, paneId: String) {
+    document.querySelectorAll(".section-scheme-menu").let { nl ->
+        for (i in 0 until nl.length) (nl.item(i) as? HTMLElement)?.remove()
+    }
+
+    val menu = document.createElement("div") as HTMLElement
+    menu.className = "section-scheme-menu pane-palette-menu"
+
+    val selected = findPaneScheme(paneId)
+
+    // ── Leading italicized "Default" (clear-action) ──
+    run {
+        val item = document.createElement("button") as HTMLElement
+        item.className = "section-scheme-option pane-palette-default" +
+            if (selected == null) " selected" else ""
+        item.setAttribute("type", "button")
+        val inner = document.createElement("span") as HTMLElement
+        inner.className = "section-scheme-option-content"
+        val label = document.createElement("span") as HTMLElement
+        label.className = "section-scheme-label pane-palette-default-label"
+        label.textContent = "Default"
+        inner.appendChild(label)
+        item.appendChild(inner)
+        item.addEventListener("click", { ev: Event ->
+            ev.stopPropagation()
+            menu.remove()
+            launchCmd(WindowCommand.SetPaneColorScheme(paneId = paneId, scheme = null))
+        })
+        menu.appendChild(item)
+    }
+
+    // ── Favorites / Custom / Default groups (shared with theme editor) ──
+    for ((header, names) in buildSchemeGroups()) {
+        val h = document.createElement("div") as HTMLElement
+        h.className = "section-scheme-menu-header"
+        h.textContent = header
+        menu.appendChild(h)
+        for (n in names) {
+            val item = document.createElement("button") as HTMLElement
+            item.className = "section-scheme-option" + if (n == selected) " selected" else ""
+            item.setAttribute("type", "button")
+            val inner = document.createElement("span") as HTMLElement
+            inner.className = "section-scheme-option-content"
+            // Pass the scheme as its own "main" so [fillSchemeRowContent]
+            // never falls back to the inherit path — this menu only shows
+            // real scheme rows; the explicit "Default" row above is the
+            // only clear-action.
+            fillSchemeRowContent(inner, n, mainSchemeName = n)
+            item.appendChild(inner)
+            item.addEventListener("click", { ev: Event ->
+                ev.stopPropagation()
+                menu.remove()
+                launchCmd(WindowCommand.SetPaneColorScheme(paneId = paneId, scheme = n))
+            })
+            menu.appendChild(item)
+        }
+    }
+
+    val rect = anchor.getBoundingClientRect()
+    menu.style.position = "fixed"
+    menu.style.left = "${rect.left}px"
+    menu.style.top = "${rect.bottom + 4}px"
+    menu.style.minWidth = "220px"
+    document.body?.appendChild(menu)
+
+    // Flip above when clipped by the viewport bottom; else cap height so
+    // the menu remains scrollable inside the visible area. Mirrors
+    // [openSectionSchemeMenu]'s placement logic.
+    val viewportH = window.innerHeight
+    val menuH = menu.getBoundingClientRect().height
+    if (rect.bottom + 4 + menuH > viewportH - 8) {
+        val above = rect.top - menuH - 4
+        if (above >= 8) {
+            menu.style.top = "${above}px"
+        } else {
+            menu.style.maxHeight = "${(viewportH - rect.bottom - 12).coerceAtLeast(120.0)}px"
+        }
+    }
+
+    val dismiss = { _: Event -> menu.remove() }
+    document.addEventListener("click", dismiss, js("({once:true})"))
 }

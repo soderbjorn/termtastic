@@ -8,7 +8,7 @@
  * - Per-pane VM registries: backing view models for file browser and git panes
  * - Rendering state: active tab, maximized panes, animation state, etc.
  * - Settings panel and modal DOM state
- * - Popout/Electron detection flags
+ * - Electron detection flags
  *
  * Also provides utility functions used across the rendering layer: command dispatch,
  * aggregate connection status, pane focus management, terminal fitting, theme
@@ -43,6 +43,9 @@ internal var terminalWrapEl: HTMLElement? = null
 internal var sidebarEl: HTMLElement? = null
 internal var sidebarDividerEl: HTMLElement? = null
 internal var usageBar: HTMLElement? = null
+internal var usageBarDividerEl: HTMLElement? = null
+internal var appHeaderEl: HTMLElement? = null
+internal var headerDividerEl: HTMLElement? = null
 
 // ── Terminal registry (xterm.js instances, imperative) ──────────────
 internal val terminals = HashMap<String, TerminalEntry>()
@@ -96,10 +99,8 @@ internal val gitPaneStates = HashMap<String, GitPaneState>()
 internal val gitPaneViews = HashMap<String, GitPaneView>()
 internal val collapsedGitSections = HashSet<String>()
 
-// Popout / Electron detection
+// Electron detection
 internal var isElectronClient = false
-internal var isPopoutMode = false
-internal var popoutPaneIdParam: String? = null
 internal var proto = "ws"
 internal var authQueryParam = ""
 internal var clientTypeAtStart = "Web"
@@ -147,7 +148,7 @@ internal fun findTabPane(el: HTMLElement): HTMLElement? {
 }
 
 /**
- * Counts how many panes (including linked views and pop-outs) share the given session ID.
+ * Counts how many panes (including linked views) share the given session ID.
  *
  * Used by the close confirmation dialog to warn when closing a session with linked panes.
  *
@@ -160,7 +161,6 @@ internal fun countPanesForSession(sessionId: String?): Int {
     var count = 0
     for (tab in cfg.tabs) {
         for (p in tab.panes) if (p.leaf.sessionId == sessionId) count++
-        for (po in tab.poppedOut) if (po.leaf.sessionId == sessionId) count++
     }
     return count
 }
@@ -372,15 +372,20 @@ internal fun applyAppearanceClass() {
             (kotlinx.browser.document.querySelector(".theme-manager-sidebar") as? HTMLElement)?.let { add(it) }
         }
         if (sidebarEls.isNotEmpty()) put("sidebar", sidebarEls)
-        // Tabs section covers the entire top bar (app-header + tab-bar)
-        // and the Claude usage bar at the bottom, so they share the same
-        // theme colours.
+        // Tabs section covers the entire top bar (app-header + tab-bar).
+        // The Claude usage footer used to live here too, but now has its
+        // own "bottomBar" section so it can be themed independently.
         val tabsEls = listOfNotNull(
             kotlinx.browser.document.querySelector(".app-header") as? HTMLElement,
             kotlinx.browser.document.getElementById("tab-bar") as? HTMLElement,
-            kotlinx.browser.document.getElementById("claude-usage-bar") as? HTMLElement,
         )
         if (tabsEls.isNotEmpty()) put("tabs", tabsEls)
+        // Bottom bar (Claude usage footer) — its own theming slot so
+        // themes like Verdant can keep a dark strip in light mode.
+        val bottomBarEls = listOfNotNull(
+            kotlinx.browser.document.getElementById("claude-usage-bar") as? HTMLElement,
+        )
+        if (bottomBarEls.isNotEmpty()) put("bottomBar", bottomBarEls)
         // Windows section covers all pane frames (header, border, controls).
         queryElements(".terminal-cell").takeIf { it.isNotEmpty() }?.let { put("windows", it) }
         // Content-kind sections target the content container inside the pane,
@@ -423,12 +428,55 @@ internal fun applyAppearanceClass() {
             }
         }
     }
+
+    // Per-pane scheme overrides — applied last so they beat the section-windows
+    // override for each specific pane's .terminal-cell root. The cleanup pass
+    // above strips inline vars from every .terminal-cell, so without this
+    // re-apply step an appearance/theme switch would silently drop active
+    // per-pane overrides.
+    val cfg = state.config
+    if (cfg != null) {
+        for (tab in cfg.tabs) {
+            for (pane in tab.panes) {
+                val override = pane.colorScheme?.takeIf { it.isNotEmpty() } ?: continue
+                val selector = ".terminal-cell[data-pane='${pane.leaf.id}']"
+                val cell = kotlinx.browser.document.querySelector(selector) as? HTMLElement
+                    ?: continue
+                applyPaneSchemeOverride(cell, override)
+            }
+        }
+    }
 }
 
-/** Applies the current xterm theme to all registered terminal instances. */
+/**
+ * Applies the current xterm theme to all registered terminal instances,
+ * respecting per-pane `colorScheme` overrides. Panes without an override
+ * receive the globally-resolved terminal theme; panes with one receive a
+ * theme built from their chosen scheme's palette.
+ *
+ * Without the override-awareness step below, this function would stomp on
+ * the xterm themes just set by [applyAppearanceClass] for every pane that
+ * had picked its own colour scheme.
+ */
 internal fun applyThemeToTerminals() {
-    val xtermTheme = buildXtermTheme()
-    for (entry in terminals.values) entry.term.options.theme = xtermTheme
+    val globalTheme = buildXtermTheme()
+    val state = appVm.stateFlow.value
+    val isDark = !isLightActive(state.appearance)
+    val overrides = HashMap<String, String>()
+    state.config?.tabs?.forEach { tab ->
+        tab.panes.forEach { pane ->
+            pane.colorScheme?.takeIf { it.isNotEmpty() }?.let { overrides[pane.leaf.id] = it }
+        }
+    }
+    for ((paneId, entry) in terminals) {
+        val overrideName = overrides[paneId]
+        val theme = if (overrideName != null) {
+            val resolved = resolvePaneScheme(overrideName)
+            if (resolved != null) buildXtermThemeFromPalette(resolved.resolve(isDark))
+            else globalTheme
+        } else globalTheme
+        entry.term.options.theme = theme
+    }
 }
 
 /** Applies all visual changes: appearance CSS classes and xterm themes. */
@@ -456,6 +504,38 @@ internal fun applySidebarState() {
         val w = (state.sidebarWidth ?: 0).takeIf { it > 10 } ?: 260
         sb.style.width = "${w}px"
     }
+}
+
+/**
+ * Applies the persisted collapsed state of the app header to the DOM by
+ * toggling the `.collapsed` class. Called during initial settings hydration
+ * and after drag interactions change the state.
+ *
+ * @see AppBackingViewModel.State.headerCollapsed
+ */
+internal fun applyHeaderCollapsedState() {
+    val hdr = appHeaderEl ?: return
+    val collapsed = appVm.stateFlow.value.headerCollapsed
+    if (collapsed) hdr.classList.add("collapsed") else hdr.classList.remove("collapsed")
+}
+
+/**
+ * Applies the persisted collapsed state of the Claude usage bar to the DOM.
+ * The bar is only shown when both usage data is present AND the user has
+ * not collapsed it; the divider stays visible whenever data is present so
+ * the user can drag the bar back into view.
+ *
+ * Safe to call before the first usage envelope arrives — in that case the
+ * bar and divider both stay hidden (inline `display: none`, set in the
+ * initial HTML and by [updateClaudeUsageBadge] when `usage` is null).
+ *
+ * @see AppBackingViewModel.State.usageBarCollapsed
+ * @see updateClaudeUsageBadge
+ */
+internal fun applyUsageBarCollapsedState() {
+    val bar = usageBar ?: return
+    val collapsed = appVm.stateFlow.value.usageBarCollapsed
+    if (collapsed) bar.classList.add("collapsed") else bar.classList.remove("collapsed")
 }
 
 

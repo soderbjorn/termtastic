@@ -123,8 +123,11 @@ private fun usageItem(label: String, pct: Int, resetTime: String = ""): String {
  */
 fun updateClaudeUsageBadge(usage: dynamic) {
     val bar = usageBar ?: return
+    val divider = usageBarDividerEl
     if (usage == null || usage == undefined) {
+        // No data at all — hide both the bar and the drag handle above it.
         bar.style.display = "none"
+        divider?.style?.display = "none"
         return
     }
     val sessionPct = (usage.sessionPercent as? Int) ?: 0
@@ -147,6 +150,16 @@ fun updateClaudeUsageBadge(usage: dynamic) {
 
     bar.innerHTML = html
     bar.querySelector(".usage-refresh-btn")?.addEventListener("click", { launchCmd(WindowCommand.RefreshUsage) })
+    // Reset the class list but preserve the user's collapsed preference so a
+    // refresh envelope doesn't silently re-expand a bar the user hid.
     bar.className = "claude-usage-bar"
+    if (appVm.stateFlow.value.usageBarCollapsed) {
+        bar.classList.add("collapsed")
+    }
+    // Clear the "display:none" that the initial HTML uses before any data has
+    // arrived — from here on, the .collapsed class alone controls visibility.
     bar.style.display = ""
+    // Divider stays visible whenever data is present, regardless of the
+    // user's collapsed preference — that's what they grab to un-collapse.
+    divider?.style?.display = ""
 }

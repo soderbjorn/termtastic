@@ -41,8 +41,7 @@ data class WindowConfig(
 
 /**
  * Configuration for a single tab. Each tab contains zero or more free-form
- * [Pane]s (ordered by creation; stacking is determined by [Pane.z]) plus an
- * independent list of panes currently displayed in their own OS window.
+ * [Pane]s (ordered by creation; stacking is determined by [Pane.z]).
  *
  * @see WindowConfig.tabs
  */
@@ -56,16 +55,6 @@ data class TabConfig(
      * by [Pane.z] ascending so higher-z panes draw on top.
      */
     val panes: List<Pane> = emptyList(),
-    /**
-     * Panes that have been detached into a separate OS window (an Electron
-     * BrowserWindow). The server only tracks which panes are popped out so
-     * that (a) the main window can omit them from [panes] and (b) their PTY
-     * sessions are kept alive. The new window's geometry is managed by the
-     * OS and not persisted here — popped-out panes dock back into [panes]
-     * on server rehydrate since the Electron windows don't survive a server
-     * restart.
-     */
-    val poppedOut: List<PoppedOutPane> = emptyList(),
     /**
      * The id of the pane that was last focused in this tab. Used by the
      * client to restore focus when the user switches back to this tab, and
@@ -103,16 +92,18 @@ data class Pane(
      * server enforces the mutual exclusion in `toggleMaximized`.
      */
     val maximized: Boolean = false,
+    /**
+     * Optional per-pane color-scheme override by name. `null` means "use the
+     * global theme's section assignment for this pane's content kind". The
+     * name is resolved client-side against the user's custom schemes first,
+     * then the built-in `recommendedThemes` list. Changed by
+     * [WindowCommand.SetPaneColorScheme]; persists with the rest of the pane
+     * state in the window-config blob.
+     *
+     * @see WindowCommand.SetPaneColorScheme
+     */
+    val colorScheme: String? = null,
 )
-
-/**
- * A pane that has been detached from its tab's [TabConfig.panes] list and is
- * being rendered in its own OS-level window (a separate Electron
- * BrowserWindow). Only the [leaf] is tracked server-side; window geometry is
- * owned by the OS / Electron.
- */
-@Serializable
-data class PoppedOutPane(val leaf: LeafNode)
 
 /**
  * The content descriptor for a [Pane]. Each leaf carries its own id

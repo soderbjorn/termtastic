@@ -218,12 +218,11 @@ fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
  * Each cell includes a pane header with appropriate icon and controls.
  *
  * @param leaf the dynamic leaf node from the server config
- * @param popoutMode true if this cell is rendered in a pop-out window
  * @return the root HTMLElement for the pane cell
  * @see buildPane
  * @see buildPaneHeader
  */
-fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false, maximized: Boolean = false): HTMLElement {
+fun buildLeafCell(leaf: dynamic, maximized: Boolean = false): HTMLElement {
     val paneId = leaf.id as String
     val title = leaf.title as String
     val contentKind: String = (leaf.content?.kind as? String) ?: "terminal"
@@ -235,7 +234,7 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false, maximized: Boolean
 
     when (contentKind) {
         "fileBrowser" -> {
-            val header = buildPaneHeader(paneId, title, null, popoutMode = popoutMode, maximized = maximized)
+            val header = buildPaneHeader(paneId, title, null, maximized = maximized)
             val fbIcon = document.createElement("span") as HTMLElement
             fbIcon.className = "pane-header-icon"
             fbIcon.innerHTML = """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M2 4.5 a0.5 0.5 0 0 1 0.5 -0.5 h3.5 l1.25 1.75 h6.25 a0.5 0.5 0 0 1 0.5 0.5 v7.25 a0.5 0.5 0 0 1 -0.5 0.5 H2.5 a0.5 0.5 0 0 1 -0.5 -0.5 Z"/></svg>"""
@@ -253,7 +252,7 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false, maximized: Boolean
             cell.addEventListener("mousedown", { _ -> markPaneFocused(cell) })
         }
         "git" -> {
-            val header = buildPaneHeader(paneId, title, null, popoutMode = popoutMode, maximized = maximized)
+            val header = buildPaneHeader(paneId, title, null, maximized = maximized)
             val gitIcon = document.createElement("span") as HTMLElement
             gitIcon.className = "pane-header-icon"
             gitIcon.innerHTML = """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="5" cy="4" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="8" r="1.5"/><line x1="5" y1="5.5" x2="5" y2="10.5"/><path d="M5 5.5 C5 8 8 8 9.5 8"/></svg>"""
@@ -266,7 +265,7 @@ fun buildLeafCell(leaf: dynamic, popoutMode: Boolean = false, maximized: Boolean
         else -> {
             val sessionId = (leaf.content?.sessionId as? String) ?: (leaf.sessionId as String)
             val isLink = leaf.isLink as? Boolean ?: false
-            val header = buildPaneHeader(paneId, title, sessionId, popoutMode = popoutMode, isLink = isLink, maximized = maximized)
+            val header = buildPaneHeader(paneId, title, sessionId, isLink = isLink, maximized = maximized)
             val headerIcon = document.createElement("span") as HTMLElement
             headerIcon.className = "pane-header-icon"
             if (isLink) {
@@ -470,6 +469,14 @@ fun buildPane(paneDesc: dynamic, tabSection: HTMLElement): HTMLElement {
 
     val cell = buildLeafCell(leaf, maximized = maximized)
     pane.appendChild(cell)
+    // Apply the pane's colour-scheme override (if any) by scoping CSS vars
+    // on the floating-pane wrapper, the cell root, and the content container.
+    // Must run after `pane.appendChild(cell)` so the override can walk up to
+    // the `.floating-pane` ancestor via `cell.parentElement` — painting the
+    // wrapper's own border/background with the override colour. Setting vars
+    // only on `.terminal-cell` leaves the outer frame reading from :root.
+    val paneScheme = (paneDesc.colorScheme as? String)?.takeIf { it.isNotEmpty() }
+    applyPaneSchemeOverride(cell, paneScheme)
     attachPaneTabDrag(cell, paneId)
 
     // Capture-phase snapshot of focus state. Runs BEFORE any bubble-phase

@@ -17,8 +17,8 @@ import se.soderbjorn.termtastic.WindowCommand
 import se.soderbjorn.termtastic.WindowConfig
 
 /**
- * Walk [config] and return every leaf ID (visible and popped-out) across all
- * tabs. Used by the sidebar to determine which PTY sockets need to be open.
+ * Walk [config] and return every leaf ID across all tabs. Used by the sidebar
+ * to determine which PTY sockets need to be open.
  *
  * @param config the current window layout snapshot, or `null`.
  * @return a set of all leaf pane IDs, or an empty set if [config] is `null`.
@@ -28,15 +28,13 @@ fun collectLeafIds(config: WindowConfig?): Set<String> {
     val out = HashSet<String>()
     for (tab in config.tabs) {
         tab.panes.forEach { out.add(it.leaf.id) }
-        tab.poppedOut.forEach { out.add(it.leaf.id) }
     }
     return out
 }
 
 /**
  * Return the pane ID for the leaf whose session ID matches [sessionId], or
- * `null` if no such leaf exists. Searches visible and popped-out leaves
- * across all tabs.
+ * `null` if no such leaf exists.
  *
  * @param config    the current window layout, or `null` (returns `null`).
  * @param sessionId the PTY session identifier to look up.
@@ -46,14 +44,13 @@ fun findPaneIdBySession(config: WindowConfig?, sessionId: String): String? {
     if (config == null || sessionId.isEmpty()) return null
     for (tab in config.tabs) {
         tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.id }
-        tab.poppedOut.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.id }
     }
     return null
 }
 
 /**
  * Return the tab ID that currently holds [paneId], or `null` if the pane
- * isn't found. Searches visible and popped-out panes across all tabs.
+ * isn't found.
  *
  * @param config the current window layout, or `null`.
  * @param paneId the pane ID to locate.
@@ -62,9 +59,7 @@ fun findPaneIdBySession(config: WindowConfig?, sessionId: String): String? {
 fun findTabIdOfPane(config: WindowConfig?, paneId: String): String? {
     if (config == null || paneId.isEmpty()) return null
     for (tab in config.tabs) {
-        if (tab.panes.any { it.leaf.id == paneId } ||
-            tab.poppedOut.any { it.leaf.id == paneId }
-        ) return tab.id
+        if (tab.panes.any { it.leaf.id == paneId }) return tab.id
     }
     return null
 }

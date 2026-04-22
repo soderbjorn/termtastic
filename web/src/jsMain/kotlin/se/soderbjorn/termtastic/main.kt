@@ -6,14 +6,8 @@
  * hydrating UI settings from the server, and connecting the WebSocket-driven
  * rendering pipeline.
  *
- * The application supports two modes:
- * - **Normal mode**: full multi-tab, multi-pane terminal layout with sidebar,
- *   tab bar, settings panel, and all pane types
- * - **Popout mode**: single-pane window for Electron pop-out, delegated to [initPopoutMode]
- *
  * @see start
  * @see connectWindow
- * @see initPopoutMode
  */
 package se.soderbjorn.termtastic
 
@@ -116,14 +110,13 @@ internal fun updateAppearanceToggle() {
  *
  * Performs the following steps:
  * 1. Ensures an auth token exists and is stored in a cookie
- * 2. Detects client type (Electron vs. Web) and popout mode
+ * 2. Detects client type (Electron vs. Web)
  * 3. Creates the [TermtasticClient], [WindowSocket], and [AppBackingViewModel]
  * 4. Hydrates UI settings from the server via REST
  * 5. Sets up reactive state observers for theme/appearance/pane-status changes
  * 6. Registers global event listeners (click, drag, resize)
- * 7. For popout mode: delegates to [initPopoutMode]
- * 8. For normal mode: sets up DOM references, sidebar resize, tab bar scrolling,
- *    and calls [connectWindow] to start the rendering pipeline
+ * 7. Sets up DOM references, sidebar resize, tab bar scrolling, and calls
+ *    [connectWindow] to start the rendering pipeline
  */
 private fun start() {
     ensureAuthToken()
@@ -134,22 +127,15 @@ private fun start() {
         "&clientType=" + encodeUriComponent(clientTypeAtStart)
     proto = if (window.location.protocol == "https:") "wss" else "ws"
     isElectronClient = window.navigator.userAgent.contains("Electron", ignoreCase = true)
-    // Tag the body when we're in an Electron renderer on macOS. The main and
-    // popout BrowserWindows use titleBarStyle: "hiddenInset" so the theme
-    // tint can bleed through the titlebar; that leaves the native traffic
-    // lights floating over the upper-left of our content. A body class lets
-    // CSS reserve horizontal room for them (see styles.css — look for
+    // Tag the body when we're in an Electron renderer on macOS. The main
+    // BrowserWindow uses titleBarStyle: "hiddenInset" so the theme tint can
+    // bleed through the titlebar; that leaves the native traffic lights
+    // floating over the upper-left of our content. A body class lets CSS
+    // reserve horizontal room for them (see styles.css — look for
     // `is-electron-mac`). Non-mac Electron puts window controls on the
     // right and needs no such padding, hence the platform gate.
     if (isElectronClient && window.navigator.userAgent.contains("Mac OS X", ignoreCase = true)) {
         document.body?.classList?.add("is-electron-mac")
-    }
-    val urlSearch = js("new URLSearchParams(window.location.search)")
-    popoutPaneIdParam = (urlSearch.get("popout") as? String)?.takeIf { it.isNotEmpty() }
-    isPopoutMode = popoutPaneIdParam != null
-
-    if (isPopoutMode) {
-        document.body?.classList?.add("popout-mode")
     }
 
     // Create the TermtasticClient + WindowSocket + AppBackingViewModel
@@ -231,6 +217,8 @@ private fun start() {
             appVm.applyServerUiSettings(jsonObj)
             refreshAndApplyActiveTheme()
             applySidebarState()
+            applyHeaderCollapsedState()
+            applyUsageBarCollapsedState()
         }
     }
 
@@ -447,14 +435,11 @@ private fun start() {
     }
 
     usageBar = document.getElementById("claude-usage-bar") as? HTMLElement
+    usageBarDividerEl = document.getElementById("usage-bar-divider") as? HTMLElement
+    appHeaderEl = document.querySelector(".app-header") as? HTMLElement
+    headerDividerEl = document.getElementById("header-divider") as? HTMLElement
 
-    // ── Popout mode ─────────────────────────────────────────────────
-    if (isPopoutMode) {
-        initPopoutMode()
-        return
-    }
-
-    // ── Normal mode DOM setup ───────────────────────────────────────
+    // ── DOM setup ───────────────────────────────────────────────────
     tabBarEl = document.getElementById("tab-bar") as HTMLElement
     terminalWrapEl = document.getElementById("terminal-wrap") as HTMLElement
     sidebarEl = document.getElementById("sidebar") as HTMLElement
@@ -524,6 +509,121 @@ private fun start() {
         })
     }
 
+    // Header resize via horizontal divider drag — drag up to collapse the
+    // header (tab bar + toolbar) to 0 px, drag down to reveal it again.
+    // Mirrors the sidebar-divider drag but vertical. The divider element
+    // stays in the DOM even when the header is `display: none`, giving the
+    // user something to grab to un-collapse.
+    run {
+        val hdr = appHeaderEl ?: return@run
+        val divider = headerDividerEl ?: return@run
+        var dragging = false
+        var startY = 0.0
+        var startHeight = 0.0
+        divider.addEventListener("mousedown", { ev ->
+            ev.preventDefault(); dragging = true
+            startY = (ev as MouseEvent).clientY.toDouble()
+            val wasCollapsed = hdr.classList.contains("collapsed")
+            if (wasCollapsed) {
+                // Reveal the header at 0 px so mousemove can grow it from there.
+                hdr.classList.remove("collapsed")
+                startHeight = 0.0
+            } else {
+                startHeight = hdr.getBoundingClientRect().height
+            }
+            hdr.style.height = "${startHeight}px"
+            hdr.style.setProperty("min-height", "0px")
+            hdr.style.setProperty("overflow", "hidden")
+            hdr.style.transition = "none"
+            divider.classList.add("dragging")
+            document.body?.style?.cursor = "row-resize"
+            document.body?.style?.setProperty("user-select", "none")
+        })
+        document.addEventListener("mousemove", { ev ->
+            if (!dragging) return@addEventListener
+            val dy = (ev as MouseEvent).clientY.toDouble() - startY
+            val newHeight = (startHeight + dy).coerceIn(0.0, 400.0)
+            hdr.style.height = "${newHeight}px"
+        })
+        document.addEventListener("mouseup", { _ ->
+            if (!dragging) return@addEventListener
+            dragging = false
+            divider.classList.remove("dragging")
+            document.body?.style?.cursor = ""
+            document.body?.style?.removeProperty("user-select")
+            val finalHeight = hdr.getBoundingClientRect().height.toInt()
+            // Clear inline overrides so either the .collapsed class
+            // (display:none) or the CSS-defined natural height takes over.
+            hdr.style.removeProperty("height")
+            hdr.style.removeProperty("min-height")
+            hdr.style.removeProperty("overflow")
+            hdr.style.removeProperty("transition")
+            if (finalHeight <= 10) {
+                hdr.classList.add("collapsed")
+                GlobalScope.launch { appVm.setHeaderCollapsed(true) }
+            } else {
+                hdr.classList.remove("collapsed")
+                GlobalScope.launch { appVm.setHeaderCollapsed(false) }
+            }
+            fitVisible()
+        })
+    }
+
+    // Usage-bar resize via horizontal divider drag — mirror image of the
+    // header drag: the divider lives *above* the bar, so dragging up grows
+    // the bar and dragging down shrinks it.
+    run {
+        val bar = usageBar ?: return@run
+        val divider = usageBarDividerEl ?: return@run
+        var dragging = false
+        var startY = 0.0
+        var startHeight = 0.0
+        divider.addEventListener("mousedown", { ev ->
+            ev.preventDefault(); dragging = true
+            startY = (ev as MouseEvent).clientY.toDouble()
+            val wasCollapsed = bar.classList.contains("collapsed")
+            if (wasCollapsed) {
+                bar.classList.remove("collapsed")
+                startHeight = 0.0
+            } else {
+                startHeight = bar.getBoundingClientRect().height
+            }
+            bar.style.height = "${startHeight}px"
+            bar.style.setProperty("overflow", "hidden")
+            bar.style.transition = "none"
+            divider.classList.add("dragging")
+            document.body?.style?.cursor = "row-resize"
+            document.body?.style?.setProperty("user-select", "none")
+        })
+        document.addEventListener("mousemove", { ev ->
+            if (!dragging) return@addEventListener
+            val dy = (ev as MouseEvent).clientY.toDouble() - startY
+            // Divider is above the bar — dragging the cursor *up* (negative
+            // dy) should grow the bar.
+            val newHeight = (startHeight - dy).coerceIn(0.0, 200.0)
+            bar.style.height = "${newHeight}px"
+        })
+        document.addEventListener("mouseup", { _ ->
+            if (!dragging) return@addEventListener
+            dragging = false
+            divider.classList.remove("dragging")
+            document.body?.style?.cursor = ""
+            document.body?.style?.removeProperty("user-select")
+            val finalHeight = bar.getBoundingClientRect().height.toInt()
+            bar.style.removeProperty("height")
+            bar.style.removeProperty("overflow")
+            bar.style.removeProperty("transition")
+            if (finalHeight <= 10) {
+                bar.classList.add("collapsed")
+                GlobalScope.launch { appVm.setUsageBarCollapsed(true) }
+            } else {
+                bar.classList.remove("collapsed")
+                GlobalScope.launch { appVm.setUsageBarCollapsed(false) }
+            }
+            fitVisible()
+        })
+    }
+
     // Boot fade.
     terminalWrapLocal.classList.add("booting")
     (document.querySelector(".app-header") as? HTMLElement)?.classList?.add("booting")
@@ -541,14 +641,6 @@ private fun start() {
 
     // Connect and go.
     connectWindow()
-
-    // Electron popout-close handler.
-    val electronApiForPopout = window.asDynamic().electronApi
-    if (electronApiForPopout?.onPopoutClosed != null) {
-        electronApiForPopout.onPopoutClosed { paneId: String ->
-            launchCmd(WindowCommand.DockPoppedOut(paneId = paneId))
-        }
-    }
 
     window.addEventListener("resize", {
         fitVisible()

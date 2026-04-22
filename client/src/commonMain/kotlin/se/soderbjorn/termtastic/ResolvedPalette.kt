@@ -29,6 +29,7 @@ package se.soderbjorn.termtastic
  * @property terminal  Colours fed directly to the xterm.js theme object.
  * @property chrome    macOS / desktop window-frame colours.
  * @property sidebar   Tree-view / pane-list sidebar colours.
+ * @property bottomBar Footer strip colours (Claude usage bar).
  * @property diff      Git diff pane line-state colours.
  * @property syntax    Code-pane syntax-highlighting token colours.
  */
@@ -41,6 +42,7 @@ data class ResolvedPalette(
     val terminal: Terminal,
     val chrome: Chrome,
     val sidebar: Sidebar,
+    val bottomBar: BottomBar,
     val diff: Diff,
     val syntax: Syntax,
 ) {
@@ -177,6 +179,21 @@ data class ResolvedPalette(
         val textDim: Long,
         val activeBg: Long,
         val activeText: Long,
+    )
+
+    /**
+     * Footer strip colours (the Claude usage bar at the bottom of the window).
+     *
+     * @property bg      Footer background.
+     * @property text    Primary footer text (labels).
+     * @property textDim Secondary footer text (captions, metadata).
+     * @property border  Top divider between app body and footer.
+     */
+    data class BottomBar(
+        val bg: Long,
+        val text: Long,
+        val textDim: Long,
+        val border: Long,
     )
 
     /**

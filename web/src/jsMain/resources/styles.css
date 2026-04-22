@@ -108,7 +108,7 @@
     --terminal-bg: var(--t-terminal-bg, #000000);
     --toolbar-shadow: 0 2px 8px var(--t-chrome-shadow, rgba(0, 0, 0, 0.3));
     --header-height: 40px;
-    --terminal-padding: 18px;
+    --terminal-padding: 9px;
     --terminal-gap: 12px;
 }
 
@@ -268,21 +268,6 @@ body.is-electron-mac .app-header {
     padding-left: 80px;
 }
 
-/* Popout windows hide .app-header entirely (see the popout-mode rules
-   further down); the pane's own header sits at the top of the window
-   instead and needs the same drag + traffic-light treatment. */
-body.is-electron-mac.popout-mode .popout-cell > .pane-header {
-    -webkit-app-region: drag;
-    app-region: drag;
-    padding-left: 80px;
-}
-body.is-electron-mac.popout-mode .popout-cell > .pane-header .pane-action-btn,
-body.is-electron-mac.popout-mode .popout-cell > .pane-header .pane-header-icon,
-body.is-electron-mac.popout-mode .popout-cell > .pane-header .terminal-title {
-    -webkit-app-region: no-drag;
-    app-region: no-drag;
-}
-
 .header-brand {
     display: flex;
     align-items: center;
@@ -316,7 +301,9 @@ body.is-electron-mac.popout-mode .popout-cell > .pane-header .terminal-title {
     padding: 0;
 }
 
-/* Claude Code usage bar (bottom of window) */
+/* Claude Code usage bar (bottom of window). Reads its own --t-bottomBar-*
+   tokens with fallbacks to the legacy aliases, so themes that don't set
+   the new slot look exactly as before. */
 .claude-usage-bar {
     display: flex;
     align-items: center;
@@ -324,9 +311,9 @@ body.is-electron-mac.popout-mode .popout-cell > .pane-header .terminal-title {
     padding: 3px 12px;
     font-size: 11px;
     font-weight: 500;
-    color: var(--text-secondary);
-    background: var(--background);
-    border-top: 1px solid var(--separator);
+    color: var(--t-bottomBar-text, var(--text-secondary));
+    background: var(--t-bottomBar-bg, var(--background));
+    border-top: 1px solid var(--t-bottomBar-border, var(--separator));
     white-space: nowrap;
     user-select: none;
     flex-shrink: 0;
@@ -720,6 +707,51 @@ body.is-electron-mac.popout-mode .popout-cell > .pane-header .terminal-title {
     background: var(--termtastic-orange);
     width: 2px;
     left: 3.5px;
+}
+
+/* Horizontal cousins of the sidebar divider. The header-divider sits between
+   the app header and the app body; the usage-bar-divider sits between the
+   app body and the Claude usage footer. Both stay visible when their
+   adjacent bar is hidden (display:none on .app-header.collapsed /
+   .claude-usage-bar.collapsed) so the user always has a grab target. */
+.header-divider,
+.usage-bar-divider {
+    height: 9px;
+    margin: -2px 0;
+    flex-shrink: 0;
+    cursor: row-resize;
+    background: transparent;
+    position: relative;
+    z-index: 5;
+}
+.header-divider::after,
+.usage-bar-divider::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 4px;
+    height: 1px;
+    background: var(--separator, #333);
+}
+.header-divider:hover::after,
+.header-divider.dragging::after,
+.usage-bar-divider:hover::after,
+.usage-bar-divider.dragging::after {
+    background: var(--termtastic-orange);
+    height: 2px;
+    top: 3.5px;
+}
+
+/* Collapsed states — drag the divider to ~0 px to hide. The element is
+   removed from layout so dropdowns anchored inside the header don't stay
+   clickable while the header is gone; the divider above (for the header)
+   or below (for the usage bar) remains in the DOM as the re-expand grab. */
+.app-header.collapsed {
+    display: none;
+}
+.claude-usage-bar.collapsed {
+    display: none;
 }
 
 /* Tree structure inside the sidebar */
@@ -1926,53 +1958,6 @@ body.is-electron-mac.popout-mode .popout-cell > .pane-header .terminal-title {
     .tab-pane {
         transform: none;
     }
-}
-
-/* --- Popout mode ---------------------------------------------------------
- * Applied by main.kt when the renderer detects ?popout=<paneId> in the URL.
- * An Electron BrowserWindow was opened to host a single popped-out pane, so
- * we hide all the main-app chrome (header, tab bar, sidebar, divider) and
- * let the single .popout-cell fill the viewport. The pane's content kind
- * (terminal / markdown / git) is resolved from the first server config push.
- */
-body.popout-mode .app-header,
-body.popout-mode .sidebar,
-body.popout-mode .sidebar-divider,
-body.popout-mode .settings-sidebar {
-    display: none !important;
-}
-body.popout-mode .app-body {
-    height: 100%;
-}
-body.popout-mode .terminal-wrap {
-    padding: 0;
-    background: var(--terminal-bg);
-}
-body.popout-mode .popout-cell {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    height: 100%;
-    border-radius: 0;
-}
-body.popout-mode .popout-cell .terminal {
-    flex: 1;
-    min-height: 0;
-}
-/* Markdown / git pane bodies inside a popout cell — fill the viewport too. */
-body.popout-mode .popout-cell .md-view,
-body.popout-mode .popout-cell .git-view {
-    flex: 1;
-    min-height: 0;
-}
-.popout-placeholder {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-    color: var(--muted-text, #888);
-    font-size: 13px;
 }
 
 /* Picker shown inside a freshly-split (empty) pane until the user chooses a kind. */
@@ -3668,7 +3653,7 @@ body.appearance-light .settings-choice-btn.selected {
 
 /* Server settings button at the bottom of the settings sidebar */
 .settings-server-btn {
-    margin: 8px 20px 20px;
+    margin: 8px 0 20px;
     appearance: none;
     background: var(--surface, #252526);
     border: 1px solid var(--separator, #3c3c3c);
@@ -3985,26 +3970,13 @@ body.appearance-light .settings-section-select {
     justify-content: center;
 }
 
-.theme-manager-slot-mark {
-    display: inline-flex;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    align-items: center;
-    justify-content: center;
-    font-size: 9px;
-    font-weight: 700;
-    background: var(--t-accent-primary, var(--termtastic-orange));
-    color: var(--t-accent-onPrimary, #fff);
-}
-
 .theme-manager-star {
     position: absolute;
     top: 4px;
     left: 4px;
-    background: rgba(0, 0, 0, 0.28);
+    background: var(--star-bg, var(--t-surface-overlay, rgba(0, 0, 0, 0.28)));
     border: none;
-    color: #ddd;
+    color: var(--star-fg, var(--t-text-secondary, #ddd));
     font-size: 14px;
     line-height: 1;
     padding: 2px 5px;
@@ -4014,21 +3986,21 @@ body.appearance-light .settings-section-select {
 }
 
 .theme-manager-star.active {
-    color: #ffc857;
+    color: var(--star-active-fg, var(--t-accent-primary, #ffc857));
 }
 
 .theme-manager-star:hover {
-    background: rgba(0, 0, 0, 0.5);
-    color: #ffc857;
+    background: var(--star-bg-hover, var(--t-surface-sunken, rgba(0, 0, 0, 0.5)));
+    color: var(--star-active-fg, var(--t-accent-primary, #ffc857));
 }
 
 .theme-manager-kebab {
     position: absolute;
     top: 4px;
     right: 4px;
-    background: var(--t-surface-overlay, rgba(0, 0, 0, 0.28));
+    background: var(--kebab-bg, var(--t-surface-overlay, rgba(0, 0, 0, 0.28)));
     border: none;
-    color: var(--t-text-secondary, #ddd);
+    color: var(--kebab-fg, var(--t-text-secondary, #ddd));
     font-size: 14px;
     line-height: 1;
     padding: 2px 8px;
@@ -4038,8 +4010,8 @@ body.appearance-light .settings-section-select {
 }
 
 .theme-manager-kebab:hover {
-    background: var(--t-surface-sunken, rgba(0, 0, 0, 0.5));
-    color: var(--t-text-primary, #fff);
+    background: var(--kebab-bg-hover, var(--t-surface-sunken, rgba(0, 0, 0, 0.5)));
+    color: var(--kebab-fg-hover, var(--t-text-primary, #fff));
 }
 
 .theme-manager-menu {
@@ -4325,6 +4297,18 @@ body.appearance-light .settings-section-select {
     gap: 10px;
     flex: 1 1 auto;
     min-width: 0;
+}
+
+/* Per-pane palette dropdown — italicized "Default" (clear-action) sits at
+   the top of the menu, separated from the real scheme rows beneath by a
+   hairline so it reads as a distinct action. */
+.pane-palette-default .pane-palette-default-label {
+    font-style: italic;
+}
+.pane-palette-default {
+    border-bottom: 1px solid var(--t-border-subtle, rgba(255, 255, 255, 0.08));
+    margin-bottom: 4px;
+    padding-bottom: 6px;
 }
 
 .theme-editor-actions {

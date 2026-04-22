@@ -159,6 +159,16 @@ fun TerminalTheme.resolve(isDark: Boolean): ResolvedPalette {
         ?: withAlpha(fg, if (isDark) 0.10 else 0.08)
     val sidebarActiveText = overrideFor(ovr, "sidebar.activeText", isDark) ?: fg
 
+    // ── Bottom bar (footer / Claude usage strip) ──────────────────
+    // Defaults mirror the historical CSS: the footer took its background
+    // from the sidebar alias and its text from text.secondary. Themes that
+    // want a dark footer in a light palette (or vice versa) can override
+    // these tokens independently per appearance mode.
+    val bottomBarBg = overrideFor(ovr, "bottomBar.bg", isDark) ?: sidebarBg
+    val bottomBarText = overrideFor(ovr, "bottomBar.text", isDark) ?: textSecondary
+    val bottomBarTextDim = overrideFor(ovr, "bottomBar.textDim", isDark) ?: textTertiary
+    val bottomBarBorder = overrideFor(ovr, "bottomBar.border", isDark) ?: borderSubtle
+
     // ── Diff ───────────────────────────────────────────────────────
     val diffAddBg = overrideFor(ovr, "diff.addBg", isDark)
         ?: withAlpha(semanticSuccess, if (isDark) 0.12 else 0.10)
@@ -238,6 +248,12 @@ fun TerminalTheme.resolve(isDark: Boolean): ResolvedPalette {
             textDim = sidebarTextDim,
             activeBg = sidebarActiveBg,
             activeText = sidebarActiveText,
+        ),
+        bottomBar = ResolvedPalette.BottomBar(
+            bg = bottomBarBg,
+            text = bottomBarText,
+            textDim = bottomBarTextDim,
+            border = bottomBarBorder,
         ),
         diff = ResolvedPalette.Diff(
             addBg = diffAddBg,

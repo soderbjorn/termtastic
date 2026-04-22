@@ -126,11 +126,20 @@
             </button>
         </div>
     </header>
+    <!-- Horizontal drag handle below the header. Drag up to hide the header
+         (tab bar + toolbar); drag back down to reveal it again. Mirrors the
+         sidebar divider but vertical — stays visible even when the header is
+         collapsed so the user always has something to grab. -->
+    <div class="header-divider" id="header-divider"></div>
     <div class="app-body">
         <aside class="sidebar" id="sidebar"></aside>
         <div class="sidebar-divider" id="sidebar-divider"></div>
         <main class="terminal-wrap" id="terminal-wrap"></main>
     </div>
+    <!-- Horizontal drag handle above the Claude usage bar. Only visible when
+         the server has pushed usage data; drag down to hide the bar, drag up
+         to reveal it. -->
+    <div class="usage-bar-divider" id="usage-bar-divider" style="display: none;"></div>
     <footer id="claude-usage-bar" class="claude-usage-bar" style="display: none;"></footer>
 </div>
 <script type="application/javascript" src="web.js"></script>

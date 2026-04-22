@@ -118,6 +118,80 @@ private val rosePineOverrides: Map<String, Long> = mapOf(
     "syntax.constant.dark" to 0xFFEB6F92L, "syntax.constant.light" to 0xFFA83352L,
 )
 
+/**
+ * Semantic-token overrides for the Verdant theme — a minimalist
+ * terminal-IDE palette with a near-black green-tinted background, soft
+ * off-white body text, and punchy mint-green accents reserved for active
+ * items, focus rings, prompts, and git-add highlights.
+ *
+ * The seed fg is intentionally low-saturation so primary text reads as
+ * near-white; the accent, sidebar-active, focus, cursor, success, and
+ * diff-add tokens are overridden to the saturated mint green so the two
+ * tiers stay visually distinct.
+ */
+private val verdantOverrides: Map<String, Long> = mapOf(
+    // Surface — light mode is a subtle layered-white look from the design:
+    // the window chrome/sidebar is a light warm-gray, and panes (including
+    // the terminal) sit on top as near-white panels. The deterministic
+    // derivation would darken raised surfaces below bg, which is the wrong
+    // direction here.
+    "surface.raised.light"     to 0xFFF8F8F5L,
+    "surface.sunken.light"     to 0xFFDFE0DCL,
+    "surface.overlay.light"    to 0xFFEDEEEAL,
+
+    // Terminal — in light mode, xterm.js fills the whole pane with
+    // terminal.bg, so it needs to match the raised surface (near-white)
+    // rather than the chrome base, otherwise each terminal pane reads as
+    // a dirty gray block against the otherwise-white panes.
+    "terminal.bg.light"        to 0xFFF8F8F5L,
+
+    // Bottom bar — a signature of the design: the footer strip stays dark
+    // even when the rest of the app is in light mode. Dark mode keeps
+    // defaults (= sidebar.bg / text.secondary / border.subtle).
+    "bottomBar.bg.light"       to 0xFF0B0F0CL,
+    "bottomBar.text.light"     to 0xFFE2E2DEL,
+    "bottomBar.textDim.light"  to 0xFF9AA29CL,
+    "bottomBar.border.light"   to 0xFF1A1E1BL,
+
+    // Accent — bright mint used for prompts, active indicators, focus
+    "accent.primary.dark"      to 0xFF8DE5A8L, "accent.primary.light"      to 0xFF2E7D4AL,
+    "accent.primarySoft.dark"  to 0x288DE5A8L, "accent.primarySoft.light"  to 0x242E7D4AL,
+    "accent.primaryGlow.dark"  to 0x508DE5A8L, "accent.primaryGlow.light"  to 0x402E7D4AL,
+
+    // Sidebar — green for the currently-selected row
+    "sidebar.activeText.dark"  to 0xFF8DE5A8L, "sidebar.activeText.light"  to 0xFF2E7D4AL,
+    "sidebar.activeBg.dark"    to 0x228DE5A8L, "sidebar.activeBg.light"    to 0x1A2E7D4AL,
+
+    // Focus ring + terminal cursor
+    "border.focus.dark"        to 0xFF8DE5A8L, "border.focus.light"        to 0xFF2E7D4AL,
+    "border.focusGlow.dark"    to 0x4C8DE5A8L, "border.focusGlow.light"    to 0x402E7D4AL,
+    "terminal.cursor.dark"     to 0xFF8DE5A8L, "terminal.cursor.light"     to 0xFF2E7D4AL,
+
+    // Semantic — tuned muted-but-legible status palette
+    "semantic.success.dark"    to 0xFF8DE5A8L, "semantic.success.light"    to 0xFF2E7D4AL,
+    "semantic.danger.dark"     to 0xFFE8857AL, "semantic.danger.light"     to 0xFFB84A3AL,
+    "semantic.warn.dark"       to 0xFFE6C380L, "semantic.warn.light"       to 0xFFA8771AL,
+    "semantic.info.dark"       to 0xFF84D2C7L, "semantic.info.light"       to 0xFF1A7A75L,
+
+    // Diff — subtle tinted backgrounds, saturated gutter + fg
+    "diff.addBg.dark"          to 0x228DE5A8L, "diff.addBg.light"          to 0x1A2E7D4AL,
+    "diff.addFg.dark"          to 0xFF8DE5A8L, "diff.addFg.light"          to 0xFF2E7D4AL,
+    "diff.addGutter.dark"      to 0xFF8DE5A8L, "diff.addGutter.light"      to 0xFF2E7D4AL,
+    "diff.removeBg.dark"       to 0x22E8857AL, "diff.removeBg.light"       to 0x1AB84A3AL,
+    "diff.removeFg.dark"       to 0xFFE8857AL, "diff.removeFg.light"       to 0xFFB84A3AL,
+    "diff.removeGutter.dark"   to 0xFFE8857AL, "diff.removeGutter.light"   to 0xFFB84A3AL,
+
+    // Syntax — calm terminal palette with mint keywords and coral constants
+    "syntax.keyword.dark"      to 0xFF8DE5A8L, "syntax.keyword.light"      to 0xFF2E7D4AL,
+    "syntax.string.dark"       to 0xFFE6C380L, "syntax.string.light"       to 0xFFA8771AL,
+    "syntax.number.dark"       to 0xFFE8A5C1L, "syntax.number.light"       to 0xFFB64A78L,
+    "syntax.comment.dark"      to 0xFF5E6D65L, "syntax.comment.light"      to 0xFF8A968EL,
+    "syntax.function.dark"     to 0xFF9EE8C4L, "syntax.function.light"     to 0xFF1A7A4AL,
+    "syntax.type.dark"         to 0xFF84D2C7L, "syntax.type.light"         to 0xFF1A7A75L,
+    "syntax.operator.dark"     to 0xFFC9D2CDL, "syntax.operator.light"     to 0xFF3D4945L,
+    "syntax.constant.dark"     to 0xFFE8857AL, "syntax.constant.light"     to 0xFFB84A3AL,
+)
+
 val recommendedThemes: List<TerminalTheme> = listOf(
     TerminalTheme("Matrix",        "#33ff66", "#0a7d2c"),
     TerminalTheme("Mint terminal", "#33ff99", "#0b8a5b"),
@@ -165,6 +239,9 @@ val recommendedThemes: List<TerminalTheme> = listOf(
     // Tinted-background themes — designer palettes with their canonical
     // background colors instead of pure black/white. These give the picker
     // real variation (cream Solarized Light, deep navy Tokyo Night, etc.).
+    TerminalTheme("Verdant",        darkFg = "#e2e2de", lightFg = "#1a1d1a",
+                                    darkBg = "#0b0f0c", lightBg = "#e9eae6",
+                                    overrides = verdantOverrides),
     TerminalTheme("Solarized",      darkFg = "#93a1a1", lightFg = "#657b83",
                                     darkBg = "#002b36", lightBg = "#fdf6e3",
                                     overrides = solarizedOverrides),

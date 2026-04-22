@@ -158,8 +158,8 @@ fun TabNameDialog(
 /**
  * Collects all leaf panes from the given [WindowConfig] as [SplitTarget] items.
  *
- * Walks every tab's visible and popped-out panes and returns a flat list
- * suitable for [PanePickerDialog].
+ * Walks every tab's panes and returns a flat list suitable for
+ * [PanePickerDialog].
  *
  * @param config the current window configuration, or null if not yet received.
  * @return a list of split targets; empty if [config] is null.
@@ -169,7 +169,6 @@ fun collectSplitTargets(config: WindowConfig?): List<SplitTarget> {
     val targets = mutableListOf<SplitTarget>()
     for (tab in config.tabs) {
         tab.panes.forEach { targets.add(SplitTarget(it.leaf.id, it.leaf.title)) }
-        tab.poppedOut.forEach { targets.add(SplitTarget(it.leaf.id, it.leaf.title)) }
     }
     return targets
 }

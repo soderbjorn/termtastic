@@ -15,8 +15,7 @@ import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.WindowEnvelope
 
 /**
- * Find a [LeafNode] by its pane ID across all tabs, including visible and
- * popped-out panes.
+ * Find a [LeafNode] by its pane ID across all tabs.
  *
  * @param config the current window layout.
  * @param paneId the unique pane identifier to search for.
@@ -25,7 +24,6 @@ import se.soderbjorn.termtastic.WindowEnvelope
 fun findLeafById(config: WindowConfig, paneId: String): LeafNode? {
     for (tab in config.tabs) {
         tab.panes.firstOrNull { it.leaf.id == paneId }?.let { return it.leaf }
-        tab.poppedOut.firstOrNull { it.leaf.id == paneId }?.let { return it.leaf }
     }
     return null
 }
@@ -40,7 +38,6 @@ fun findLeafById(config: WindowConfig, paneId: String): LeafNode? {
 fun findLeafBySessionId(config: WindowConfig, sessionId: String): LeafNode? {
     for (tab in config.tabs) {
         tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
-        tab.poppedOut.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
     }
     return null
 }

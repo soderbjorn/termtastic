@@ -220,6 +220,21 @@ sealed class WindowCommand {
     data class SetTerminalFontSize(val paneId: String, val size: Int) : WindowCommand()
 
     /**
+     * Override (or clear) the color scheme applied to a single pane. The
+     * scheme scopes CSS variables onto the pane's `.terminal-cell` root so
+     * both the pane chrome (header, border) and its content area pick up
+     * the chosen palette. Persisted with the rest of the pane state.
+     *
+     * @param paneId the pane whose scheme to set
+     * @param scheme the scheme name, or `null` to clear the override and
+     *   fall back to the global theme's section assignment
+     * @see Pane.colorScheme
+     */
+    @Serializable
+    @SerialName("setPaneColorScheme")
+    data class SetPaneColorScheme(val paneId: String, val scheme: String?) : WindowCommand()
+
+    /**
      * Close a single pane. If the pane is a terminal, its PTY session is
      * terminated (unless other linked views still reference it).
      *
@@ -252,7 +267,7 @@ sealed class WindowCommand {
     object AddTab : WindowCommand()
 
     /**
-     * Close a tab and all panes within it (docked, floating, and popped out).
+     * Close a tab and all panes within it.
      *
      * @param tabId the id of the tab to close
      */
@@ -416,28 +431,6 @@ sealed class WindowCommand {
         val layout: String,
         val primaryPaneId: String? = null,
     ) : WindowCommand()
-
-    /**
-     * Detach a pane from the main window and display it in a separate OS-level
-     * window (Electron BrowserWindow).
-     *
-     * @param paneId the pane to pop out
-     * @see PoppedOutPane
-     */
-    @Serializable
-    @SerialName("popOut")
-    data class PopOut(val paneId: String) : WindowCommand()
-
-    /**
-     * Return a previously popped-out pane back into the main window at a
-     * random snap-aligned position on top of any existing panes.
-     *
-     * @param paneId the popped-out pane to dock back
-     * @see PopOut
-     */
-    @Serializable
-    @SerialName("dockPoppedOut")
-    data class DockPoppedOut(val paneId: String) : WindowCommand()
 
     /**
      * Move a pane from its current tab to a different tab.

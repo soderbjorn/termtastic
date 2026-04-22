@@ -41,7 +41,6 @@ import se.soderbjorn.termtastic.LeafContent
 import se.soderbjorn.termtastic.LeafNode
 import se.soderbjorn.termtastic.Pane
 import se.soderbjorn.termtastic.PaneGeometry
-import se.soderbjorn.termtastic.PoppedOutPane
 import se.soderbjorn.termtastic.TabConfig
 import se.soderbjorn.termtastic.TerminalContent
 import se.soderbjorn.termtastic.WindowConfig
@@ -187,7 +186,6 @@ class SettingsRepository(dbFile: File) {
                 id = tab.id,
                 title = tab.title,
                 panes = panes,
-                poppedOut = tab.poppedOut.map { PoppedOutPane(leaf = it.leaf.toLeafNode()) },
                 focusedPaneId = tab.focusedPaneId,
             )
         }
@@ -439,7 +437,6 @@ private data class LegacyTab(
     val title: String,
     val root: LegacyNode? = null,
     val floating: List<LegacyFloater> = emptyList(),
-    val poppedOut: List<LegacyPoppedOut> = emptyList(),
     val focusedPaneId: String? = null,
 )
 
@@ -483,5 +480,3 @@ private data class LegacyFloater(
     val z: Long,
 )
 
-@Serializable
-private data class LegacyPoppedOut(val leaf: LegacyLeaf)
