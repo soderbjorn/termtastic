@@ -56,6 +56,38 @@ fun snapActiveIndicator() {
 }
 
 /**
+ * Pins the active tab indicator to the shifting active button while any
+ * `.tab-button.entering` is playing its `tab-enter` animation (320ms
+ * max-width 0 → 240px keyframe). Without this, the indicator is positioned
+ * once at the start of that animation — when the newly-inserted tab is
+ * still zero-width — and ends up lagging behind the active tab as the
+ * neighboring buttons reflow. The symptom was the orange ring visibly
+ * offset to the right of the active tab after unhiding.
+ *
+ * Transitions are disabled for the duration so the indicator snaps each
+ * frame instead of chasing its target via the 170ms transform transition
+ * (which would leave it permanently ~170ms behind the tab's motion).
+ * Once there are no more entering tabs, transitions are re-enabled on the
+ * next frame so future tab switches animate normally.
+ */
+fun trackIndicatorThroughTabEnter() {
+    val tabBar = tabBarEl ?: return
+    val indicator = tabBar.querySelector(".tab-active-indicator") as? HTMLElement ?: return
+    if (tabBar.querySelector(".tab-button.entering") == null) return
+    indicator.classList.add("no-transition")
+    lateinit var step: () -> Unit
+    step = {
+        positionActiveIndicator()
+        if (tabBar.querySelector(".tab-button.entering") != null) {
+            window.requestAnimationFrame { step() }
+        } else {
+            window.requestAnimationFrame { indicator.classList.remove("no-transition") }
+        }
+    }
+    window.requestAnimationFrame { step() }
+}
+
+/**
  * Scrolls the tab bar horizontally to ensure the active tab button is visible.
  *
  * Adds a small margin (8px) to avoid the button being flush with the edge.

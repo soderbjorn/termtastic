@@ -258,7 +258,6 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 }
 .app-header .icon-button,
 .app-header .tab-button,
-.app-header .tab-add,
 .app-header .dropdown,
 .app-header .dropdown-menu,
 .app-header .tab-bar-menu-list {
@@ -558,6 +557,35 @@ body.is-electron-mac .app-header {
     margin: 4px 2px;
 }
 
+/* Section heading inside the tab-bar dropdown (e.g. "Active tab",
+   "Hidden tabs"). Small-caps secondary-color label that visually groups
+   the rows beneath it without looking clickable. */
+.tab-bar-menu-heading {
+    padding: 4px 10px 2px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    user-select: none;
+    pointer-events: none;
+}
+
+/* Hidden-tab row that is also the currently active tab: mirror the
+   `.tab-button.active` framing so the user sees the same orange ring and
+   label color in the dropdown that they would see on an active tab in
+   the strip. The 2px inset box-shadow stands in for the sliding
+   `.tab-active-indicator` element that adorns visible tabs. */
+.tab-bar-menu-item.active {
+    color: var(--termtastic-orange);
+    font-weight: 700;
+    box-shadow: inset 0 0 0 2px var(--termtastic-orange);
+}
+
+.tab-bar-menu-item.active .tab-bar-menu-icon {
+    color: var(--termtastic-orange);
+}
+
 .tab-button {
     position: relative;
 }
@@ -631,28 +659,6 @@ body.is-electron-mac .app-header {
 .tab-close:hover {
     background: var(--separator);
     color: var(--text-primary);
-}
-
-.tab-add {
-    appearance: none;
-    background: transparent;
-    border: none;
-    color: var(--text-secondary);
-    font: inherit;
-    font-size: 18px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 4px 10px;
-    margin: 0 0 -1px 4px;
-    border-radius: 6px 6px 0 0;
-    transition: color 120ms ease-in-out, background-color 120ms ease-in-out;
-    align-self: flex-end;
-    flex-shrink: 0;
-}
-
-.tab-add:hover {
-    color: var(--text-primary);
-    background: var(--separator);
 }
 
 .terminal-wrap {

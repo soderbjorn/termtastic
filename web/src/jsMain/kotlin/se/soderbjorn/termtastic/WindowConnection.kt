@@ -350,14 +350,10 @@ fun renderConfig(config: dynamic) {
     }
     tabBar.appendChild(indicatorEl)
 
-    val addBtn = document.createElement("button") as HTMLElement
-    addBtn.className = "tab-add"; addBtn.setAttribute("type", "button")
-    addBtn.setAttribute("title", "New tab"); addBtn.textContent = "+"
-    addBtn.addEventListener("click", { ev -> ev.stopPropagation(); launchCmd(WindowCommand.AddTab) })
-    tabBar.appendChild(addBtn)
-
-    // Far-right overflow menu: Rename / Close / Hide·Unhide for the active
-    // tab, plus a listing of hidden tabs. See [appendTabBarOverflowMenu].
+    // Far-right overflow menu: "New tab" plus Rename / Close / Hide·Unhide
+    // for the active tab and a listing of hidden tabs. The standalone `+`
+    // button used to live here but has been folded into this dropdown. See
+    // [appendTabBarOverflowMenu].
     appendTabBarOverflowMenu(tabBar, tabsArr, active, canCloseTab)
     scrollActiveTabIntoView()
 
@@ -419,6 +415,11 @@ fun renderConfig(config: dynamic) {
     window.requestAnimationFrame {
         if (firstRender) snapActiveIndicator() else positionActiveIndicator()
         pendingTabFlip?.let { snapshot -> runTabFlip(snapshot); pendingTabFlip = null }
+        // When an unhidden tab is inserted (or any new tab is added mid-
+        // session), its `.tab-enter` animation shifts neighbouring buttons
+        // over 320ms. Pin the indicator to the active tab for the duration
+        // so it doesn't lock to a stale pre-shift position.
+        trackIndicatorThroughTabEnter()
     }
 
     window.setTimeout({

@@ -388,14 +388,29 @@ private fun start() {
         if (appVm.stateFlow.value.appearance == Appearance.Auto) refreshAndApplyActiveTheme()
     })
 
-    // Close dropdowns on outside click.
-    document.addEventListener("click", {
+    // Close dropdowns on outside press. Uses `pointerdown` in the capture
+    // phase so it fires before pane-internal handlers (terminal cells,
+    // file-browser rows, git headers) that `stopPropagation()` on their
+    // own mouse/pointer events — the old bubble-phase `click` listener
+    // never saw those interactions and left the dropdown stuck open.
+    // Clicks that land inside the menu button or its (body-attached)
+    // fixed-position list are ignored so the menu can still be used.
+    document.asDynamic().addEventListener("pointerdown", { ev: dynamic ->
+        // Walk up from the (possibly-text-node) event target to the nearest
+        // Element, then ask `closest()` whether we're inside any menu that
+        // should stay open during the press.
+        var node: dynamic = ev.target
+        while (node != null && node.nodeType != 1) node = node.parentNode
+        val insideMenu = node != null && node.closest(
+            ".tab-bar-menu, .tab-bar-menu-list, .pane-menu, .pane-split-flyout, .pane-flyout-wrap, #debug-dropdown"
+        ) != null
+        if (insideMenu) return@addEventListener
         (document.getElementById("debug-dropdown") as? HTMLElement)?.classList?.remove("open")
         val openMenus = document.querySelectorAll(".pane-menu.open, .tab-bar-menu.open, .tab-bar-menu-list.open, .pane-split-flyout.open, .pane-flyout-wrap.open")
         for (i in 0 until openMenus.length) {
             (openMenus.item(i) as HTMLElement).classList.remove("open")
         }
-    })
+    }, js("({ capture: true })"))
 
     // Swallow stray drops.
     document.addEventListener("dragover", { event -> event.preventDefault() })

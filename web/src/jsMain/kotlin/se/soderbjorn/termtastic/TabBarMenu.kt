@@ -27,6 +27,9 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import org.w3c.dom.HTMLElement
 
+/** Material Symbols "add": plus. Used for the "Add tab" entry. */
+private val ICON_ADD = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>"""
+
 /** Material Symbols "edit": pencil. Used for the "Rename" entry. */
 private val ICON_RENAME = """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>"""
 
@@ -117,6 +120,32 @@ private fun menuRow(
 }
 
 /**
+ * Build a non-interactive section heading row for the dropdown (e.g.
+ * "Active tab", "Hidden tabs"). Headings visually group related items and
+ * are styled smaller/dimmer than regular rows via `.tab-bar-menu-heading`.
+ *
+ * @param text the heading label
+ * @return the new `<div>` element (not yet attached)
+ */
+private fun menuHeading(text: String): HTMLElement {
+    val el = document.createElement("div") as HTMLElement
+    el.className = "tab-bar-menu-heading"
+    el.textContent = text
+    return el
+}
+
+/**
+ * Build a `.tab-bar-menu-separator` divider element.
+ *
+ * @return the new `<div>` element (not yet attached)
+ */
+private fun menuSeparator(): HTMLElement {
+    val sep = document.createElement("div") as HTMLElement
+    sep.className = "tab-bar-menu-separator"
+    return sep
+}
+
+/**
  * Append the far-right tab-bar overflow menu (button + fixed-position
  * dropdown list) to [tabBar]. The dropdown is appended to `document.body`
  * so the bar's horizontal overflow doesn't clip it — identical to the
@@ -134,7 +163,9 @@ private fun menuRow(
  *    entry back.
  *
  * Invoked once per render from [renderConfig], after the visible tab
- * buttons and `.tab-add` have been appended.
+ * buttons have been appended. The `New tab` row at the top of the
+ * dropdown replaces the standalone `+` button that used to sit between
+ * the last tab and the ⋯ menu.
  *
  * @param tabBar the `.tab-bar` container element
  * @param tabsArr the full (visible + hidden) array of tab JSON from the
@@ -169,47 +200,60 @@ internal fun appendTabBarOverflowMenu(
     val activeIsHidden = (activeTab?.isHidden as? Boolean) == true
     val hiddenTabs = tabsArr.filter { (it.isHidden as? Boolean) == true }
 
-    // Rename — operates on the active tab's label element in the strip, so
-    // if the tab is hidden the item is still disabled (no label to edit).
-    if (activeTab != null && !activeIsHidden) {
-        val activeTabId = activeTab.id as String
-        menuList.appendChild(menuRow(ICON_RENAME, "Rename") { _ ->
-            menuWrap.classList.remove("open"); menuList.classList.remove("open")
-            val labelEl = tabBar.querySelector(".tab-button[data-tab=\"$activeTabId\"] .tab-label") as? HTMLElement
-            if (labelEl != null) startTabRename(labelEl, activeTabId)
-        })
-    }
+    // Add tab — the standalone `+` button has been folded into the dropdown
+    // so the tab bar ends cleanly at the ⋯ affordance. Sits at the very top
+    // with its own separator beneath it.
+    menuList.appendChild(menuRow(ICON_ADD, "New tab") { _ ->
+        menuWrap.classList.remove("open"); menuList.classList.remove("open")
+        launchCmd(WindowCommand.AddTab)
+    })
+    menuList.appendChild(menuSeparator())
 
-    // Close — only when there is something to fall back on.
-    if (activeTab != null && canCloseTab) {
-        val activeTabId = activeTab.id as String
-        val activeTitle = (activeTab.title as? String) ?: ""
-        menuList.appendChild(menuRow(ICON_CLOSE, "Close") { _ ->
-            menuWrap.classList.remove("open"); menuList.classList.remove("open")
-            showConfirmDialog(
-                "Close tab",
-                "Are you sure you want to close tab <strong>${activeTitle}</strong> and all its panes?",
-                "Close",
-            ) {
-                // Mirror the old per-tab-menu polish: add the `leaving`
-                // class to trigger the CSS exit animation, then dispatch
-                // the CloseTab command after the animation length so the
-                // user sees the tab slide away rather than vanish.
-                val btn = tabBar.querySelector(".tab-button[data-tab=\"$activeTabId\"]") as? HTMLElement
-                if (btn != null) {
-                    btn.classList.add("leaving")
-                    window.setTimeout({ launchCmd(WindowCommand.CloseTab(tabId = activeTabId)) }, 220)
-                } else {
-                    launchCmd(WindowCommand.CloseTab(tabId = activeTabId))
-                }
-            }
-        })
-    }
-
-    // Hide / Unhide — always present so the affordance is discoverable.
+    // Active-tab section — heading + the three affordances that target the
+    // currently active tab. Only rendered when an active tab exists.
     if (activeTab != null) {
+        menuList.appendChild(menuHeading("Active tab"))
+
         val activeTabId = activeTab.id as String
-        val (icon, label) = if (activeIsHidden) ICON_UNHIDE to "Unhide" else ICON_HIDE to "Hide"
+
+        // Rename — operates on the active tab's label element in the strip,
+        // so if the tab is hidden the item is still disabled (no label to
+        // edit).
+        if (!activeIsHidden) {
+            menuList.appendChild(menuRow(ICON_RENAME, "Rename") { _ ->
+                menuWrap.classList.remove("open"); menuList.classList.remove("open")
+                val labelEl = tabBar.querySelector(".tab-button[data-tab=\"$activeTabId\"] .tab-label") as? HTMLElement
+                if (labelEl != null) startTabRename(labelEl, activeTabId)
+            })
+        }
+
+        // Close — only when there is something to fall back on.
+        if (canCloseTab) {
+            val activeTitle = (activeTab.title as? String) ?: ""
+            menuList.appendChild(menuRow(ICON_CLOSE, "Close") { _ ->
+                menuWrap.classList.remove("open"); menuList.classList.remove("open")
+                showConfirmDialog(
+                    "Close tab",
+                    "Are you sure you want to close tab <strong>${activeTitle}</strong> and all its windows?",
+                    "Close",
+                ) {
+                    // Mirror the old per-tab-menu polish: add the `leaving`
+                    // class to trigger the CSS exit animation, then dispatch
+                    // the CloseTab command after the animation length so the
+                    // user sees the tab slide away rather than vanish.
+                    val btn = tabBar.querySelector(".tab-button[data-tab=\"$activeTabId\"]") as? HTMLElement
+                    if (btn != null) {
+                        btn.classList.add("leaving")
+                        window.setTimeout({ launchCmd(WindowCommand.CloseTab(tabId = activeTabId)) }, 220)
+                    } else {
+                        launchCmd(WindowCommand.CloseTab(tabId = activeTabId))
+                    }
+                }
+            })
+        }
+
+        // Hide / Unhide — always present so the affordance is discoverable.
+        val (icon, label) = if (activeIsHidden) ICON_UNHIDE to "Show in tab bar" else ICON_HIDE to "Hide in tab bar"
         menuList.appendChild(menuRow(icon, label) { _ ->
             menuWrap.classList.remove("open"); menuList.classList.remove("open")
             launchCmd(WindowCommand.SetTabHidden(tabId = activeTabId, hidden = !activeIsHidden))
@@ -217,24 +261,25 @@ internal fun appendTabBarOverflowMenu(
     }
 
     // Hidden-tabs section — one row per hidden tab, preceded by a separator
-    // when there are any "system" items above to separate from.
+    // and a heading. A hidden tab that is currently active is rendered with
+    // the `.active` class so the ordinary active-tab framing (orange ring +
+    // orange label) is visible in the dropdown even though the tab isn't in
+    // the strip.
     if (hiddenTabs.isNotEmpty()) {
-        val hasSystemItems = menuList.childElementCount > 0
-        if (hasSystemItems) {
-            val sep = document.createElement("div") as HTMLElement
-            sep.className = "tab-bar-menu-separator"
-            menuList.appendChild(sep)
-        }
+        menuList.appendChild(menuSeparator())
+        menuList.appendChild(menuHeading("Unlisted tabs"))
         for (tab in hiddenTabs) {
             val tabId = tab.id as String
             val title = (tab.title as? String) ?: "(untitled)"
-            menuList.appendChild(menuRow(tabIcon(tab), title) { _ ->
+            val row = menuRow(tabIcon(tab), title) { _ ->
                 menuWrap.classList.remove("open"); menuList.classList.remove("open")
                 // Switching to a hidden tab leaves it hidden. The menu will
                 // then show "Unhide" on its next open so the user can
                 // promote it back to the strip.
                 setActiveTab(tabId)
-            })
+            }
+            if (tabId == activeTabIdArg) row.classList.add("active")
+            menuList.appendChild(row)
         }
     }
 
