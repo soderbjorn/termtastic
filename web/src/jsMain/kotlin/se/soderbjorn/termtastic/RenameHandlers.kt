@@ -84,8 +84,6 @@ fun startTabRename(labelEl: HTMLElement, tabId: String) {
     val current = labelEl.textContent ?: ""
     val parent = labelEl.parentElement ?: return
     parent.classList.add("renaming")
-    val openMenu = parent.querySelector(".tab-menu.open") as? HTMLElement
-    openMenu?.classList?.remove("open")
     val input = document.createElement("input") as HTMLInputElement
     input.type = "text"
     input.className = "tab-label-input"

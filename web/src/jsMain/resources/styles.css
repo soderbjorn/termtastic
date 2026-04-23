@@ -260,7 +260,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 .app-header .tab-button,
 .app-header .dropdown,
 .app-header .dropdown-menu,
-.app-header .tab-menu-list {
+.app-header .tab-bar-menu-list {
     -webkit-app-region: no-drag;
     app-region: no-drag;
 }
@@ -460,55 +460,41 @@ body.is-electron-mac .app-header {
     z-index: 1;
 }
 
-/* The menu element is attached to every tab (active and inactive) so every
-   tab reserves the same horizontal space for the ⋯ button — the box never
-   resizes when the active class flips or the user hovers. At rest the
-   glyph is just `visibility: hidden`; it fades in after ~1.5s of hover on
-   the active tab. */
-.tab-menu {
+/* Far-right tab-bar overflow menu: a single "⋯" button at the end of the
+   tab strip that opens a dropdown with Rename/Close/Hide·Unhide for the
+   active tab and a list of hidden tabs. Replaces the older per-tab
+   hover-activated menu. See TabBarMenu.kt for the DOM builder. */
+.tab-bar-menu {
     position: relative;
     display: inline-flex;
     align-items: center;
-    visibility: hidden;
+    align-self: flex-end;
+    flex-shrink: 0;
+    margin: 0 0 -1px 4px;
 }
 
-.tab-button.active:hover .tab-menu {
-    visibility: visible;
-    /* The delay applies on the hover-in transition; on hover-out there is
-       no transition, so the button disappears immediately. */
-    transition: visibility 0s linear 1.5s;
-}
-
-/* Suppress the ⋯ button entirely while the tab is being renamed. */
-.tab-button.renaming .tab-menu {
-    visibility: hidden !important;
-}
-
-/* Once opened, force visibility regardless of hover state so the menu
-   stays put while the dropdown is on screen. */
-.tab-menu.open {
-    visibility: visible !important;
-}
-
-.tab-menu-button {
+.tab-bar-menu-button {
     appearance: none;
     background: transparent;
     border: none;
-    color: inherit;
-    font-family: inherit;
-    font-size: 14px;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 18px;
     line-height: 1;
     cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 4px;
+    padding: 4px 10px;
+    border-radius: 6px 6px 0 0;
     letter-spacing: 1px;
+    transition: color 120ms ease-in-out, background-color 120ms ease-in-out;
 }
 
-.tab-menu-button:hover {
+.tab-bar-menu-button:hover,
+.tab-bar-menu.open .tab-bar-menu-button {
+    color: var(--text-primary);
     background: var(--separator);
 }
 
-.tab-menu-list {
+.tab-bar-menu-list {
     display: none;
     /* The .tab-bar ancestor uses overflow-x:auto, which would clip an
        absolutely-positioned dropdown. Render it as a fixed-position layer
@@ -516,7 +502,7 @@ body.is-electron-mac .app-header {
     position: fixed;
     top: 0;
     left: 0;
-    min-width: 160px;
+    min-width: 200px;
     background: var(--surface);
     border: 1px solid var(--separator);
     border-radius: 6px;
@@ -525,11 +511,14 @@ body.is-electron-mac .app-header {
     z-index: 1000;
 }
 
-.tab-menu-list.open {
+.tab-bar-menu-list.open {
     display: block;
 }
 
-.tab-menu-item {
+.tab-bar-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: 4px;
     font-size: 12px;
@@ -537,8 +526,35 @@ body.is-electron-mac .app-header {
     cursor: pointer;
 }
 
-.tab-menu-item:hover {
+.tab-bar-menu-item:hover {
     background: var(--separator);
+}
+
+.tab-bar-menu-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+}
+
+.tab-bar-menu-item:hover .tab-bar-menu-icon {
+    color: var(--text-primary);
+}
+
+.tab-bar-menu-label {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tab-bar-menu-separator {
+    height: 1px;
+    background: var(--separator);
+    margin: 4px 2px;
 }
 
 .tab-button {

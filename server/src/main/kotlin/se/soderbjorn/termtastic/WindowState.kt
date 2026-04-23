@@ -399,6 +399,38 @@ object WindowState {
     }
 
     /**
+     * Mark [tabId] as hidden or visible in the tab strip. Hidden tabs keep all
+     * their panes and PTY sessions intact; the web client simply omits them
+     * from the tab-button row and offers them in the tab-bar overflow menu
+     * instead. No-op if the id is unknown or the flag is already at the
+     * requested value.
+     *
+     * The active tab is left unchanged. A hidden tab can still be the active
+     * one — its content continues to render inside the tab area, while the
+     * overflow menu exposes an "Unhide" action for it. That way the user
+     * can toggle the tab strip entry for whatever is currently in view
+     * without losing their place.
+     *
+     * Called from `handleWindowCommand` on [WindowCommand.SetTabHidden],
+     * dispatched by the web client's tab-bar overflow menu.
+     *
+     * @param tabId the id of the tab to hide or unhide
+     * @param hidden `true` to hide the tab, `false` to make it visible
+     * @see TabConfig.isHidden
+     * @see WindowCommand.SetTabHidden
+     */
+    fun setTabHidden(tabId: String, hidden: Boolean) = synchronized(this) {
+        val cfg = _config.value
+        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        if (idx < 0) return@synchronized
+        val tab = cfg.tabs[idx]
+        if (tab.isHidden == hidden) return@synchronized
+        val newTabs = cfg.tabs.toMutableList()
+        newTabs[idx] = tab.copy(isHidden = hidden)
+        _config.value = cfg.copy(tabs = newTabs)
+    }
+
+    /**
      * Set the display title of [tabId] to [title] (trimmed, max 80 chars).
      * No-op if the title is empty or unchanged.
      *
