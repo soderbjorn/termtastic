@@ -258,8 +258,10 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 }
 .app-header .icon-button,
 .app-header .tab-button,
+.app-header .tab-bar,
 .app-header .dropdown,
 .app-header .dropdown-menu,
+.app-header .tab-bar-menu-button,
 .app-header .tab-bar-menu-list {
     -webkit-app-region: no-drag;
     app-region: no-drag;
@@ -725,7 +727,9 @@ body.is-electron-mac .app-header {
     width: 1px;
     background: var(--separator, #333);
 }
-.sidebar-divider:hover::after,
+.sidebar-divider:hover::after {
+    background: color-mix(in srgb, var(--text-secondary) 25%, var(--separator));
+}
 .sidebar-divider.dragging::after {
     background: var(--termtastic-orange);
     width: 2px;
@@ -758,8 +762,10 @@ body.is-electron-mac .app-header {
     background: var(--separator, #333);
 }
 .header-divider:hover::after,
+.usage-bar-divider:hover::after {
+    background: color-mix(in srgb, var(--text-secondary) 25%, var(--separator));
+}
 .header-divider.dragging::after,
-.usage-bar-divider:hover::after,
 .usage-bar-divider.dragging::after {
     background: var(--termtastic-orange);
     height: 2px;
