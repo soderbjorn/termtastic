@@ -1,10 +1,12 @@
 ---
-description: Arm a background loop that runs `/babysit-repo` on an interval. Default cadence 10m. One-shot starter — exits as soon as the loop is armed.
+description: Arm a background loop that runs `/babysit-repo` on an interval. Default cadence 15m. One-shot starter — exits as soon as the loop is armed.
 ---
 
 Arguments: $ARGUMENTS
 
 Start a `/loop` that runs `/babysit-repo` on a recurring cadence and exit. This is a **one-shot starter**, not a long-running command — the actual watching happens inside the loop that this skill arms. Stopping the watcher is the user's responsibility (Ctrl-C on the loop, or `/loop` management commands).
+
+Each tick of `/babysit-repo` dispatches across three tracks in priority order — **follow-ups → issues → reviews** — and stops at the first track with a candidate. Follow-ups address repo-owner comments on Claude-authored PRs; issues implement `ai-dev`-labelled work; reviews post AI reviews on unreviewed PRs. See `/babysit-repo` for the details.
 
 ## 1. Parse arguments
 
@@ -16,19 +18,19 @@ Split `$ARGUMENTS` into a **cadence token** and a **passthrough tail**:
 
 Defaults:
 
-- Cadence: `10m`.
-- Passthrough tail: empty (both tracks eligible, `ai-dev` label filter).
+- Cadence: `15m`.
+- Passthrough tail: empty (all three tracks eligible — follow-ups, issues, reviews — with `ai-dev` label filter on the issue track).
 
 Examples:
 
 | `$ARGUMENTS`                        | Cadence         | Tail forwarded to `/babysit-repo` |
 |-------------------------------------|-----------------|-----------------------------------|
-| *(empty)*                           | `10m`           | *(empty)*                         |
+| *(empty)*                           | `15m`           | *(empty)*                         |
 | `15m`                               | `15m`           | *(empty)*                         |
 | `1h --reviews-only`                 | `1h`            | `--reviews-only`                  |
 | `auto`                              | self-paced      | *(empty)*                         |
 | `self-paced --label bug`            | self-paced      | `--label bug`                     |
-| `--reviews-only`                    | `10m` (default) | `--reviews-only`                  |
+| `--reviews-only`                    | `15m` (default) | `--reviews-only`                  |
 
 ## 2. Arm the loop
 
@@ -44,7 +46,7 @@ Invoke the `loop` skill via the Skill tool with the composed args. Do **not** wr
 After the Skill tool returns, print exactly one line so the user sees what was armed, e.g.:
 
 ```
-Armed: /loop 10m /babysit-repo — first tick scheduled; interrupt the loop to stop it.
+Armed: /loop 15m /babysit-repo — first tick scheduled; interrupt the loop to stop it.
 ```
 
 Or for self-paced:

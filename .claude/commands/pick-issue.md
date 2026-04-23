@@ -1,5 +1,5 @@
 ---
-description: Pick a GitHub issue (random or semantic match) and work on it end-to-end.
+description: Pick a GitHub issue (oldest-first or semantic match) and work on it end-to-end.
 ---
 
 Arguments: $ARGUMENTS
@@ -11,7 +11,7 @@ Pick one open GitHub issue from `soderbjorn/termtastic`, implement it, push a br
 Default filter is `--label ai-dev`. Only override if `$ARGUMENTS` explicitly says so (e.g. "any label", "label: bug", "no label filter"). A plain semantic description like "the issue about renaming color schemes" is **not** a label override — keep the `ai-dev` filter.
 
 ```
-gh issue list --state open --label ai-dev --json number,title,body,labels,assignees --limit 200
+gh issue list --state open --label ai-dev --json number,title,body,labels,assignees,createdAt --limit 200
 ```
 
 Exclude issues already assigned to someone else. Issues assigned to the current user (`@me`) are still eligible (likely a prior run).
@@ -20,9 +20,9 @@ If zero candidates remain, stop and report that to the user. Do not proceed.
 
 ## 2. Pick ONE issue
 
-- `$ARGUMENTS` empty (or only a label override) → pick one at random from candidates.
+- `$ARGUMENTS` empty (or only a label override) → pick the **oldest-created** candidate (smallest `createdAt`). Do not randomise — runs should be reproducible, and the user steers the backlog by keeping older items ready to go.
 - Otherwise → read title + body of each candidate and pick the best **semantic** match. Use judgment, not string matching. "renaming color schemes" should match an issue titled "Rename 'theme' to 'color scheme' in settings UI" even with zero word overlap.
-- If two candidates are genuinely tied, pick the lower-numbered one. Do not ask the user.
+- If two candidates are genuinely tied (identical `createdAt` or equally strong semantic match), pick the lower-numbered one. Do not ask the user.
 
 Tell the user which issue you picked (number + title) before continuing.
 

@@ -1,5 +1,5 @@
 ---
-description: Pick a GitHub pull request without a review (random, semantic match, or by PR number) and post a comprehensive AI code review.
+description: Pick a GitHub pull request without a review (oldest-first, semantic match, or by PR number) and post a comprehensive AI code review.
 ---
 
 Arguments: $ARGUMENTS
@@ -12,7 +12,7 @@ Pick one open PR on `soderbjorn/termtastic` that has not yet received a review, 
 - Otherwise fetch candidates:
 
 ```
-gh pr list --state open --json number,title,body,author,labels,isDraft,reviewDecision,latestReviews,comments --limit 200
+gh pr list --state open --json number,title,body,author,labels,isDraft,reviewDecision,latestReviews,comments,createdAt --limit 200
 ```
 
 A PR is a **candidate** only if all of the following hold:
@@ -24,9 +24,9 @@ If zero candidates remain, stop and report that to the user. Do not proceed.
 
 ## 2. Pick ONE PR
 
-- `$ARGUMENTS` empty → pick one at random from candidates.
+- `$ARGUMENTS` empty → pick the **oldest-created** candidate (smallest `createdAt`). Do not randomise — runs should be reproducible, and the user steers the review queue by keeping older PRs at the front.
 - `$ARGUMENTS` is a semantic description → read the title and body of each candidate and pick the best semantic match. Use judgement, not string matching.
-- If two candidates are genuinely tied, pick the lower-numbered one. Do not ask the user.
+- If two candidates are genuinely tied (identical `createdAt` or equally strong semantic match), pick the lower-numbered one. Do not ask the user.
 
 Tell the user which PR you picked (number + title) before continuing.
 
