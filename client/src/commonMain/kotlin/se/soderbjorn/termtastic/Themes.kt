@@ -192,6 +192,153 @@ private val verdantOverrides: Map<String, Long> = mapOf(
     "syntax.constant.dark"     to 0xFFE8857AL, "syntax.constant.light"     to 0xFFB84A3AL,
 )
 
+/**
+ * Syntax colour overrides for the Cyberpunk theme — neon hot-pink and
+ * electric cyan on deep violet-black, with bright green functions and
+ * amber numbers. Inspired by Miami-vice / Blade Runner signage.
+ */
+private val cyberpunkOverrides: Map<String, Long> = mapOf(
+    "accent.primary.dark"      to 0xFFFF71CEL, "accent.primary.light"      to 0xFFC01080L,
+    "accent.primarySoft.dark"  to 0x28FF71CEL, "accent.primarySoft.light"  to 0x24C01080L,
+    "accent.primaryGlow.dark"  to 0x50FF71CEL, "accent.primaryGlow.light"  to 0x40C01080L,
+    "sidebar.activeText.dark"  to 0xFFFF71CEL, "sidebar.activeText.light"  to 0xFFC01080L,
+    "sidebar.activeBg.dark"    to 0x22FF71CEL, "sidebar.activeBg.light"    to 0x1AC01080L,
+    "border.focus.dark"        to 0xFFFF71CEL, "border.focus.light"        to 0xFFC01080L,
+    "border.focusGlow.dark"    to 0x4CFF71CEL, "border.focusGlow.light"    to 0x40C01080L,
+    "terminal.cursor.dark"     to 0xFFFF71CEL, "terminal.cursor.light"     to 0xFFC01080L,
+    "syntax.keyword.dark"      to 0xFFFF71CEL, "syntax.keyword.light"      to 0xFFC01080L,
+    "syntax.string.dark"       to 0xFF01CDFEL, "syntax.string.light"       to 0xFF0077B3L,
+    "syntax.function.dark"     to 0xFF05FFA1L, "syntax.function.light"     to 0xFF008851L,
+    "syntax.number.dark"       to 0xFFFFFB96L, "syntax.number.light"       to 0xFFB88000L,
+    "syntax.type.dark"         to 0xFFB967FFL, "syntax.type.light"         to 0xFF6A0DADL,
+    "syntax.constant.dark"     to 0xFFFF8DCEL, "syntax.constant.light"     to 0xFFC71585L,
+    "syntax.comment.dark"      to 0xFF6B5B8EL, "syntax.comment.light"      to 0xFFAAAACCL,
+    "syntax.operator.dark"     to 0xFFE0B8FFL, "syntax.operator.light"     to 0xFF5A1F80L,
+)
+
+/**
+ * Syntax colour overrides for the Aurora theme — aurora-green, violet and
+ * pink ribbons over deep night-sky blue. Tuned so each syntax token hits a
+ * different band of the aurora rather than flattening to a single hue.
+ */
+private val auroraOverrides: Map<String, Long> = mapOf(
+    "accent.primary.dark"      to 0xFF6EE7B7L, "accent.primary.light"      to 0xFF047857L,
+    "accent.primarySoft.dark"  to 0x286EE7B7L, "accent.primarySoft.light"  to 0x24047857L,
+    "accent.primaryGlow.dark"  to 0x506EE7B7L, "accent.primaryGlow.light"  to 0x40047857L,
+    "sidebar.activeText.dark"  to 0xFF6EE7B7L, "sidebar.activeText.light"  to 0xFF047857L,
+    "sidebar.activeBg.dark"    to 0x226EE7B7L, "sidebar.activeBg.light"    to 0x1A047857L,
+    "border.focus.dark"        to 0xFF6EE7B7L, "border.focus.light"        to 0xFF047857L,
+    "border.focusGlow.dark"    to 0x4C6EE7B7L, "border.focusGlow.light"    to 0x40047857L,
+    "terminal.cursor.dark"     to 0xFF6EE7B7L, "terminal.cursor.light"     to 0xFF047857L,
+    "syntax.keyword.dark"      to 0xFFA78BFAL, "syntax.keyword.light"      to 0xFF6D28D9L,
+    "syntax.string.dark"       to 0xFF6EE7B7L, "syntax.string.light"       to 0xFF047857L,
+    "syntax.function.dark"     to 0xFF60A5FAL, "syntax.function.light"     to 0xFF1D4ED8L,
+    "syntax.number.dark"       to 0xFFF9A8D4L, "syntax.number.light"       to 0xFFBE185DL,
+    "syntax.type.dark"         to 0xFF7DD3FCL, "syntax.type.light"         to 0xFF0369A1L,
+    "syntax.constant.dark"     to 0xFFFDE68AL, "syntax.constant.light"     to 0xFF92400EL,
+    "syntax.comment.dark"      to 0xFF4C5E7AL, "syntax.comment.light"      to 0xFF94A3B8L,
+    "syntax.operator.dark"     to 0xFFC5E4FFL, "syntax.operator.light"     to 0xFF334155L,
+)
+
+/**
+ * Syntax colour overrides for the Nebula theme — cosmic violets, rose-dust
+ * pinks and cyan star-points. The accent tiers walk through the visible
+ * nebula gases so adjacent tokens never merge.
+ */
+private val nebulaOverrides: Map<String, Long> = mapOf(
+    "accent.primary.dark"      to 0xFFD8B4FEL, "accent.primary.light"      to 0xFF7E22CEL,
+    "accent.primarySoft.dark"  to 0x28D8B4FEL, "accent.primarySoft.light"  to 0x247E22CEL,
+    "accent.primaryGlow.dark"  to 0x50D8B4FEL, "accent.primaryGlow.light"  to 0x407E22CEL,
+    "sidebar.activeText.dark"  to 0xFFD8B4FEL, "sidebar.activeText.light"  to 0xFF7E22CEL,
+    "sidebar.activeBg.dark"    to 0x22D8B4FEL, "sidebar.activeBg.light"    to 0x1A7E22CEL,
+    "border.focus.dark"        to 0xFFD8B4FEL, "border.focus.light"        to 0xFF7E22CEL,
+    "border.focusGlow.dark"    to 0x4CD8B4FEL, "border.focusGlow.light"    to 0x407E22CEL,
+    "terminal.cursor.dark"     to 0xFFD8B4FEL, "terminal.cursor.light"     to 0xFF7E22CEL,
+    "syntax.keyword.dark"      to 0xFFD8B4FEL, "syntax.keyword.light"      to 0xFF7E22CEL,
+    "syntax.string.dark"       to 0xFFFBCFE8L, "syntax.string.light"       to 0xFFBE185DL,
+    "syntax.function.dark"     to 0xFF67E8F9L, "syntax.function.light"     to 0xFF0E7490L,
+    "syntax.number.dark"       to 0xFFFDE68AL, "syntax.number.light"       to 0xFFA16207L,
+    "syntax.type.dark"         to 0xFF93C5FDL, "syntax.type.light"         to 0xFF1D4ED8L,
+    "syntax.constant.dark"     to 0xFFFCA5A5L, "syntax.constant.light"     to 0xFFB91C1CL,
+    "syntax.comment.dark"      to 0xFF6B5B8EL, "syntax.comment.light"      to 0xFFA094C4L,
+    "syntax.operator.dark"     to 0xFFE9D5FFL, "syntax.operator.light"     to 0xFF6D28D9L,
+)
+
+/**
+ * Semantic-token overrides for the Slack Canvas theme — the white content
+ * pane of the Slack-inspired palette. Accents, active-state highlights and
+ * syntax colours are pulled from Slack's own brand palette so the content
+ * area reads as unmistakably "Slack-like" rather than generic flat-white.
+ *
+ * The five accent hues — aubergine (keywords), green (strings / success),
+ * blue (functions / links / focus), yellow (numbers / warn) and red
+ * (constants / danger) — mirror the colour dots Slack uses for channel
+ * sections, online indicators, mentions and badges.
+ */
+private val slackCanvasOverrides: Map<String, Long> = mapOf(
+    // Accent — Slack's signature link/focus blue
+    "accent.primary.dark"      to 0xFF36C5F0L, "accent.primary.light"      to 0xFF1264A3L,
+    "accent.primarySoft.dark"  to 0x2836C5F0L, "accent.primarySoft.light"  to 0x241264A3L,
+    "accent.primaryGlow.dark"  to 0x5036C5F0L, "accent.primaryGlow.light"  to 0x401264A3L,
+
+    // Sidebar active row — Slack's blue channel highlight
+    "sidebar.activeText.dark"  to 0xFF36C5F0L, "sidebar.activeText.light"  to 0xFF1264A3L,
+    "sidebar.activeBg.dark"    to 0x2236C5F0L, "sidebar.activeBg.light"    to 0x1A1264A3L,
+
+    // Focus ring + terminal cursor
+    "border.focus.dark"        to 0xFF36C5F0L, "border.focus.light"        to 0xFF1264A3L,
+    "border.focusGlow.dark"    to 0x4C36C5F0L, "border.focusGlow.light"    to 0x401264A3L,
+    "terminal.cursor.dark"     to 0xFF36C5F0L, "terminal.cursor.light"     to 0xFF1264A3L,
+
+    // Semantic — mapped to Slack's brand palette
+    "semantic.success.dark"    to 0xFF2BAC76L, "semantic.success.light"    to 0xFF007A5AL,
+    "semantic.warn.dark"       to 0xFFECB22EL, "semantic.warn.light"       to 0xFFB8860AL,
+    "semantic.danger.dark"     to 0xFFE01E5AL, "semantic.danger.light"     to 0xFFBA1550L,
+    "semantic.info.dark"       to 0xFF36C5F0L, "semantic.info.light"       to 0xFF1264A3L,
+
+    // Diff — green/red tinted bg with saturated gutter + fg
+    "diff.addBg.dark"          to 0x222BAC76L, "diff.addBg.light"          to 0x1A007A5AL,
+    "diff.addFg.dark"          to 0xFF2BAC76L, "diff.addFg.light"          to 0xFF007A5AL,
+    "diff.addGutter.dark"      to 0xFF2BAC76L, "diff.addGutter.light"      to 0xFF007A5AL,
+    "diff.removeBg.dark"       to 0x22E01E5AL, "diff.removeBg.light"       to 0x1ABA1550L,
+    "diff.removeFg.dark"       to 0xFFE01E5AL, "diff.removeFg.light"       to 0xFFBA1550L,
+    "diff.removeGutter.dark"   to 0xFFE01E5AL, "diff.removeGutter.light"   to 0xFFBA1550L,
+
+    // Syntax — five-colour Slack brand palette
+    "syntax.keyword.dark"      to 0xFFC39BD6L, "syntax.keyword.light"      to 0xFF4A154BL,
+    "syntax.string.dark"       to 0xFF2BAC76L, "syntax.string.light"       to 0xFF007A5AL,
+    "syntax.function.dark"     to 0xFF36C5F0L, "syntax.function.light"     to 0xFF1264A3L,
+    "syntax.number.dark"       to 0xFFECB22EL, "syntax.number.light"       to 0xFF8A6400L,
+    "syntax.type.dark"         to 0xFF7DD3FCL, "syntax.type.light"         to 0xFF0C5C8EL,
+    "syntax.constant.dark"     to 0xFFE01E5AL, "syntax.constant.light"     to 0xFFBA1550L,
+    "syntax.comment.dark"      to 0xFF6B6D7AL, "syntax.comment.light"      to 0xFF8A8D9AL,
+    "syntax.operator.dark"     to 0xFFC0C2CCL, "syntax.operator.light"     to 0xFF3D404EL,
+)
+
+/**
+ * Syntax colour overrides for the Cotton Candy theme — playful pink on a
+ * pink-blush light bg, with mint strings and cyan functions for a
+ * confectionery feel without washing out on the pastel background.
+ */
+private val cottonCandyOverrides: Map<String, Long> = mapOf(
+    "accent.primary.dark"      to 0xFFFF9CCCL, "accent.primary.light"      to 0xFFC1297AL,
+    "accent.primarySoft.dark"  to 0x28FF9CCCL, "accent.primarySoft.light"  to 0x24C1297AL,
+    "accent.primaryGlow.dark"  to 0x50FF9CCCL, "accent.primaryGlow.light"  to 0x40C1297AL,
+    "sidebar.activeText.dark"  to 0xFFFF9CCCL, "sidebar.activeText.light"  to 0xFFC1297AL,
+    "sidebar.activeBg.dark"    to 0x22FF9CCCL, "sidebar.activeBg.light"    to 0x1AC1297AL,
+    "border.focus.dark"        to 0xFFFF9CCCL, "border.focus.light"        to 0xFFC1297AL,
+    "border.focusGlow.dark"    to 0x4CFF9CCCL, "border.focusGlow.light"    to 0x40C1297AL,
+    "terminal.cursor.dark"     to 0xFFFF9CCCL, "terminal.cursor.light"     to 0xFFC1297AL,
+    "syntax.keyword.dark"      to 0xFFFF9CCCL, "syntax.keyword.light"      to 0xFFC1297AL,
+    "syntax.string.dark"       to 0xFF6EE7B7L, "syntax.string.light"       to 0xFF059669L,
+    "syntax.function.dark"     to 0xFF67E8F9L, "syntax.function.light"     to 0xFF0891B2L,
+    "syntax.number.dark"       to 0xFFFDE68AL, "syntax.number.light"       to 0xFFB45309L,
+    "syntax.type.dark"         to 0xFFD8B4FEL, "syntax.type.light"         to 0xFF7E22CEL,
+    "syntax.constant.dark"     to 0xFFFCA5A5L, "syntax.constant.light"     to 0xFFDC2626L,
+    "syntax.comment.dark"      to 0xFF9B7A8FL, "syntax.comment.light"      to 0xFFC794B2L,
+    "syntax.operator.dark"     to 0xFFE8BFD5L, "syntax.operator.light"     to 0xFF8A1F5BL,
+)
+
 val recommendedThemes: List<TerminalTheme> = listOf(
     TerminalTheme("Matrix",        "#33ff66", "#0a7d2c"),
     TerminalTheme("Mint terminal", "#33ff99", "#0b8a5b"),
@@ -260,6 +407,9 @@ val recommendedThemes: List<TerminalTheme> = listOf(
                                     darkBg = "#282c34", lightBg = "#fafafa"),
     TerminalTheme("GitHub",         darkFg = "#c9d1d9", lightFg = "#24292f",
                                     darkBg = "#0d1117", lightBg = "#ffffff"),
+    TerminalTheme("Slack Canvas",   darkFg = "#d0d3de", lightFg = "#1d1c1d",
+                                    darkBg = "#1a1d29", lightBg = "#ffffff",
+                                    overrides = slackCanvasOverrides),
     TerminalTheme("Catppuccin",     darkFg = "#cdd6f4", lightFg = "#4c4f69",
                                     darkBg = "#1e1e2e", lightBg = "#eff1f5"),
     TerminalTheme("Rose Pine",      darkFg = "#e0def4", lightFg = "#575279",
@@ -289,6 +439,107 @@ val recommendedThemes: List<TerminalTheme> = listOf(
                                     darkBg = "#f5f5dc", lightBg = "#fffff8"),
     TerminalTheme("Mono Black",     darkFg = "#ffffff", lightFg = "#000000",
                                     darkBg = "#000000", lightBg = "#ffffff"),
+
+    // ── Vibrant dark-optimised palettes ───────────────────────────────
+    // Each picks a saturated signature colour and pairs it with a deep
+    // tinted bg so the whole UI glows in that hue.
+    TerminalTheme("Cyberpunk",      darkFg = "#ff71ce", lightFg = "#8a0f55",
+                                    darkBg = "#0a0014", lightBg = "#fdf0f8",
+                                    overrides = cyberpunkOverrides),
+    TerminalTheme("Aurora",         darkFg = "#a7f3d0", lightFg = "#065f46",
+                                    darkBg = "#0a1626", lightBg = "#eef7f3",
+                                    overrides = auroraOverrides),
+    TerminalTheme("Volcanic",       darkFg = "#ffb380", lightFg = "#7f1d1d",
+                                    darkBg = "#1a0a05", lightBg = "#fff4ed"),
+    TerminalTheme("Deep Sea",       darkFg = "#7dd3fc", lightFg = "#075985",
+                                    darkBg = "#001428", lightBg = "#edf7ff"),
+    TerminalTheme("Dragon's Hoard", darkFg = "#fbbf24", lightFg = "#78350f",
+                                    darkBg = "#14100a", lightBg = "#fdf7e6"),
+    TerminalTheme("Nebula",         darkFg = "#d8b4fe", lightFg = "#581c87",
+                                    darkBg = "#0f0820", lightBg = "#f5edff",
+                                    overrides = nebulaOverrides),
+    TerminalTheme("Toxic",          darkFg = "#d4ff47", lightFg = "#3f5d00",
+                                    darkBg = "#080c00", lightBg = "#f9ffec"),
+    TerminalTheme("Blood Moon",     darkFg = "#ff8b8b", lightFg = "#7f1d1d",
+                                    darkBg = "#1a0505", lightBg = "#fff0f0"),
+    TerminalTheme("Arcade Night",   darkFg = "#ffcf40", lightFg = "#5a3a00",
+                                    darkBg = "#0a0020", lightBg = "#fffbea"),
+    TerminalTheme("Firefly",        darkFg = "#bef264", lightFg = "#3f6212",
+                                    darkBg = "#0a1a0a", lightBg = "#f5fae8"),
+
+    // ── Vibrant light-optimised palettes ──────────────────────────────
+    // Tinted light bg (not pure white) so the whole UI reads as a fresh
+    // colour wash; fg is a deep saturated sibling of the bg hue.
+    TerminalTheme("Cotton Candy",   darkFg = "#ff9ccc", lightFg = "#8a0f55",
+                                    darkBg = "#1a0a14", lightBg = "#fff0f8",
+                                    overrides = cottonCandyOverrides),
+    TerminalTheme("Peach Sorbet",   darkFg = "#ffb380", lightFg = "#7c2d12",
+                                    darkBg = "#1a0d05", lightBg = "#fff4e8"),
+    TerminalTheme("Mint Chip",      darkFg = "#86efac", lightFg = "#065f46",
+                                    darkBg = "#0a1a12", lightBg = "#e8f7ef"),
+    TerminalTheme("Lavender Dream", darkFg = "#d8b4fe", lightFg = "#581c87",
+                                    darkBg = "#140a1f", lightBg = "#f5edff"),
+    TerminalTheme("Citrus Zest",    darkFg = "#fbbf24", lightFg = "#7a4a00",
+                                    darkBg = "#1a1405", lightBg = "#fff8d1"),
+    TerminalTheme("Sky Breeze",     darkFg = "#93c5fd", lightFg = "#0c2b5c",
+                                    darkBg = "#050f1f", lightBg = "#e8f4ff"),
+    TerminalTheme("Rose Quartz",    darkFg = "#fca5c7", lightFg = "#831843",
+                                    darkBg = "#1a050d", lightBg = "#fff0f3"),
+    TerminalTheme("Coral Reef",     darkFg = "#ff9e7a", lightFg = "#7c1d2e",
+                                    darkBg = "#1f0805", lightBg = "#fff5f0"),
+    TerminalTheme("Marigold",       darkFg = "#fbbf24", lightFg = "#713f12",
+                                    darkBg = "#1a1000", lightBg = "#fff8e1"),
+    TerminalTheme("Tidepool",       darkFg = "#5eead4", lightFg = "#115e59",
+                                    darkBg = "#0a1f1d", lightBg = "#e8f7f4"),
+
+    // ── Panel themes ──────────────────────────────────────────────────
+    // Designed to be assigned to sidebar / chrome / windows / bottomBar
+    // sections of light-mode configs so those panels stay deeply
+    // saturated even when the content area is pastel. They keep dark
+    // backgrounds in BOTH appearance modes (just slightly darker in dark
+    // mode), pairing each with appropriate light foreground text.
+    TerminalTheme("Midnight Panel",   darkFg = "#c8d3e8", lightFg = "#ffffff",
+                                      darkBg = "#0d1326", lightBg = "#1a2847"),
+    TerminalTheme("Forest Panel",     darkFg = "#c0e0c8", lightFg = "#f0f5e8",
+                                      darkBg = "#0a1f14", lightBg = "#1f3a2e"),
+    TerminalTheme("Royal Plum Panel", darkFg = "#e0c8e8", lightFg = "#f5e8ff",
+                                      darkBg = "#1a0d20", lightBg = "#3d1f4d"),
+    TerminalTheme("Burgundy Panel",   darkFg = "#f0c8d0", lightFg = "#fff0f5",
+                                      darkBg = "#200a14", lightBg = "#4a1c2e"),
+    TerminalTheme("Espresso Panel",   darkFg = "#e8d4b8", lightFg = "#f5e8d4",
+                                      darkBg = "#1a0d05", lightBg = "#3d2418"),
+    TerminalTheme("Deep Teal Panel",  darkFg = "#b8e0e0", lightFg = "#e8fafa",
+                                      darkBg = "#051f1f", lightBg = "#0d3a3a"),
+    TerminalTheme("Slate Panel",      darkFg = "#c8d2e0", lightFg = "#f7fafc",
+                                      darkBg = "#0d1320", lightBg = "#2d3748"),
+    TerminalTheme("Indigo Panel",     darkFg = "#cad0f0", lightFg = "#e0e7ff",
+                                      darkBg = "#0d0a24", lightBg = "#1e1b4b"),
+    TerminalTheme("Terracotta Panel", darkFg = "#f0d4b8", lightFg = "#ffe8d4",
+                                      darkBg = "#200a05", lightBg = "#4a2418"),
+    TerminalTheme("Olive Panel",      darkFg = "#e0e8c0", lightFg = "#f0f5d4",
+                                      darkBg = "#14140a", lightBg = "#3a3d1f"),
+    TerminalTheme("Mocha Panel",      darkFg = "#e0d0b8", lightFg = "#f5e8d4",
+                                      darkBg = "#1a0f0a", lightBg = "#3d2818"),
+    TerminalTheme("Charcoal Panel",   darkFg = "#d8d8d8", lightFg = "#f5f5f5",
+                                      darkBg = "#1a1a1a", lightBg = "#2d2d2d"),
+    TerminalTheme("Slack Navy Panel",  darkFg = "#e8eaf0", lightFg = "#ffffff",
+                                       darkBg = "#0f1220", lightBg = "#1a1d29"),
+    TerminalTheme("Slack Slate Panel", darkFg = "#d8dcea", lightFg = "#f0f2f8",
+                                       darkBg = "#242a47", lightBg = "#3d4266"),
+
+    // ── Bar themes ────────────────────────────────────────────────────
+    // Vivid saturated colours intended for the tab strip (or any other
+    // narrow accent surface) so it pops next to a pastel content pane
+    // and a deep panel sidebar. Both modes use a saturated background
+    // with white text.
+    TerminalTheme("Tangerine Bar",    darkFg = "#fff5e8", lightFg = "#ffffff",
+                                      darkBg = "#c2410c", lightBg = "#ea580c"),
+    TerminalTheme("Hot Magenta Bar",  darkFg = "#fff0f5", lightFg = "#ffffff",
+                                      darkBg = "#be185d", lightBg = "#db2777"),
+    TerminalTheme("Cyan Bar",         darkFg = "#e8faff", lightFg = "#ffffff",
+                                      darkBg = "#0e7490", lightBg = "#0891b2"),
+    TerminalTheme("Lime Bar",         darkFg = "#f5fae8", lightFg = "#ffffff",
+                                      darkBg = "#4d7c0f", lightBg = "#65a30d"),
 )
 
 /** Name of the theme applied when the server has no stored preference. */
