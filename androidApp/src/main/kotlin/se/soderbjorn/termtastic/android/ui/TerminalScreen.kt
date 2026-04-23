@@ -105,7 +105,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import se.soderbjorn.termtastic.Appearance
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
 import se.soderbjorn.termtastic.ResolvedPalette
-import se.soderbjorn.termtastic.recommendedThemes
+import se.soderbjorn.termtastic.recommendedColorSchemes
 import se.soderbjorn.termtastic.resolve
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 import se.soderbjorn.termtastic.client.PtySocket
@@ -226,7 +226,7 @@ fun TerminalScreen(
     }
     val uiSettings = centralSettings ?: localSettings
     val systemIsDark = isSystemInDarkTheme()
-    val defaultTheme = remember { recommendedThemes.first { it.name == DEFAULT_THEME_NAME } }
+    val defaultTheme = remember { recommendedColorSchemes.first { it.name == DEFAULT_THEME_NAME } }
     val terminalPalette = remember(uiSettings, systemIsDark) {
         val theme = uiSettings?.sectionTheme("terminal") ?: defaultTheme
         val appearance = uiSettings?.appearance ?: Appearance.Auto

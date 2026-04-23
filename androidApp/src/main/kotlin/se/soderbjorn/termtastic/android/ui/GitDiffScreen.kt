@@ -46,7 +46,7 @@ import se.soderbjorn.termtastic.DiffLineType
 import se.soderbjorn.termtastic.WindowEnvelope
 import se.soderbjorn.termtastic.Appearance
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
-import se.soderbjorn.termtastic.recommendedThemes
+import se.soderbjorn.termtastic.recommendedColorSchemes
 import se.soderbjorn.termtastic.resolve
 import se.soderbjorn.termtastic.client.fetchUiSettings
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
@@ -89,7 +89,7 @@ fun GitDiffScreen(
     val uiSettings = centralSettings ?: localSettings
     val palette = remember(isDark, uiSettings) {
         val theme = uiSettings?.sectionTheme("diff")
-            ?: recommendedThemes.first { it.name == DEFAULT_THEME_NAME }
+            ?: recommendedColorSchemes.first { it.name == DEFAULT_THEME_NAME }
         val appearance = uiSettings?.appearance ?: Appearance.Auto
         theme.resolve(appearance, isDark)
     }

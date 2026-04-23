@@ -9,7 +9,7 @@
  * ([mixWithContrastFloor]).
  *
  * These are used exclusively by the theme resolver ([resolve]) to derive
- * the full [ResolvedPalette] from a [TerminalTheme]'s seed fg/bg values.
+ * the full [ResolvedPalette] from a [ColorScheme]'s seed fg/bg values.
  *
  * @see ResolvedPalette
  * @see resolve

@@ -298,12 +298,12 @@ fun showThemeManager(
                 ManagerTab.Themes -> {
                     val n = selectedTheme
                     n == null || (state.customThemes[n] == null &&
-                        defaultThemeConfigs.none { it.name == n })
+                        defaultThemes.none { it.name == n })
                 }
                 ManagerTab.Schemes -> {
                     val n = selectedScheme
                     n == null || (state.customSchemes[n] == null &&
-                        recommendedThemes.none { it.name == n })
+                        recommendedColorSchemes.none { it.name == n })
                 }
             }
             if (missing) {
@@ -485,12 +485,12 @@ private fun renderThemesLeft(
     container.appendChild(chips)
 
     // ── All themes (default + custom) as (name, preset, isDefault) triples ──
-    data class Row(val preset: ThemeConfigPreset, val isDefault: Boolean)
+    data class Row(val preset: Theme, val isDefault: Boolean)
 
     val allRows = buildList {
         // Custom themes first (user content prioritized in lists)
         for ((_, t) in state.customThemes) add(Row(t, isDefault = false))
-        for (t in defaultThemeConfigs) add(Row(t, isDefault = true))
+        for (t in defaultThemes) add(Row(t, isDefault = true))
     }
 
     val filtered = allRows.filter { row ->
@@ -568,7 +568,7 @@ private fun renderThemesLeft(
  * the kebab menu exposes Edit / Clone / Delete actions.
  */
 private fun buildThemeCard(
-    preset: ThemeConfigPreset,
+    preset: Theme,
     isDefault: Boolean,
     isSelected: Boolean,
     onAssign: (String) -> Unit,
@@ -587,8 +587,8 @@ private fun buildThemeCard(
     // scheme fg/bg instead of the hardcoded greys. Falls back to the
     // recommended-themes default if the preset's main scheme can't be
     // resolved (e.g. a user deleted the custom scheme but kept the theme).
-    val previewScheme = resolveSchemeByName(preset.theme)
-        ?: recommendedThemes.first()
+    val previewScheme = resolveSchemeByName(preset.colorScheme)
+        ?: recommendedColorSchemes.first()
     applyCardPaletteVars(card, previewScheme)
 
     val star = document.createElement("button") as HTMLElement
@@ -637,7 +637,7 @@ private fun buildThemeCard(
  */
 private fun showThemeCardMenu(
     anchor: HTMLElement,
-    preset: ThemeConfigPreset,
+    preset: Theme,
     isDefault: Boolean,
     onEdit: (String) -> Unit,
 ) {
@@ -696,10 +696,10 @@ private fun showThemeCardMenu(
  * (if open) is switched to the editor view for the new theme so the user
  * can start tweaking it immediately.
  */
-private fun showCloneThemePrompt(source: ThemeConfigPreset) {
+private fun showCloneThemePrompt(source: Theme) {
     val defaultName = "${source.name} Copy"
     val existing = buildSet {
-        for (t in defaultThemeConfigs) add(t.name)
+        for (t in defaultThemes) add(t.name)
         for ((name, _) in appVm.stateFlow.value.customThemes) add(name)
     }
     showNamePrompt(
@@ -737,7 +737,7 @@ private fun showCloneThemePrompt(source: ThemeConfigPreset) {
 private fun promptNewTheme(onCreated: (String) -> Unit) {
     val state = appVm.stateFlow.value
     val existing = buildSet {
-        for (t in defaultThemeConfigs) add(t.name)
+        for (t in defaultThemes) add(t.name)
         for ((name, _) in state.customThemes) add(name)
     }
     val defaultName = run {
@@ -749,7 +749,7 @@ private fun promptNewTheme(onCreated: (String) -> Unit) {
         }
         candidate
     }
-    val seedScheme = state.theme.name.ifBlank { recommendedThemes.first().name }
+    val seedScheme = state.theme.name.ifBlank { recommendedColorSchemes.first().name }
     showNamePrompt(
         title = "New theme",
         label = "Theme name",
@@ -763,10 +763,10 @@ private fun promptNewTheme(onCreated: (String) -> Unit) {
             }
         },
     ) { newName ->
-        val fresh = ThemeConfigPreset(
+        val fresh = Theme(
             name = newName,
             mode = ConfigMode.Both,
-            theme = seedScheme,
+            colorScheme = seedScheme,
         )
         GlobalScope.launch(start = CoroutineStart.UNDISPATCHED) {
             appVm.saveCustomTheme(fresh)
@@ -791,7 +791,7 @@ private fun renderThemeEditor(
     container.innerHTML = ""
     val state = appVm.stateFlow.value
     val name = selectedName ?: return
-    val preset = state.customThemes[name] ?: defaultThemeConfigs.firstOrNull { it.name == name }
+    val preset = state.customThemes[name] ?: defaultThemes.firstOrNull { it.name == name }
     if (preset == null) {
         val empty = document.createElement("div") as HTMLElement
         empty.className = "theme-manager-empty"
@@ -865,7 +865,7 @@ private fun renderThemeEditor(
     sectionsWrap.className = "theme-editor-sections"
 
     val sectionValues = mutableMapOf<String, String>()
-    sectionValues[""] = preset.theme
+    sectionValues[""] = preset.colorScheme
     sectionValues["sidebar"] = preset.sidebar
     sectionValues["terminal"] = preset.terminal
     sectionValues["diff"] = preset.diff
@@ -922,7 +922,7 @@ private fun renderThemeEditor(
             val next = preset.copy(
                 name = newName,
                 mode = newMode,
-                theme = sectionValues[""] ?: preset.theme,
+                colorScheme = sectionValues[""] ?: preset.colorScheme,
                 sidebar = sectionValues["sidebar"] ?: "",
                 terminal = sectionValues["terminal"] ?: "",
                 diff = sectionValues["diff"] ?: "",
@@ -987,15 +987,15 @@ private fun renderThemeEditor(
 }
 
 /**
- * Resolve a colour-scheme name to its [TerminalTheme], checking custom
- * schemes first and falling back to [recommendedThemes]. Returns `null`
+ * Resolve a colour-scheme name to its [ColorScheme], checking custom
+ * schemes first and falling back to [recommendedColorSchemes]. Returns `null`
  * when the name is empty or unknown.
  */
-private fun resolveSchemeByName(name: String): TerminalTheme? {
+private fun resolveSchemeByName(name: String): ColorScheme? {
     if (name.isEmpty()) return null
     val state = appVm.stateFlow.value
-    return state.customSchemes[name]?.toTerminalTheme()
-        ?: recommendedThemes.firstOrNull { it.name == name }
+    return state.customSchemes[name]?.toColorScheme()
+        ?: recommendedColorSchemes.firstOrNull { it.name == name }
 }
 
 /**
@@ -1044,7 +1044,7 @@ internal fun buildSchemeGroups(): List<Pair<String, List<String>>> {
     val state = appVm.stateFlow.value
     val favs = state.favoriteSchemes.sorted()
     val customs = state.customSchemes.keys.sorted()
-    val defaults = recommendedThemes.map { it.name }.sorted()
+    val defaults = recommendedColorSchemes.map { it.name }.sorted()
     return buildList {
         if (favs.isNotEmpty()) add("Favorites" to favs)
         if (customs.isNotEmpty()) add("Custom" to customs)
@@ -1246,10 +1246,10 @@ private fun renderSchemesLeft(
     val grid = document.createElement("div") as HTMLElement
     grid.className = "theme-manager-grid scheme-grid"
 
-    data class Row(val scheme: TerminalTheme, val isDefault: Boolean)
+    data class Row(val scheme: ColorScheme, val isDefault: Boolean)
     val allRows = buildList {
-        for ((_, c) in state.customSchemes) add(Row(c.toTerminalTheme(), isDefault = false))
-        for (t in recommendedThemes) add(Row(t, isDefault = true))
+        for ((_, c) in state.customSchemes) add(Row(c.toColorScheme(), isDefault = false))
+        for (t in recommendedColorSchemes) add(Row(t, isDefault = true))
     }
 
     val filtered = allRows.filter { row ->
@@ -1309,7 +1309,7 @@ private fun renderSchemesLeft(
  *                       scheme itself). Resolved against the active
  *                       appearance to pick dark- or light-mode colours.
  */
-private fun applyCardPaletteVars(card: HTMLElement, previewScheme: TerminalTheme) {
+private fun applyCardPaletteVars(card: HTMLElement, previewScheme: ColorScheme) {
     val isDark = !isLightActive(appVm.stateFlow.value.appearance)
     val p = previewScheme.resolve(isDark)
     card.style.setProperty("--star-fg", argbToCss(p.text.secondary))
@@ -1324,7 +1324,7 @@ private fun applyCardPaletteVars(card: HTMLElement, previewScheme: TerminalTheme
 
 /** Build a single scheme card: swatch + name + favourite star + kebab menu. */
 private fun buildSchemeCard(
-    scheme: TerminalTheme,
+    scheme: ColorScheme,
     isDefault: Boolean,
     isSelected: Boolean,
     onSelect: (String) -> Unit,
@@ -1387,7 +1387,7 @@ private fun buildSchemeCard(
 /** Per-card menu for schemes: clone, delete. */
 private fun showSchemeCardMenu(
     anchor: HTMLElement,
-    scheme: TerminalTheme,
+    scheme: ColorScheme,
     isDefault: Boolean,
 ) {
     document.querySelectorAll(".theme-manager-menu").let { nl ->
@@ -1441,10 +1441,10 @@ private fun showSchemeCardMenu(
  * scheme. After save, the manager (if open) is switched to the editor view
  * for the new scheme so the user can start tweaking it immediately.
  */
-private fun showCloneSchemePrompt(source: TerminalTheme) {
+private fun showCloneSchemePrompt(source: ColorScheme) {
     val defaultName = "${source.name} Copy"
     val existing = buildSet {
-        for (t in recommendedThemes) add(t.name)
+        for (t in recommendedColorSchemes) add(t.name)
         for ((name, _) in appVm.stateFlow.value.customSchemes) add(name)
     }
     showNamePrompt(
@@ -1488,7 +1488,7 @@ private fun showCloneSchemePrompt(source: TerminalTheme) {
 private fun promptNewScheme(onCreated: (String) -> Unit) {
     val state = appVm.stateFlow.value
     val existing = buildSet {
-        for (t in recommendedThemes) add(t.name)
+        for (t in recommendedColorSchemes) add(t.name)
         for ((name, _) in state.customSchemes) add(name)
     }
     val defaultName = run {
@@ -1546,7 +1546,7 @@ private fun renderSchemeEditor(
     val state = appVm.stateFlow.value
     val name = selectedName ?: return
     val custom = state.customSchemes[name]
-    val source = custom?.toTerminalTheme() ?: recommendedThemes.firstOrNull { it.name == name }
+    val source = custom?.toColorScheme() ?: recommendedColorSchemes.firstOrNull { it.name == name }
     if (source == null) {
         val empty = document.createElement("div") as HTMLElement
         empty.className = "theme-manager-empty"
@@ -1682,7 +1682,7 @@ private fun renderSchemeEditor(
         val slots = mutableListOf<PickerSlot>()
 
         refreshDerivedSwatches = run@{
-            val themeNow = TerminalTheme(
+            val themeNow = ColorScheme(
                 name = source.name,
                 darkFg = mutable.darkFg,
                 lightFg = mutable.lightFg,
@@ -1868,7 +1868,7 @@ private fun renderSchemeEditor(
 
 /**
  * Flat list of semantic token keys used in the scheme editor's overrides
- * grid. Mirrors the tokens that [TerminalTheme.resolve] consults in
+ * grid. Mirrors the tokens that [ColorScheme.resolve] consults in
  * [ThemeResolver.kt]; keys match the `"group.token"` portion (appearance
  * suffix is added per-row). Every entry here is an override key the
  * resolver actually reads, so edits in the grid always round-trip.

@@ -3,19 +3,19 @@
  *
  * A [ResolvedPalette] contains every colour the application needs, organised
  * into role-based groups (surface, text, accent, syntax, etc.).  It is
- * produced by [TerminalTheme.resolve] from a theme's seed fg/bg values and
+ * produced by [ColorScheme.resolve] from a theme's seed fg/bg values and
  * consumed by every platform renderer: web CSS custom properties, Android
  * Compose colours, and iOS SwiftUI colours.
  *
  * All colour values are ARGB [Long] values (`0xAARRGGBB`).
  *
  * @see resolve
- * @see TerminalTheme
+ * @see ColorScheme
  */
 package se.soderbjorn.termtastic
 
 /**
- * Complete semantic colour palette derived from a [TerminalTheme].
+ * Complete semantic colour palette derived from a [ColorScheme].
  *
  * Each nested data class corresponds to one role-based colour group, giving
  * roughly 60 tokens in total.  Platform renderers convert these [Long] ARGB

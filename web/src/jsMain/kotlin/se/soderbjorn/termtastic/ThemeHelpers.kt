@@ -19,10 +19,10 @@ const val DARK_SPICED = false
 const val SHOW_DEBUG_MENU = false
 
 /**
- * The default terminal theme, resolved by name from the [recommendedThemes] list.
+ * The default terminal theme, resolved by name from the [recommendedColorSchemes] list.
  */
-val defaultTheme: TerminalTheme
-    get() = recommendedThemes.first { it.name == DEFAULT_THEME_NAME }
+val defaultTheme: ColorScheme
+    get() = recommendedColorSchemes.first { it.name == DEFAULT_THEME_NAME }
 
 /**
  * Checks whether the user's system prefers dark mode via the `prefers-color-scheme` media query.
@@ -52,7 +52,7 @@ fun isLightActive(appearance: Appearance): Boolean = when (appearance) {
  * @param appearance the user's selected appearance mode
  * @return the hex foreground color string
  */
-fun themeForegroundForCurrent(theme: TerminalTheme, appearance: Appearance): String =
+fun themeForegroundForCurrent(theme: ColorScheme, appearance: Appearance): String =
     if (isLightActive(appearance)) theme.lightFg else theme.darkFg
 
 /**
@@ -62,7 +62,7 @@ fun themeForegroundForCurrent(theme: TerminalTheme, appearance: Appearance): Str
  * @param appearance the user's selected appearance mode
  * @return the hex background color string
  */
-fun themeBackgroundForCurrent(theme: TerminalTheme, appearance: Appearance): String =
+fun themeBackgroundForCurrent(theme: ColorScheme, appearance: Appearance): String =
     if (isLightActive(appearance)) theme.lightBg else theme.darkBg
 
 /**
@@ -87,7 +87,7 @@ fun isBackgroundLight(bg: String): Boolean {
  * appearance mode, using the global [appVm] state.
  *
  * @return the resolved palette for the current state
- * @see TerminalTheme.resolve
+ * @see ColorScheme.resolve
  */
 fun currentResolvedPalette(): ResolvedPalette {
     val state = appVm.stateFlow.value
@@ -104,7 +104,7 @@ fun currentResolvedPalette(): ResolvedPalette {
  * @param isDark whether to resolve in dark mode
  * @return the resolved palette
  */
-fun resolvedPaletteFor(theme: TerminalTheme, isDark: Boolean): ResolvedPalette =
+fun resolvedPaletteFor(theme: ColorScheme, isDark: Boolean): ResolvedPalette =
     theme.resolve(isDark)
 
 /**
@@ -304,17 +304,17 @@ fun clearActiveAccentVars(el: org.w3c.dom.HTMLElement) {
 
 /**
  * Resolve a scheme name against the user's custom schemes first, then the
- * built-in `recommendedThemes` list. Returns `null` when the name is empty
+ * built-in `recommendedColorSchemes` list. Returns `null` when the name is empty
  * or cannot be resolved (e.g. the underlying custom scheme was deleted).
  *
  * @param name scheme name to resolve, or `null`
- * @return the [TerminalTheme], or `null` if not found
+ * @return the [ColorScheme], or `null` if not found
  */
-internal fun resolvePaneScheme(name: String?): TerminalTheme? {
+internal fun resolvePaneScheme(name: String?): ColorScheme? {
     if (name.isNullOrEmpty()) return null
     val state = appVm.stateFlow.value
-    return state.customSchemes[name]?.toTerminalTheme()
-        ?: recommendedThemes.firstOrNull { it.name == name }
+    return state.customSchemes[name]?.toColorScheme()
+        ?: recommendedColorSchemes.firstOrNull { it.name == name }
 }
 
 /**

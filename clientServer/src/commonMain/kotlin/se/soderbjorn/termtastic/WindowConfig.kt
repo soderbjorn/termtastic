@@ -107,7 +107,7 @@ data class Pane(
      * Optional per-pane color-scheme override by name. `null` means "use the
      * global theme's section assignment for this pane's content kind". The
      * name is resolved client-side against the user's custom schemes first,
-     * then the built-in `recommendedThemes` list. Changed by
+     * then the built-in `recommendedColorSchemes` list. Changed by
      * [WindowCommand.SetPaneColorScheme]; persists with the rest of the pane
      * state in the window-config blob.
      *

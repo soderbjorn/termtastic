@@ -38,15 +38,15 @@ import se.soderbjorn.termtastic.DEFAULT_DARK_THEME_NAME
 import se.soderbjorn.termtastic.DEFAULT_LIGHT_THEME_NAME
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
 import se.soderbjorn.termtastic.ResolvedPalette
-import se.soderbjorn.termtastic.TerminalTheme
-import se.soderbjorn.termtastic.ThemeConfigPreset
+import se.soderbjorn.termtastic.ColorScheme
+import se.soderbjorn.termtastic.Theme
 import se.soderbjorn.termtastic.WindowCommand
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.WindowEnvelope
 import se.soderbjorn.termtastic.client.WindowSocket
 import se.soderbjorn.termtastic.client.WindowStateRepository
-import se.soderbjorn.termtastic.defaultThemeConfigs
-import se.soderbjorn.termtastic.recommendedThemes
+import se.soderbjorn.termtastic.defaultThemes
+import se.soderbjorn.termtastic.recommendedColorSchemes
 import se.soderbjorn.termtastic.resolve
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -137,7 +137,7 @@ class AppBackingViewModel(
         val sessionStates: Map<String, String?> = emptyMap(),
         val pendingApproval: Boolean = false,
         val claudeUsage: ClaudeUsageData? = null,
-        val theme: TerminalTheme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME },
+        val theme: ColorScheme = recommendedColorSchemes.first { it.name == DEFAULT_THEME_NAME },
         val appearance: Appearance = Appearance.Auto,
         val paneFontSize: Int? = null,
         val paneFontFamily: String? = null,
@@ -147,15 +147,15 @@ class AppBackingViewModel(
         val usageBarCollapsed: Boolean = false,
         val desktopNotifications: Boolean = true,
         val electronCustomTitleBar: Boolean = false,
-        val sidebarTheme: TerminalTheme? = null,
-        val terminalTheme: TerminalTheme? = null,
-        val diffTheme: TerminalTheme? = null,
-        val fileBrowserTheme: TerminalTheme? = null,
-        val tabsTheme: TerminalTheme? = null,
-        val chromeTheme: TerminalTheme? = null,
-        val windowsTheme: TerminalTheme? = null,
-        val activeTheme: TerminalTheme? = null,
-        val bottomBarTheme: TerminalTheme? = null,
+        val sidebarTheme: ColorScheme? = null,
+        val terminalTheme: ColorScheme? = null,
+        val diffTheme: ColorScheme? = null,
+        val fileBrowserTheme: ColorScheme? = null,
+        val tabsTheme: ColorScheme? = null,
+        val chromeTheme: ColorScheme? = null,
+        val windowsTheme: ColorScheme? = null,
+        val activeTheme: ColorScheme? = null,
+        val bottomBarTheme: ColorScheme? = null,
         val uiSettingsHydrated: Boolean = false,
         /**
          * Name of the theme (default or custom) to apply when the resolved
@@ -183,7 +183,7 @@ class AppBackingViewModel(
         val favoriteSchemes: List<String> = emptyList(),
         /**
          * User-defined custom colour schemes, keyed by name. Schemes in
-         * this map take precedence over same-named [recommendedThemes]
+         * this map take precedence over same-named [recommendedColorSchemes]
          * during lookup — giving users a way to override built-ins by
          * cloning under the original name.
          */
@@ -194,7 +194,7 @@ class AppBackingViewModel(
          * on the server for backwards compatibility with saved user
          * content from earlier versions.
          */
-        val customThemes: Map<String, ThemeConfigPreset> = emptyMap(),
+        val customThemes: Map<String, Theme> = emptyMap(),
     )
 
     /**
@@ -256,7 +256,7 @@ class AppBackingViewModel(
      *
      * @param theme the new theme to apply.
      */
-    suspend fun setTheme(theme: TerminalTheme) {
+    suspend fun setTheme(theme: ColorScheme) {
         emit(_stateFlow.value.copy(theme = theme))
         persistSetting("theme", theme.name)
     }
@@ -371,7 +371,7 @@ class AppBackingViewModel(
      * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"windows"`, `"active"`, `"bottomBar"`
      * @param theme   the override theme, or `null` to clear
      */
-    suspend fun setSectionTheme(section: String, theme: TerminalTheme?) {
+    suspend fun setSectionTheme(section: String, theme: ColorScheme?) {
         val cur = _stateFlow.value
         val updated = when (section) {
             "sidebar" -> cur.copy(sidebarTheme = theme)
@@ -399,8 +399,8 @@ class AppBackingViewModel(
      * @param sections map of section key to optional override theme
      */
     fun applyThemeConfiguration(
-        theme: TerminalTheme,
-        sections: Map<String, TerminalTheme?>,
+        theme: ColorScheme,
+        sections: Map<String, ColorScheme?>,
     ) {
         val updated = _stateFlow.value.copy(
             theme = theme,
@@ -535,10 +535,10 @@ class AppBackingViewModel(
         val customSchemes = parseCustomSchemes(settings["customSchemes"]) ?: cur.customSchemes
         val customThemes = parseCustomThemes(settings["themeConfigs"]) ?: cur.customThemes
 
-        fun themeByName(name: String?): TerminalTheme? {
+        fun themeByName(name: String?): ColorScheme? {
             if (name.isNullOrEmpty()) return null
-            customSchemes[name]?.let { return it.toTerminalTheme() }
-            return recommendedThemes.firstOrNull { it.name == name }
+            customSchemes[name]?.let { return it.toColorScheme() }
+            return recommendedColorSchemes.firstOrNull { it.name == name }
         }
 
         val themeName = settings["theme"]?.jsonPrimitive?.contentOrNull
@@ -562,7 +562,7 @@ class AppBackingViewModel(
         // Section overrides used to be top-level `theme.<section>` keys on the
         // server, selected independently of the main theme. After the
         // 2026-04 rearchitecture they live inside each theme bundle
-        // ([ThemeConfigPreset]); section fields on [State] are therefore
+        // ([Theme]); section fields on [State] are therefore
         // **derived** by [refreshActiveTheme] and must not be overwritten
         // here. Ignoring the legacy keys also keeps a stray server echo
         // from reimposing a long-dead override after startup.
@@ -668,23 +668,23 @@ class AppBackingViewModel(
 
     /**
      * Parse the `themeConfigs` JsonElement into typed user-defined
-     * [ThemeConfigPreset]s. Legacy entries without a `mode` field default
+     * [Theme]s. Legacy entries without a `mode` field default
      * to [ConfigMode.Both]; legacy default-marker sentinels (`__default`)
-     * are ignored — defaults live in [defaultThemeConfigs].
+     * are ignored — defaults live in [defaultThemes].
      */
-    private fun parseCustomThemes(el: kotlinx.serialization.json.JsonElement?): Map<String, ThemeConfigPreset>? {
+    private fun parseCustomThemes(el: kotlinx.serialization.json.JsonElement?): Map<String, Theme>? {
         val obj = (el as? JsonObject) ?: return null
-        val out = linkedMapOf<String, ThemeConfigPreset>()
+        val out = linkedMapOf<String, Theme>()
         for ((name, value) in obj) {
             val o = value as? JsonObject ?: continue
             if (o["__default"]?.jsonPrimitive?.booleanOrNull == true) continue
-            val theme = o["theme"]?.jsonPrimitive?.contentOrNull ?: continue
+            val colorScheme = o["colorScheme"]?.jsonPrimitive?.contentOrNull ?: continue
             val modeStr = o["mode"]?.jsonPrimitive?.contentOrNull
             val mode = modeStr?.let { runCatching { ConfigMode.valueOf(it) }.getOrNull() } ?: ConfigMode.Both
-            out[name] = ThemeConfigPreset(
+            out[name] = Theme(
                 name = name,
                 mode = mode,
-                theme = theme,
+                colorScheme = colorScheme,
                 sidebar = o["theme.sidebar"]?.jsonPrimitive?.contentOrNull ?: "",
                 terminal = o["theme.terminal"]?.jsonPrimitive?.contentOrNull ?: "",
                 diff = o["theme.diff"]?.jsonPrimitive?.contentOrNull ?: "",
@@ -713,31 +713,31 @@ class AppBackingViewModel(
 
     /**
      * Look up a theme (bundle of per-section scheme assignments) by name.
-     * Checks custom themes first then built-in [defaultThemeConfigs], so
+     * Checks custom themes first then built-in [defaultThemes], so
      * a user may override a default by cloning under the same name.
      *
      * @param name the theme name to look up
-     * @return the matching [ThemeConfigPreset], or `null` if none exists
+     * @return the matching [Theme], or `null` if none exists
      */
-    fun lookupTheme(name: String): ThemeConfigPreset? {
+    fun lookupTheme(name: String): Theme? {
         if (name.isEmpty()) return null
         val cur = _stateFlow.value
         cur.customThemes[name]?.let { return it }
-        return defaultThemeConfigs.firstOrNull { it.name == name }
+        return defaultThemes.firstOrNull { it.name == name }
     }
 
     /**
      * Look up a colour scheme by name. Custom schemes take precedence
-     * over built-in [recommendedThemes].
+     * over built-in [recommendedColorSchemes].
      *
      * @param name the scheme name; empty returns `null`
-     * @return the matching [TerminalTheme] or `null` when not found
+     * @return the matching [ColorScheme] or `null` when not found
      */
-    fun lookupScheme(name: String): TerminalTheme? {
+    fun lookupScheme(name: String): ColorScheme? {
         if (name.isEmpty()) return null
         val cur = _stateFlow.value
-        cur.customSchemes[name]?.let { return it.toTerminalTheme() }
-        return recommendedThemes.firstOrNull { it.name == name }
+        cur.customSchemes[name]?.let { return it.toColorScheme() }
+        return recommendedColorSchemes.firstOrNull { it.name == name }
     }
 
     /**
@@ -767,11 +767,11 @@ class AppBackingViewModel(
         // sidebar + Cyber Teal terminal), which would produce a visibly
         // mixed look when the user just wants a uniform theme.
         val preset = lookupTheme(selectedName)
-            ?: ThemeConfigPreset(name = selectedName, theme = selectedName)
-        val main = lookupScheme(preset.theme)
+            ?: Theme(name = selectedName, colorScheme = selectedName)
+        val main = lookupScheme(preset.colorScheme)
             ?: lookupScheme(DEFAULT_THEME_NAME)
-            ?: recommendedThemes.first()
-        fun sec(s: String): TerminalTheme? = lookupScheme(s)
+            ?: recommendedColorSchemes.first()
+        fun sec(s: String): ColorScheme? = lookupScheme(s)
         emit(cur.copy(
             theme = main,
             sidebarTheme = sec(preset.sidebar),
@@ -947,7 +947,7 @@ class AppBackingViewModel(
      * Insert or replace a custom theme (bundle). Persisted under the
      * legacy `themeConfigs` key so pre-existing server data survives.
      */
-    suspend fun saveCustomTheme(theme: ThemeConfigPreset) {
+    suspend fun saveCustomTheme(theme: Theme) {
         val cur = _stateFlow.value
         val next = cur.customThemes.toMutableMap().apply { put(theme.name, theme) }
         emit(cur.copy(customThemes = next))
@@ -980,13 +980,13 @@ class AppBackingViewModel(
         settingsPersister?.putJsonSettings(meta)
     }
 
-    private suspend fun persistCustomThemes(themes: Map<String, ThemeConfigPreset>) {
+    private suspend fun persistCustomThemes(themes: Map<String, Theme>) {
         lastLocalSettingsChange = TimeSource.Monotonic.markNow()
         val obj = buildJsonObject {
             put("themeConfigs", JsonObject(themes.mapValues { (_, t) ->
                 buildJsonObject {
                     put("mode", JsonPrimitive(t.mode.name))
-                    put("theme", JsonPrimitive(t.theme))
+                    put("colorScheme", JsonPrimitive(t.colorScheme))
                     put("theme.sidebar", JsonPrimitive(t.sidebar))
                     put("theme.terminal", JsonPrimitive(t.terminal))
                     put("theme.diff", JsonPrimitive(t.diff))

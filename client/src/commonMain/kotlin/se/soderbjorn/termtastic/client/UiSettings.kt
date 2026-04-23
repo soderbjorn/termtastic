@@ -7,7 +7,7 @@
  * pulls the blob via `GET /api/ui-settings` and maps it into a type-safe
  * [UiSettings] instance, falling back to safe defaults for unknown values.
  *
- * @see se.soderbjorn.termtastic.TerminalTheme
+ * @see se.soderbjorn.termtastic.ColorScheme
  * @see se.soderbjorn.termtastic.Appearance
  */
 package se.soderbjorn.termtastic.client
@@ -21,8 +21,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import se.soderbjorn.termtastic.Appearance
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
-import se.soderbjorn.termtastic.TerminalTheme
-import se.soderbjorn.termtastic.recommendedThemes
+import se.soderbjorn.termtastic.ColorScheme
+import se.soderbjorn.termtastic.recommendedColorSchemes
 
 /**
  * Snapshot of the server-side UI preferences that matter for rendering a
@@ -44,25 +44,25 @@ import se.soderbjorn.termtastic.recommendedThemes
  *   (tab ring, focused-pane border, sidebar active-pane highlight).
  */
 data class UiSettings(
-    val theme: TerminalTheme,
+    val theme: ColorScheme,
     val appearance: Appearance,
-    val sidebarTheme: TerminalTheme? = null,
-    val terminalTheme: TerminalTheme? = null,
-    val diffTheme: TerminalTheme? = null,
-    val fileBrowserTheme: TerminalTheme? = null,
-    val tabsTheme: TerminalTheme? = null,
-    val chromeTheme: TerminalTheme? = null,
-    val windowsTheme: TerminalTheme? = null,
-    val activeTheme: TerminalTheme? = null,
-    val bottomBarTheme: TerminalTheme? = null,
+    val sidebarTheme: ColorScheme? = null,
+    val terminalTheme: ColorScheme? = null,
+    val diffTheme: ColorScheme? = null,
+    val fileBrowserTheme: ColorScheme? = null,
+    val tabsTheme: ColorScheme? = null,
+    val chromeTheme: ColorScheme? = null,
+    val windowsTheme: ColorScheme? = null,
+    val activeTheme: ColorScheme? = null,
+    val bottomBarTheme: ColorScheme? = null,
 ) {
     /**
      * Resolves the theme for a specific app section, falling back to the global theme.
      *
      * @param section one of `"sidebar"`, `"terminal"`, `"diff"`, `"fileBrowser"`, `"tabs"`, `"chrome"`, `"active"`, `"bottomBar"`
-     * @return the [TerminalTheme] for that section
+     * @return the [ColorScheme] for that section
      */
-    fun sectionTheme(section: String): TerminalTheme = when (section) {
+    fun sectionTheme(section: String): ColorScheme = when (section) {
         "sidebar" -> sidebarTheme
         "terminal" -> terminalTheme
         "diff" -> diffTheme
@@ -82,10 +82,10 @@ data class UiSettings(
  * Appearance.Auto defers to [systemIsDark].
  */
 @Deprecated(
-    "Use TerminalTheme.resolve(appearance, systemIsDark) for the full semantic palette",
+    "Use ColorScheme.resolve(appearance, systemIsDark) for the full semantic palette",
     replaceWith = ReplaceWith("resolve(appearance, systemIsDark)", "se.soderbjorn.termtastic.resolve"),
 )
-fun TerminalTheme.effectiveColors(
+fun ColorScheme.effectiveColors(
     appearance: Appearance,
     systemIsDark: Boolean,
 ): Pair<String, String> {
@@ -122,17 +122,17 @@ suspend fun TermtasticClient.fetchUiSettings(): UiSettings? {
         .getOrNull() ?: return defaultUiSettings()
 
     val themeName = (obj["theme"]?.jsonPrimitive?.contentOrNullSafe())
-    val theme = recommendedThemes.firstOrNull { it.name == themeName }
-        ?: recommendedThemes.first { it.name == DEFAULT_THEME_NAME }
+    val theme = recommendedColorSchemes.firstOrNull { it.name == themeName }
+        ?: recommendedColorSchemes.first { it.name == DEFAULT_THEME_NAME }
 
     val appearanceName = obj["appearance"]?.jsonPrimitive?.contentOrNullSafe()
     val appearance = appearanceName
         ?.let { runCatching { Appearance.valueOf(it) }.getOrNull() }
         ?: Appearance.Auto
 
-    fun parseSectionTheme(key: String): TerminalTheme? {
+    fun parseSectionTheme(key: String): ColorScheme? {
         val name = obj[key]?.jsonPrimitive?.contentOrNullSafe() ?: return null
-        return recommendedThemes.firstOrNull { it.name == name }
+        return recommendedColorSchemes.firstOrNull { it.name == name }
     }
 
     return UiSettings(
@@ -157,7 +157,7 @@ suspend fun TermtasticClient.fetchUiSettings(): UiSettings? {
  */
 private fun defaultUiSettings(): UiSettings =
     UiSettings(
-        theme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME },
+        theme = recommendedColorSchemes.first { it.name == DEFAULT_THEME_NAME },
         appearance = Appearance.Auto
     )
 
