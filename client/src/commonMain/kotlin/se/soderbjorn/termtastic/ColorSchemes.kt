@@ -501,38 +501,45 @@ val recommendedColorSchemes: List<ColorScheme> = listOf(
 
     // ── Panel themes ──────────────────────────────────────────────────
     // Designed to be assigned to sidebar / chrome / windows / bottomBar
-    // sections of light-mode configs so those panels stay deeply
-    // saturated even when the content area is pastel. They keep dark
-    // backgrounds in BOTH appearance modes (just slightly darker in dark
-    // mode), pairing each with appropriate light foreground text.
+    // sections of light-mode configs so those panels stay saturated and
+    // recognisably coloured even when the content area is pastel. The
+    // light-mode backgrounds are medium-dark mid-tones (not near-black):
+    // they read as "a confident colour" on a bright page rather than a
+    // slab of darkness. Dark-mode backgrounds stay deep for dark-mode
+    // bold configs, where the pairing is meant to be near-black.
+    //
+    // Slack* panels are kept a step darker than the rest because the
+    // Slack preset depends on a three-tier hierarchy (darkest top bar →
+    // medium slate sidebar → white content) that would collapse if the
+    // navy lifted too far toward the slate.
     ColorScheme("Midnight Panel",   darkFg = "#c8d3e8", lightFg = "#ffffff",
-                                      darkBg = "#0d1326", lightBg = "#1a2847"),
+                                      darkBg = "#0d1326", lightBg = "#3a4d7a"),
     ColorScheme("Forest Panel",     darkFg = "#c0e0c8", lightFg = "#f0f5e8",
-                                      darkBg = "#0a1f14", lightBg = "#1f3a2e"),
+                                      darkBg = "#0a1f14", lightBg = "#3d6b52"),
     ColorScheme("Royal Plum Panel", darkFg = "#e0c8e8", lightFg = "#f5e8ff",
-                                      darkBg = "#1a0d20", lightBg = "#3d1f4d"),
+                                      darkBg = "#1a0d20", lightBg = "#6b3d82"),
     ColorScheme("Burgundy Panel",   darkFg = "#f0c8d0", lightFg = "#fff0f5",
-                                      darkBg = "#200a14", lightBg = "#4a1c2e"),
+                                      darkBg = "#200a14", lightBg = "#7a3a52"),
     ColorScheme("Espresso Panel",   darkFg = "#e8d4b8", lightFg = "#f5e8d4",
-                                      darkBg = "#1a0d05", lightBg = "#3d2418"),
+                                      darkBg = "#1a0d05", lightBg = "#6b4a35"),
     ColorScheme("Deep Teal Panel",  darkFg = "#b8e0e0", lightFg = "#e8fafa",
-                                      darkBg = "#051f1f", lightBg = "#0d3a3a"),
+                                      darkBg = "#051f1f", lightBg = "#2d6b6b"),
     ColorScheme("Slate Panel",      darkFg = "#c8d2e0", lightFg = "#f7fafc",
-                                      darkBg = "#0d1320", lightBg = "#2d3748"),
+                                      darkBg = "#0d1320", lightBg = "#4a5a75"),
     ColorScheme("Indigo Panel",     darkFg = "#cad0f0", lightFg = "#e0e7ff",
-                                      darkBg = "#0d0a24", lightBg = "#1e1b4b"),
+                                      darkBg = "#0d0a24", lightBg = "#4a3d80"),
     ColorScheme("Terracotta Panel", darkFg = "#f0d4b8", lightFg = "#ffe8d4",
-                                      darkBg = "#200a05", lightBg = "#4a2418"),
+                                      darkBg = "#200a05", lightBg = "#7a4830"),
     ColorScheme("Olive Panel",      darkFg = "#e0e8c0", lightFg = "#f0f5d4",
-                                      darkBg = "#14140a", lightBg = "#3a3d1f"),
+                                      darkBg = "#14140a", lightBg = "#6b6b3d"),
     ColorScheme("Mocha Panel",      darkFg = "#e0d0b8", lightFg = "#f5e8d4",
-                                      darkBg = "#1a0f0a", lightBg = "#3d2818"),
+                                      darkBg = "#1a0f0a", lightBg = "#6b4e38"),
     ColorScheme("Charcoal Panel",   darkFg = "#d8d8d8", lightFg = "#f5f5f5",
-                                      darkBg = "#1a1a1a", lightBg = "#2d2d2d"),
+                                      darkBg = "#1a1a1a", lightBg = "#525559"),
     ColorScheme("Slack Navy Panel",  darkFg = "#e8eaf0", lightFg = "#ffffff",
-                                       darkBg = "#0f1220", lightBg = "#1a1d29"),
+                                       darkBg = "#0f1220", lightBg = "#2d3245"),
     ColorScheme("Slack Slate Panel", darkFg = "#d8dcea", lightFg = "#f0f2f8",
-                                       darkBg = "#242a47", lightBg = "#3d4266"),
+                                       darkBg = "#242a47", lightBg = "#4f5778"),
 
     // ── Bar themes ────────────────────────────────────────────────────
     // Vivid saturated colours intended for the tab strip (or any other

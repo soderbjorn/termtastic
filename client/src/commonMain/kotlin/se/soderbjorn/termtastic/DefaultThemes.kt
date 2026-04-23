@@ -684,11 +684,13 @@ val defaultThemes: List<Theme> = listOf(
     ),
 
     // ── Bold light-mode configurations ────────────────────────────────
-    // Each pairs a pastel content theme with a deeply saturated "Panel"
+    // Each pairs a pastel content theme with a medium-saturated "Panel"
     // sidebar/chrome and a vivid "Bar" tab strip so the UI never
-    // collapses to white/yellow/grey. The bottomBar is intentionally
-    // pulled to the panel hue so the chrome reads as a single coloured
-    // frame around the soft content.
+    // collapses to white/yellow/grey. The panel tone is deliberately
+    // mid-weight — clearly coloured, but not so dark it turns the light
+    // mode into a near-dark mode. The bottomBar is pulled to the panel
+    // hue so the chrome reads as a single coloured frame around the
+    // soft content.
 
     Theme(
         name = "Midnight Library",

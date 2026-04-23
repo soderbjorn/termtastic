@@ -301,6 +301,25 @@ sealed class WindowCommand {
     ) : WindowCommand()
 
     /**
+     * Mark a tab as hidden or visible in the tab strip. Hidden tabs keep all
+     * their panes and PTY sessions alive — the web client simply skips them
+     * when rendering tab buttons and lists them in the tab-bar overflow menu
+     * instead, from where they can be unhidden or activated.
+     *
+     * Dispatched from the far-right "⋯" tab-bar menu added in the tab-bar
+     * revamp. When hiding the currently-active tab, the server picks the
+     * next visible neighbour (or falls back to the first visible tab) so
+     * the user always has something selected.
+     *
+     * @param tabId the id of the tab to hide or unhide
+     * @param hidden `true` to hide the tab, `false` to make it visible again
+     * @see TabConfig.isHidden
+     */
+    @Serializable
+    @SerialName("setTabHidden")
+    data class SetTabHidden(val tabId: String, val hidden: Boolean) : WindowCommand()
+
+    /**
      * Add a new terminal pane to an existing tab (creates a new PTY session).
      *
      * @param tabId the id of the tab to add the pane to
