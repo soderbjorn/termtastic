@@ -447,6 +447,7 @@ fun buildFileBrowserView(paneId: String, leaf: dynamic, headerEl: HTMLElement? =
         launchCmd(WindowCommand.FileBrowserOpenFile(paneId = paneId, relPath = state.selectedRelPath!!))
     }
 
+    attachDelayedHoverArm(divider)
     divider.addEventListener("mousedown", { ev ->
         val mev = ev as MouseEvent
         mev.preventDefault()
