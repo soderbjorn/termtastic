@@ -25,7 +25,7 @@ import androidx.compose.ui.graphics.Color
 import se.soderbjorn.termtastic.Appearance
 import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
 import se.soderbjorn.termtastic.ResolvedPalette
-import se.soderbjorn.termtastic.recommendedThemes
+import se.soderbjorn.termtastic.recommendedColorSchemes
 import se.soderbjorn.termtastic.resolve
 import se.soderbjorn.termtastic.client.UiSettings
 
@@ -40,7 +40,7 @@ import se.soderbjorn.termtastic.client.UiSettings
 val LocalUiSettings = compositionLocalOf<UiSettings?> { null }
 
 /** The default theme used when no [UiSettings] have been loaded yet. */
-private val defaultTheme = recommendedThemes.first { it.name == DEFAULT_THEME_NAME }
+private val defaultTheme = recommendedColorSchemes.first { it.name == DEFAULT_THEME_NAME }
 
 /**
  * Resolves the sidebar palette for the current theme and system appearance.

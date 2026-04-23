@@ -1,29 +1,36 @@
 /**
- * Terminal colour theme definitions for the Termtastic terminal emulator.
+ * Colour scheme definitions for the Termtastic terminal emulator.
  *
- * Each [TerminalTheme] carries a dark-mode and light-mode foreground/background
- * colour pair. The [recommendedThemes] list is the canonical palette surfaced in
- * every platform's theme picker; it is kept in sync with the HTML colour-picker
- * tool at `tools/neon-green-picker.html`.
+ * Each [ColorScheme] carries a dark-mode and light-mode foreground/background
+ * colour pair. The [recommendedColorSchemes] list is the canonical palette
+ * surfaced in every platform's colour-scheme picker; it is kept in sync with
+ * the HTML colour-picker tool at `tools/neon-green-picker.html`.
+ *
+ * Naming: what the UI calls a "colour scheme" is represented here as
+ * [ColorScheme]; what the UI calls a "theme" (a named composition of
+ * colour schemes assigned to different sections) is represented as
+ * [Theme] in `DefaultThemes.kt`.
  *
  * @see se.soderbjorn.termtastic.client.UiSettings
  * @see se.soderbjorn.termtastic.client.effectiveColors
+ * @see Theme
  */
 package se.soderbjorn.termtastic
 
 /**
- * A terminal colour theme with separate foreground and background colours for
- * dark and light appearance modes.
+ * A named colour scheme with separate foreground and background colours for
+ * dark and light appearance modes. Corresponds to what the UI calls a
+ * "colour scheme".
  *
- * @property name   Human-readable theme name shown in the picker UI.
+ * @property name   Human-readable scheme name shown in the picker UI.
  * @property darkFg Hex foreground colour used in dark mode (e.g. `"#33ff66"`).
  * @property lightFg Hex foreground colour used in light mode.
  * @property darkBg Hex background colour used in dark mode. Defaults to pure
- *   black; designer themes like Solarized override this with a tinted colour.
+ *   black; designer schemes like Solarized override this with a tinted colour.
  * @property lightBg Hex background colour used in light mode. Defaults to pure
- *   white; designer themes override this with their canonical light background.
+ *   white; designer schemes override this with their canonical light background.
  */
-data class TerminalTheme(
+data class ColorScheme(
     val name: String,
     val darkFg: String,
     val lightFg: String,
@@ -46,10 +53,10 @@ data class TerminalTheme(
 )
 
 /**
- * Curated list of terminal themes available in the theme picker.
+ * Curated list of colour schemes available in the colour-scheme picker.
  *
  * The first group uses the default pure-black/white backgrounds; the second
- * group ("tinted-background themes") specifies custom background colours for
+ * group ("tinted-background schemes") specifies custom background colours for
  * both modes, giving the picker visual variety (cream Solarized Light, deep
  * navy Tokyo Night, etc.).
  *
@@ -339,157 +346,157 @@ private val cottonCandyOverrides: Map<String, Long> = mapOf(
     "syntax.operator.dark"     to 0xFFE8BFD5L, "syntax.operator.light"     to 0xFF8A1F5BL,
 )
 
-val recommendedThemes: List<TerminalTheme> = listOf(
-    TerminalTheme("Matrix",        "#33ff66", "#0a7d2c"),
-    TerminalTheme("Mint terminal", "#33ff99", "#0b8a5b"),
-    TerminalTheme("Cyber teal",    "#00e5ff", "#006d80"),
-    TerminalTheme("Tron",          "#00ff9f", "#00795c", overrides = tronOverrides),
-    TerminalTheme("Vapor pink",    "#ff77ff", "#a3008c"),
-    TerminalTheme("Amber Glow",    "#F4B869", "#A87620"),
-    TerminalTheme("Amber CRT",     "#ffb000", "#8a4b00"),
-    TerminalTheme("Ember",         "#ff6d3d", "#a23b00"),
-    TerminalTheme("Plasma",        "#ff3df8", "#9b008f"),
-    TerminalTheme("Cobalt",        "#5b9dff", "#0a3d91"),
-    TerminalTheme("Aqua glow",     "#00ffe1", "#007466"),
-    TerminalTheme("Sunset",        "#ffaa33", "#9a4a00"),
-    TerminalTheme("Hot rose",      "#ff5fa2", "#a00050"),
-    TerminalTheme("Cyber lime",    "#ccff00", "#5a7800"),
-    TerminalTheme("Royal violet",  "#b388ff", "#4527a0"),
-    TerminalTheme("Synthwave",     "#ff7edb", "#b33d8f"),
-    TerminalTheme("Forest",        "#7fce6f", "#2d6a1f"),
-    TerminalTheme("Ocean",         "#4fc3f7", "#0277bd"),
-    TerminalTheme("Lava",          "#ff5722", "#b71c1c"),
-    TerminalTheme("Ice",           "#5dd8ff", "#006e93"),
-    TerminalTheme("Coral",         "#ff8a65", "#c1421c"),
-    TerminalTheme("Lavender",      "#b39ddb", "#5e35b1"),
-    TerminalTheme("Pastel Pink",   "#ffb6d9", "#c2185b"),
-    TerminalTheme("Lime Burst",    "#d4ff00", "#6b7c00"),
-    TerminalTheme("Magenta",       "#ff00ff", "#8b008b"),
-    TerminalTheme("Sunflower",     "#ffd700", "#b8860b"),
-    TerminalTheme("Cherry",        "#ff4d6d", "#9d0028"),
-    TerminalTheme("Sky",           "#87ceeb", "#1e6091"),
-    TerminalTheme("Mint Cream",    "#98ff98", "#2e8b57"),
-    TerminalTheme("Peach",         "#ffcc99", "#cc6600"),
-    TerminalTheme("Indigo",        "#6f70ff", "#1a237e"),
-    TerminalTheme("Sand",          "#d2b48c", "#8b6914"),
-    TerminalTheme("Crimson",       "#ff5252", "#8b0000"),
-    TerminalTheme("Sea Foam",      "#71eeb8", "#00695c"),
-    TerminalTheme("Apricot",       "#ffb347", "#c66900"),
-    TerminalTheme("Ultraviolet",   "#9d4edd", "#4a148c"),
-    TerminalTheme("Periwinkle",    "#aab8ff", "#3949ab"),
-    TerminalTheme("Teal Storm",    "#20d6c7", "#00695c"),
-    TerminalTheme("Olive",         "#c5d637", "#5d6e0a"),
-    TerminalTheme("Cyan Pop",      "#00ffff", "#007a7a"),
-    TerminalTheme("Honey",         "#f4c430", "#a47000"),
-    TerminalTheme("Sage",          "#b2c8a4", "#5d7c4f"),
+val recommendedColorSchemes: List<ColorScheme> = listOf(
+    ColorScheme("Matrix",        "#33ff66", "#0a7d2c"),
+    ColorScheme("Mint terminal", "#33ff99", "#0b8a5b"),
+    ColorScheme("Cyber teal",    "#00e5ff", "#006d80"),
+    ColorScheme("Tron",          "#00ff9f", "#00795c", overrides = tronOverrides),
+    ColorScheme("Vapor pink",    "#ff77ff", "#a3008c"),
+    ColorScheme("Amber Glow",    "#F4B869", "#A87620"),
+    ColorScheme("Amber CRT",     "#ffb000", "#8a4b00"),
+    ColorScheme("Ember",         "#ff6d3d", "#a23b00"),
+    ColorScheme("Plasma",        "#ff3df8", "#9b008f"),
+    ColorScheme("Cobalt",        "#5b9dff", "#0a3d91"),
+    ColorScheme("Aqua glow",     "#00ffe1", "#007466"),
+    ColorScheme("Sunset",        "#ffaa33", "#9a4a00"),
+    ColorScheme("Hot rose",      "#ff5fa2", "#a00050"),
+    ColorScheme("Cyber lime",    "#ccff00", "#5a7800"),
+    ColorScheme("Royal violet",  "#b388ff", "#4527a0"),
+    ColorScheme("Synthwave",     "#ff7edb", "#b33d8f"),
+    ColorScheme("Forest",        "#7fce6f", "#2d6a1f"),
+    ColorScheme("Ocean",         "#4fc3f7", "#0277bd"),
+    ColorScheme("Lava",          "#ff5722", "#b71c1c"),
+    ColorScheme("Ice",           "#5dd8ff", "#006e93"),
+    ColorScheme("Coral",         "#ff8a65", "#c1421c"),
+    ColorScheme("Lavender",      "#b39ddb", "#5e35b1"),
+    ColorScheme("Pastel Pink",   "#ffb6d9", "#c2185b"),
+    ColorScheme("Lime Burst",    "#d4ff00", "#6b7c00"),
+    ColorScheme("Magenta",       "#ff00ff", "#8b008b"),
+    ColorScheme("Sunflower",     "#ffd700", "#b8860b"),
+    ColorScheme("Cherry",        "#ff4d6d", "#9d0028"),
+    ColorScheme("Sky",           "#87ceeb", "#1e6091"),
+    ColorScheme("Mint Cream",    "#98ff98", "#2e8b57"),
+    ColorScheme("Peach",         "#ffcc99", "#cc6600"),
+    ColorScheme("Indigo",        "#6f70ff", "#1a237e"),
+    ColorScheme("Sand",          "#d2b48c", "#8b6914"),
+    ColorScheme("Crimson",       "#ff5252", "#8b0000"),
+    ColorScheme("Sea Foam",      "#71eeb8", "#00695c"),
+    ColorScheme("Apricot",       "#ffb347", "#c66900"),
+    ColorScheme("Ultraviolet",   "#9d4edd", "#4a148c"),
+    ColorScheme("Periwinkle",    "#aab8ff", "#3949ab"),
+    ColorScheme("Teal Storm",    "#20d6c7", "#00695c"),
+    ColorScheme("Olive",         "#c5d637", "#5d6e0a"),
+    ColorScheme("Cyan Pop",      "#00ffff", "#007a7a"),
+    ColorScheme("Honey",         "#f4c430", "#a47000"),
+    ColorScheme("Sage",          "#b2c8a4", "#5d7c4f"),
 
     // Tinted-background themes — designer palettes with their canonical
     // background colors instead of pure black/white. These give the picker
     // real variation (cream Solarized Light, deep navy Tokyo Night, etc.).
-    TerminalTheme("Verdant",        darkFg = "#e2e2de", lightFg = "#1a1d1a",
+    ColorScheme("Verdant",        darkFg = "#e2e2de", lightFg = "#1a1d1a",
                                     darkBg = "#0b0f0c", lightBg = "#e9eae6",
                                     overrides = verdantOverrides),
-    TerminalTheme("Solarized",      darkFg = "#93a1a1", lightFg = "#657b83",
+    ColorScheme("Solarized",      darkFg = "#93a1a1", lightFg = "#657b83",
                                     darkBg = "#002b36", lightBg = "#fdf6e3",
                                     overrides = solarizedOverrides),
-    TerminalTheme("Gruvbox",        darkFg = "#ebdbb2", lightFg = "#3c3836",
+    ColorScheme("Gruvbox",        darkFg = "#ebdbb2", lightFg = "#3c3836",
                                     darkBg = "#282828", lightBg = "#fbf1c7"),
-    TerminalTheme("Nord",           darkFg = "#d8dee9", lightFg = "#2e3440",
+    ColorScheme("Nord",           darkFg = "#d8dee9", lightFg = "#2e3440",
                                     darkBg = "#2e3440", lightBg = "#eceff4"),
-    TerminalTheme("Dracula",        darkFg = "#f8f8f2", lightFg = "#282a36",
+    ColorScheme("Dracula",        darkFg = "#f8f8f2", lightFg = "#282a36",
                                     darkBg = "#282a36", lightBg = "#f8f8f2"),
-    TerminalTheme("Monokai",        darkFg = "#f8f8f2", lightFg = "#272822",
+    ColorScheme("Monokai",        darkFg = "#f8f8f2", lightFg = "#272822",
                                     darkBg = "#272822", lightBg = "#fafafa"),
-    TerminalTheme("Tokyo Night",    darkFg = "#a9b1d6", lightFg = "#343b58",
+    ColorScheme("Tokyo Night",    darkFg = "#a9b1d6", lightFg = "#343b58",
                                     darkBg = "#1a1b26", lightBg = "#d5d6db",
                                     overrides = tokyoNightOverrides),
-    TerminalTheme("One Dark",       darkFg = "#abb2bf", lightFg = "#383a42",
+    ColorScheme("One Dark",       darkFg = "#abb2bf", lightFg = "#383a42",
                                     darkBg = "#282c34", lightBg = "#fafafa"),
-    TerminalTheme("GitHub",         darkFg = "#c9d1d9", lightFg = "#24292f",
+    ColorScheme("GitHub",         darkFg = "#c9d1d9", lightFg = "#24292f",
                                     darkBg = "#0d1117", lightBg = "#ffffff"),
-    TerminalTheme("Slack Canvas",   darkFg = "#d0d3de", lightFg = "#1d1c1d",
+    ColorScheme("Slack Canvas",   darkFg = "#d0d3de", lightFg = "#1d1c1d",
                                     darkBg = "#1a1d29", lightBg = "#ffffff",
                                     overrides = slackCanvasOverrides),
-    TerminalTheme("Catppuccin",     darkFg = "#cdd6f4", lightFg = "#4c4f69",
+    ColorScheme("Catppuccin",     darkFg = "#cdd6f4", lightFg = "#4c4f69",
                                     darkBg = "#1e1e2e", lightBg = "#eff1f5"),
-    TerminalTheme("Rose Pine",      darkFg = "#e0def4", lightFg = "#575279",
+    ColorScheme("Rose Pine",      darkFg = "#e0def4", lightFg = "#575279",
                                     darkBg = "#191724", lightBg = "#faf4ed",
                                     overrides = rosePineOverrides),
-    TerminalTheme("Ayu",            darkFg = "#b3b1ad", lightFg = "#5c6773",
+    ColorScheme("Ayu",            darkFg = "#b3b1ad", lightFg = "#5c6773",
                                     darkBg = "#0a0e14", lightBg = "#fafafa"),
-    TerminalTheme("Ayu Mirage",     darkFg = "#cbccc6", lightFg = "#5c6773",
+    ColorScheme("Ayu Mirage",     darkFg = "#cbccc6", lightFg = "#5c6773",
                                     darkBg = "#1f2430", lightBg = "#fafafa"),
-    TerminalTheme("Night Owl",      darkFg = "#d6deeb", lightFg = "#403f53",
+    ColorScheme("Night Owl",      darkFg = "#d6deeb", lightFg = "#403f53",
                                     darkBg = "#011627", lightBg = "#fbfbfb"),
-    TerminalTheme("Material",       darkFg = "#eeffff", lightFg = "#37474f",
+    ColorScheme("Material",       darkFg = "#eeffff", lightFg = "#37474f",
                                     darkBg = "#263238", lightBg = "#fafafa"),
-    TerminalTheme("Cobalt2",        darkFg = "#ffffff", lightFg = "#193549",
+    ColorScheme("Cobalt2",        darkFg = "#ffffff", lightFg = "#193549",
                                     darkBg = "#193549", lightBg = "#e8eef2"),
-    TerminalTheme("Ubuntu",         darkFg = "#eeeeec", lightFg = "#300a24",
+    ColorScheme("Ubuntu",         darkFg = "#eeeeec", lightFg = "#300a24",
                                     darkBg = "#300a24", lightBg = "#f5e6f0"),
-    TerminalTheme("Sepia",          darkFg = "#e8d9b6", lightFg = "#5b4636",
+    ColorScheme("Sepia",          darkFg = "#e8d9b6", lightFg = "#5b4636",
                                     darkBg = "#3a2e25", lightBg = "#f4ecd8"),
-    TerminalTheme("Pencil",         darkFg = "#f1f1f1", lightFg = "#424242",
+    ColorScheme("Pencil",         darkFg = "#f1f1f1", lightFg = "#424242",
                                     darkBg = "#212121", lightBg = "#f1f1f1"),
-    TerminalTheme("Hopscotch",      darkFg = "#b9b5b8", lightFg = "#322931",
+    ColorScheme("Hopscotch",      darkFg = "#b9b5b8", lightFg = "#322931",
                                     darkBg = "#322931", lightBg = "#ffffff"),
-    TerminalTheme("Spacegray",      darkFg = "#c0c5ce",  lightFg = "#2c2e34",
+    ColorScheme("Spacegray",      darkFg = "#c0c5ce",  lightFg = "#2c2e34",
                                     darkBg = "#2c2e34", lightBg = "#f5f5f5"),
-    TerminalTheme("Paper White",    darkFg = "#222222", lightFg = "#222222",
+    ColorScheme("Paper White",    darkFg = "#222222", lightFg = "#222222",
                                     darkBg = "#f5f5dc", lightBg = "#fffff8"),
-    TerminalTheme("Mono Black",     darkFg = "#ffffff", lightFg = "#000000",
+    ColorScheme("Mono Black",     darkFg = "#ffffff", lightFg = "#000000",
                                     darkBg = "#000000", lightBg = "#ffffff"),
 
     // ── Vibrant dark-optimised palettes ───────────────────────────────
     // Each picks a saturated signature colour and pairs it with a deep
     // tinted bg so the whole UI glows in that hue.
-    TerminalTheme("Cyberpunk",      darkFg = "#ff71ce", lightFg = "#8a0f55",
+    ColorScheme("Cyberpunk",      darkFg = "#ff71ce", lightFg = "#8a0f55",
                                     darkBg = "#0a0014", lightBg = "#fdf0f8",
                                     overrides = cyberpunkOverrides),
-    TerminalTheme("Aurora",         darkFg = "#a7f3d0", lightFg = "#065f46",
+    ColorScheme("Aurora",         darkFg = "#a7f3d0", lightFg = "#065f46",
                                     darkBg = "#0a1626", lightBg = "#eef7f3",
                                     overrides = auroraOverrides),
-    TerminalTheme("Volcanic",       darkFg = "#ffb380", lightFg = "#7f1d1d",
+    ColorScheme("Volcanic",       darkFg = "#ffb380", lightFg = "#7f1d1d",
                                     darkBg = "#1a0a05", lightBg = "#fff4ed"),
-    TerminalTheme("Deep Sea",       darkFg = "#7dd3fc", lightFg = "#075985",
+    ColorScheme("Deep Sea",       darkFg = "#7dd3fc", lightFg = "#075985",
                                     darkBg = "#001428", lightBg = "#edf7ff"),
-    TerminalTheme("Dragon's Hoard", darkFg = "#fbbf24", lightFg = "#78350f",
+    ColorScheme("Dragon's Hoard", darkFg = "#fbbf24", lightFg = "#78350f",
                                     darkBg = "#14100a", lightBg = "#fdf7e6"),
-    TerminalTheme("Nebula",         darkFg = "#d8b4fe", lightFg = "#581c87",
+    ColorScheme("Nebula",         darkFg = "#d8b4fe", lightFg = "#581c87",
                                     darkBg = "#0f0820", lightBg = "#f5edff",
                                     overrides = nebulaOverrides),
-    TerminalTheme("Toxic",          darkFg = "#d4ff47", lightFg = "#3f5d00",
+    ColorScheme("Toxic",          darkFg = "#d4ff47", lightFg = "#3f5d00",
                                     darkBg = "#080c00", lightBg = "#f9ffec"),
-    TerminalTheme("Blood Moon",     darkFg = "#ff8b8b", lightFg = "#7f1d1d",
+    ColorScheme("Blood Moon",     darkFg = "#ff8b8b", lightFg = "#7f1d1d",
                                     darkBg = "#1a0505", lightBg = "#fff0f0"),
-    TerminalTheme("Arcade Night",   darkFg = "#ffcf40", lightFg = "#5a3a00",
+    ColorScheme("Arcade Night",   darkFg = "#ffcf40", lightFg = "#5a3a00",
                                     darkBg = "#0a0020", lightBg = "#fffbea"),
-    TerminalTheme("Firefly",        darkFg = "#bef264", lightFg = "#3f6212",
+    ColorScheme("Firefly",        darkFg = "#bef264", lightFg = "#3f6212",
                                     darkBg = "#0a1a0a", lightBg = "#f5fae8"),
 
     // ── Vibrant light-optimised palettes ──────────────────────────────
     // Tinted light bg (not pure white) so the whole UI reads as a fresh
     // colour wash; fg is a deep saturated sibling of the bg hue.
-    TerminalTheme("Cotton Candy",   darkFg = "#ff9ccc", lightFg = "#8a0f55",
+    ColorScheme("Cotton Candy",   darkFg = "#ff9ccc", lightFg = "#8a0f55",
                                     darkBg = "#1a0a14", lightBg = "#fff0f8",
                                     overrides = cottonCandyOverrides),
-    TerminalTheme("Peach Sorbet",   darkFg = "#ffb380", lightFg = "#7c2d12",
+    ColorScheme("Peach Sorbet",   darkFg = "#ffb380", lightFg = "#7c2d12",
                                     darkBg = "#1a0d05", lightBg = "#fff4e8"),
-    TerminalTheme("Mint Chip",      darkFg = "#86efac", lightFg = "#065f46",
+    ColorScheme("Mint Chip",      darkFg = "#86efac", lightFg = "#065f46",
                                     darkBg = "#0a1a12", lightBg = "#e8f7ef"),
-    TerminalTheme("Lavender Dream", darkFg = "#d8b4fe", lightFg = "#581c87",
+    ColorScheme("Lavender Dream", darkFg = "#d8b4fe", lightFg = "#581c87",
                                     darkBg = "#140a1f", lightBg = "#f5edff"),
-    TerminalTheme("Citrus Zest",    darkFg = "#fbbf24", lightFg = "#7a4a00",
+    ColorScheme("Citrus Zest",    darkFg = "#fbbf24", lightFg = "#7a4a00",
                                     darkBg = "#1a1405", lightBg = "#fff8d1"),
-    TerminalTheme("Sky Breeze",     darkFg = "#93c5fd", lightFg = "#0c2b5c",
+    ColorScheme("Sky Breeze",     darkFg = "#93c5fd", lightFg = "#0c2b5c",
                                     darkBg = "#050f1f", lightBg = "#e8f4ff"),
-    TerminalTheme("Rose Quartz",    darkFg = "#fca5c7", lightFg = "#831843",
+    ColorScheme("Rose Quartz",    darkFg = "#fca5c7", lightFg = "#831843",
                                     darkBg = "#1a050d", lightBg = "#fff0f3"),
-    TerminalTheme("Coral Reef",     darkFg = "#ff9e7a", lightFg = "#7c1d2e",
+    ColorScheme("Coral Reef",     darkFg = "#ff9e7a", lightFg = "#7c1d2e",
                                     darkBg = "#1f0805", lightBg = "#fff5f0"),
-    TerminalTheme("Marigold",       darkFg = "#fbbf24", lightFg = "#713f12",
+    ColorScheme("Marigold",       darkFg = "#fbbf24", lightFg = "#713f12",
                                     darkBg = "#1a1000", lightBg = "#fff8e1"),
-    TerminalTheme("Tidepool",       darkFg = "#5eead4", lightFg = "#115e59",
+    ColorScheme("Tidepool",       darkFg = "#5eead4", lightFg = "#115e59",
                                     darkBg = "#0a1f1d", lightBg = "#e8f7f4"),
 
     // ── Panel themes ──────────────────────────────────────────────────
@@ -498,33 +505,33 @@ val recommendedThemes: List<TerminalTheme> = listOf(
     // saturated even when the content area is pastel. They keep dark
     // backgrounds in BOTH appearance modes (just slightly darker in dark
     // mode), pairing each with appropriate light foreground text.
-    TerminalTheme("Midnight Panel",   darkFg = "#c8d3e8", lightFg = "#ffffff",
+    ColorScheme("Midnight Panel",   darkFg = "#c8d3e8", lightFg = "#ffffff",
                                       darkBg = "#0d1326", lightBg = "#1a2847"),
-    TerminalTheme("Forest Panel",     darkFg = "#c0e0c8", lightFg = "#f0f5e8",
+    ColorScheme("Forest Panel",     darkFg = "#c0e0c8", lightFg = "#f0f5e8",
                                       darkBg = "#0a1f14", lightBg = "#1f3a2e"),
-    TerminalTheme("Royal Plum Panel", darkFg = "#e0c8e8", lightFg = "#f5e8ff",
+    ColorScheme("Royal Plum Panel", darkFg = "#e0c8e8", lightFg = "#f5e8ff",
                                       darkBg = "#1a0d20", lightBg = "#3d1f4d"),
-    TerminalTheme("Burgundy Panel",   darkFg = "#f0c8d0", lightFg = "#fff0f5",
+    ColorScheme("Burgundy Panel",   darkFg = "#f0c8d0", lightFg = "#fff0f5",
                                       darkBg = "#200a14", lightBg = "#4a1c2e"),
-    TerminalTheme("Espresso Panel",   darkFg = "#e8d4b8", lightFg = "#f5e8d4",
+    ColorScheme("Espresso Panel",   darkFg = "#e8d4b8", lightFg = "#f5e8d4",
                                       darkBg = "#1a0d05", lightBg = "#3d2418"),
-    TerminalTheme("Deep Teal Panel",  darkFg = "#b8e0e0", lightFg = "#e8fafa",
+    ColorScheme("Deep Teal Panel",  darkFg = "#b8e0e0", lightFg = "#e8fafa",
                                       darkBg = "#051f1f", lightBg = "#0d3a3a"),
-    TerminalTheme("Slate Panel",      darkFg = "#c8d2e0", lightFg = "#f7fafc",
+    ColorScheme("Slate Panel",      darkFg = "#c8d2e0", lightFg = "#f7fafc",
                                       darkBg = "#0d1320", lightBg = "#2d3748"),
-    TerminalTheme("Indigo Panel",     darkFg = "#cad0f0", lightFg = "#e0e7ff",
+    ColorScheme("Indigo Panel",     darkFg = "#cad0f0", lightFg = "#e0e7ff",
                                       darkBg = "#0d0a24", lightBg = "#1e1b4b"),
-    TerminalTheme("Terracotta Panel", darkFg = "#f0d4b8", lightFg = "#ffe8d4",
+    ColorScheme("Terracotta Panel", darkFg = "#f0d4b8", lightFg = "#ffe8d4",
                                       darkBg = "#200a05", lightBg = "#4a2418"),
-    TerminalTheme("Olive Panel",      darkFg = "#e0e8c0", lightFg = "#f0f5d4",
+    ColorScheme("Olive Panel",      darkFg = "#e0e8c0", lightFg = "#f0f5d4",
                                       darkBg = "#14140a", lightBg = "#3a3d1f"),
-    TerminalTheme("Mocha Panel",      darkFg = "#e0d0b8", lightFg = "#f5e8d4",
+    ColorScheme("Mocha Panel",      darkFg = "#e0d0b8", lightFg = "#f5e8d4",
                                       darkBg = "#1a0f0a", lightBg = "#3d2818"),
-    TerminalTheme("Charcoal Panel",   darkFg = "#d8d8d8", lightFg = "#f5f5f5",
+    ColorScheme("Charcoal Panel",   darkFg = "#d8d8d8", lightFg = "#f5f5f5",
                                       darkBg = "#1a1a1a", lightBg = "#2d2d2d"),
-    TerminalTheme("Slack Navy Panel",  darkFg = "#e8eaf0", lightFg = "#ffffff",
+    ColorScheme("Slack Navy Panel",  darkFg = "#e8eaf0", lightFg = "#ffffff",
                                        darkBg = "#0f1220", lightBg = "#1a1d29"),
-    TerminalTheme("Slack Slate Panel", darkFg = "#d8dcea", lightFg = "#f0f2f8",
+    ColorScheme("Slack Slate Panel", darkFg = "#d8dcea", lightFg = "#f0f2f8",
                                        darkBg = "#242a47", lightBg = "#3d4266"),
 
     // ── Bar themes ────────────────────────────────────────────────────
@@ -532,13 +539,13 @@ val recommendedThemes: List<TerminalTheme> = listOf(
     // narrow accent surface) so it pops next to a pastel content pane
     // and a deep panel sidebar. Both modes use a saturated background
     // with white text.
-    TerminalTheme("Tangerine Bar",    darkFg = "#fff5e8", lightFg = "#ffffff",
+    ColorScheme("Tangerine Bar",    darkFg = "#fff5e8", lightFg = "#ffffff",
                                       darkBg = "#c2410c", lightBg = "#ea580c"),
-    TerminalTheme("Hot Magenta Bar",  darkFg = "#fff0f5", lightFg = "#ffffff",
+    ColorScheme("Hot Magenta Bar",  darkFg = "#fff0f5", lightFg = "#ffffff",
                                       darkBg = "#be185d", lightBg = "#db2777"),
-    TerminalTheme("Cyan Bar",         darkFg = "#e8faff", lightFg = "#ffffff",
+    ColorScheme("Cyan Bar",         darkFg = "#e8faff", lightFg = "#ffffff",
                                       darkBg = "#0e7490", lightBg = "#0891b2"),
-    TerminalTheme("Lime Bar",         darkFg = "#f5fae8", lightFg = "#ffffff",
+    ColorScheme("Lime Bar",         darkFg = "#f5fae8", lightFg = "#ffffff",
                                       darkBg = "#4d7c0f", lightBg = "#65a30d"),
 )
 
@@ -547,13 +554,13 @@ const val DEFAULT_THEME_NAME = "Tron"
 
 /**
  * Name of the default theme bundle used for the light slot on fresh
- * installs. Resolves to a light-optimised preset in [defaultThemeConfigs].
+ * installs. Resolves to a light-optimised preset in [defaultThemes].
  */
 const val DEFAULT_LIGHT_THEME_NAME = "Paper & Ink"
 
 /**
  * Name of the default theme bundle used for the dark slot on fresh
- * installs. Resolves to a dark-optimised preset in [defaultThemeConfigs].
+ * installs. Resolves to a dark-optimised preset in [defaultThemes].
  */
 const val DEFAULT_DARK_THEME_NAME = "Neon Circuit"
 
@@ -564,13 +571,13 @@ const val DEFAULT_DARK_THEME_NAME = "Neon Circuit"
 enum class Appearance { Auto, Dark, Light }
 
 /**
- * A user-defined custom colour scheme. Unlike [recommendedThemes] which are
+ * A user-defined custom colour scheme. Unlike [recommendedColorSchemes] which are
  * hard-coded at compile time, these are persisted server-side as part of the
  * UI settings blob and may be freely edited by the user.
  *
- * A [CustomScheme] materialises into a [TerminalTheme] at apply time via
- * [toTerminalTheme]. The user may edit every semantic override token
- * independently for dark and light appearance; default [recommendedThemes]
+ * A [CustomScheme] materialises into a [ColorScheme] at apply time via
+ * [toColorScheme]. The user may edit every semantic override token
+ * independently for dark and light appearance; default [recommendedColorSchemes]
  * remain read-only and must be cloned into a [CustomScheme] before editing.
  *
  * @property name      Human-readable scheme name; unique across custom schemes.
@@ -580,7 +587,7 @@ enum class Appearance { Auto, Dark, Light }
  * @property lightBg   Hex background colour used in light mode.
  * @property overrides Hand-tuned ARGB override values keyed by
  *   `"group.token.mode"` (e.g. `"syntax.keyword.dark"`). Mirrors
- *   [TerminalTheme.overrides]; empty map by default.
+ *   [ColorScheme.overrides]; empty map by default.
  */
 data class CustomScheme(
     val name: String,
@@ -591,13 +598,13 @@ data class CustomScheme(
     val overrides: Map<String, Long> = emptyMap(),
 ) {
     /**
-     * Materialise this custom scheme into a [TerminalTheme] suitable for
+     * Materialise this custom scheme into a [ColorScheme] suitable for
      * passing to [resolve] / the theme pipeline. Called whenever a custom
      * scheme is referenced from a theme slot (main or per-section).
      *
-     * @return a [TerminalTheme] with the same name and colours.
+     * @return a [ColorScheme] with the same name and colours.
      */
-    fun toTerminalTheme(): TerminalTheme = TerminalTheme(
+    fun toColorScheme(): ColorScheme = ColorScheme(
         name = name,
         darkFg = darkFg,
         lightFg = lightFg,

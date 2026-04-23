@@ -555,7 +555,7 @@ internal fun applyUsageBarCollapsedState() {
  * @param t the terminal theme to render
  * @return an HTML string with the rich theme preview
  */
-internal fun renderThemeSwatch(t: TerminalTheme): String {
+internal fun renderThemeSwatch(t: ColorScheme): String {
     val isDark = !isLightActive(appVm.stateFlow.value.appearance)
     val p = t.resolve(isDark)
     val bg = argbToHex(p.terminal.bg)
@@ -586,17 +586,17 @@ internal fun renderThemeSwatch(t: TerminalTheme): String {
  * spatial preview of the whole configuration.
  *
  * @param config a dynamic JS object with `"theme"` and `"theme.<section>"`
- *   keys, as produced by [ThemeConfigPreset.toDynamic]
+ *   keys, as produced by [Theme.toDynamic]
  * @return an HTML string with the mini layout preview
  * @see renderThemeSwatch
  */
 internal fun renderConfigSilhouette(config: dynamic): String {
     val isDark = !isLightActive(appVm.stateFlow.value.appearance)
 
-    fun themeFor(key: String): TerminalTheme? {
+    fun themeFor(key: String): ColorScheme? {
         val name = config[key] as? String
         if (name.isNullOrEmpty()) return null
-        return recommendedThemes.firstOrNull { it.name == name }
+        return recommendedColorSchemes.firstOrNull { it.name == name }
     }
 
     val mainTheme = themeFor("theme") ?: return ""

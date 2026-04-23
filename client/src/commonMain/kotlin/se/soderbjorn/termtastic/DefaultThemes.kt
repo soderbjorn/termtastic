@@ -1,24 +1,25 @@
 /**
- * Built-in (default) theme configuration presets for Termtastic.
+ * Built-in (default) [Theme] definitions for Termtastic.
  *
- * A theme configuration is a named snapshot of a main theme plus per-section
+ * A [Theme] is a named snapshot of a main colour scheme plus per-section
  * overrides (sidebar, terminal, diff, file browser, tabs, chrome, windows,
- * and active indicators). The presets defined here ship with the app and
+ * and active indicators). The themes defined here ship with the app and
  * cannot be deleted by the user, though they can be reordered alongside
- * user-created configurations.
+ * user-created themes.
  *
- * Each preset references themes by name from [recommendedThemes]. An empty
- * string means "use the main theme" (no section override).
+ * Each theme references colour schemes by name from [recommendedColorSchemes].
+ * An empty string on a section override means "use the main colour scheme".
  *
- * @see recommendedThemes
+ * @see recommendedColorSchemes
+ * @see ColorScheme
  * @see se.soderbjorn.termtastic.client.UiSettings
  */
 package se.soderbjorn.termtastic
 
 /**
- * Which appearance mode(s) a built-in theme configuration is designed for.
+ * Which appearance mode(s) a built-in [Theme] is designed for.
  *
- * @see ThemeConfigPreset.mode
+ * @see Theme.mode
  */
 enum class ConfigMode {
     /** Optimised for dark appearance. */
@@ -30,12 +31,15 @@ enum class ConfigMode {
 }
 
 /**
- * A built-in theme configuration preset that maps a name to a main theme
- * and optional per-section theme overrides.
+ * A theme: a named composition that maps a main colour scheme plus optional
+ * per-section colour-scheme overrides. Corresponds to what the UI calls a
+ * "theme" (as distinct from a "colour scheme", which is a single palette).
  *
- * @property name         Human-readable preset name shown in the config list.
- * @property mode         Which appearance mode(s) this preset is designed for.
- * @property theme        Name of the main theme (must exist in [recommendedThemes]).
+ * @property name         Human-readable theme name shown in the theme list.
+ * @property mode         Which appearance mode(s) this theme is designed for.
+ * @property colorScheme  Name of the main colour scheme (must exist in
+ *   [recommendedColorSchemes]). Used as the default for any section whose
+ *   own override is empty.
  * @property sidebar      Section override for the sidebar, or empty for default.
  * @property terminal     Section override for the terminal panes.
  * @property diff         Section override for the diff viewer.
@@ -44,11 +48,14 @@ enum class ConfigMode {
  * @property chrome       Section override for the window chrome / titlebar.
  * @property windows      Section override for the pane frames / borders.
  * @property active       Section override for focus rings and active indicators.
+ *
+ * @see ColorScheme
+ * @see defaultThemes
  */
-data class ThemeConfigPreset(
+data class Theme(
     val name: String,
     val mode: ConfigMode = ConfigMode.Both,
-    val theme: String,
+    val colorScheme: String,
     val sidebar: String = "",
     val terminal: String = "",
     val diff: String = "",
@@ -61,16 +68,16 @@ data class ThemeConfigPreset(
 )
 
 /**
- * The list of built-in theme configuration presets that ship with Termtastic.
+ * The list of built-in [Theme]s that ship with Termtastic.
  *
- * Each preset is a curated combination of themes assigned to different UI
- * sections, designed to produce a cohesive and visually distinct look. Users
- * can reorder these alongside their custom configurations, but cannot delete
+ * Each entry is a curated combination of colour schemes assigned to different
+ * UI sections, designed to produce a cohesive and visually distinct look.
+ * Users can reorder these alongside their custom themes, but cannot delete
  * them.
  *
- * @see ThemeConfigPreset
+ * @see Theme
  */
-val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
+val defaultThemes: List<Theme> = listOf(
     // ── Dual-mode configurations ──────────────────────────────────────
 
     // Cohesive single-theme preset — same Verdant scheme across every
@@ -78,10 +85,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
     // screenshots (near-black green-tinted dark / cream paper light).
     // `active = "Verdant"` makes the accent/focus rings explicit so the
     // picker shows the mint green in the indicator preview.
-    ThemeConfigPreset(
+    Theme(
         name = "Verdant",
         mode = ConfigMode.Both,
-        theme = "Verdant",
+        colorScheme = "Verdant",
         sidebar = "Verdant",
         terminal = "Verdant",
         diff = "Verdant",
@@ -95,37 +102,37 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
 
     // ── Dark mode configurations ──────────────────────────────────────
 
-    ThemeConfigPreset(
+    Theme(
         name = "Neon Circuit",
         mode = ConfigMode.Dark,
-        theme = "Tron",
+        colorScheme = "Tron",
         sidebar = "Vapor pink",
         terminal = "Cyber teal",
         tabs = "Tron",
         active = "Plasma",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Sunset Drive",
         mode = ConfigMode.Dark,
-        theme = "Amber Glow",
+        colorScheme = "Amber Glow",
         sidebar = "Ember",
         terminal = "Coral",
         tabs = "Sunset",
         active = "Sunset",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Purple Haze",
         mode = ConfigMode.Dark,
-        theme = "Dracula",
+        colorScheme = "Dracula",
         sidebar = "Royal violet",
         terminal = "Ultraviolet",
         tabs = "Dracula",
         active = "Lavender",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Cyber Noir",
         mode = ConfigMode.Dark,
-        theme = "Night Owl",
+        colorScheme = "Night Owl",
         sidebar = "Tron",
         terminal = "Matrix",
         windows = "Ayu Mirage",
@@ -133,10 +140,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Ayu",
         active = "Cyber teal",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Ember Dusk",
         mode = ConfigMode.Dark,
-        theme = "One Dark",
+        colorScheme = "One Dark",
         sidebar = "Monokai",
         terminal = "Lava",
         windows = "One Dark",
@@ -144,10 +151,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Dracula",
         active = "Crimson",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Candy Pop",
         mode = ConfigMode.Dark,
-        theme = "Catppuccin",
+        colorScheme = "Catppuccin",
         sidebar = "Dracula",
         terminal = "Vapor pink",
         windows = "Catppuccin",
@@ -155,10 +162,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Rose Pine",
         active = "Magenta",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Ubuntu Terminal",
         mode = ConfigMode.Dark,
-        theme = "Ubuntu",
+        colorScheme = "Ubuntu",
         sidebar = "Dracula",
         terminal = "Cherry",
         windows = "Hopscotch",
@@ -166,10 +173,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "One Dark",
         active = "Hot rose",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Hacker",
         mode = ConfigMode.Dark,
-        theme = "Ayu",
+        colorScheme = "Ayu",
         sidebar = "Night Owl",
         terminal = "Matrix",
         windows = "Ayu",
@@ -178,10 +185,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Ayu Mirage",
         active = "Cyber lime",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Retro Terminal",
         mode = ConfigMode.Dark,
-        theme = "Pencil",
+        colorScheme = "Pencil",
         sidebar = "Ayu",
         terminal = "Amber CRT",
         windows = "Pencil",
@@ -191,10 +198,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Cyber lime",
     ),
 
-    ThemeConfigPreset(
+    Theme(
         name = "Magma",
         mode = ConfigMode.Dark,
-        theme = "Monokai",
+        colorScheme = "Monokai",
         sidebar = "Hopscotch",
         terminal = "Crimson",
         windows = "Monokai",
@@ -202,10 +209,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Dracula",
         active = "Lava",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Midnight Oil",
         mode = ConfigMode.Dark,
-        theme = "Ayu Mirage",
+        colorScheme = "Ayu Mirage",
         sidebar = "Cobalt2",
         terminal = "Indigo",
         windows = "Ayu Mirage",
@@ -213,10 +220,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Tokyo Night",
         active = "Cobalt",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Toxic",
         mode = ConfigMode.Dark,
-        theme = "Matrix",
+        colorScheme = "Matrix",
         sidebar = "Ayu",
         terminal = "Cyber lime",
         windows = "Spacegray",
@@ -224,10 +231,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Monokai",
         active = "Aqua glow",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Outrun",
         mode = ConfigMode.Dark,
-        theme = "Synthwave",
+        colorScheme = "Synthwave",
         sidebar = "Dracula",
         terminal = "Hot rose",
         windows = "Catppuccin",
@@ -235,10 +242,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Rose Pine",
         active = "Vapor pink",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Deep Space",
         mode = ConfigMode.Dark,
-        theme = "Night Owl",
+        colorScheme = "Night Owl",
         sidebar = "Tokyo Night",
         terminal = "Cobalt",
         windows = "Night Owl",
@@ -246,10 +253,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Nord",
         active = "Periwinkle",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Molten Gold",
         mode = ConfigMode.Dark,
-        theme = "Sepia",
+        colorScheme = "Sepia",
         sidebar = "Monokai",
         terminal = "Sunflower",
         windows = "Sepia",
@@ -257,10 +264,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "One Dark",
         active = "Honey",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Blood Moon",
         mode = ConfigMode.Dark,
-        theme = "Dracula",
+        colorScheme = "Dracula",
         sidebar = "Ubuntu",
         terminal = "Cherry",
         windows = "Hopscotch",
@@ -271,10 +278,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
 
     // ── Light mode configurations ─────────────────────────────────────
 
-    ThemeConfigPreset(
+    Theme(
         name = "Paper & Ink",
         mode = ConfigMode.Light,
-        theme = "Paper White",
+        colorScheme = "Paper White",
         sidebar = "GitHub",
         terminal = "Pencil",
         windows = "Paper White",
@@ -282,10 +289,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "GitHub",
         active = "Mono Black",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Solarized Warm",
         mode = ConfigMode.Light,
-        theme = "Solarized",
+        colorScheme = "Solarized",
         sidebar = "Sepia",
         terminal = "Solarized",
         windows = "Gruvbox",
@@ -293,10 +300,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Solarized",
         active = "Honey",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Morning Fog",
         mode = ConfigMode.Light,
-        theme = "Nord",
+        colorScheme = "Nord",
         sidebar = "Spacegray",
         terminal = "GitHub",
         windows = "Nord",
@@ -304,10 +311,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Nord",
         active = "Sky",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Lavender Fields",
         mode = ConfigMode.Light,
-        theme = "Catppuccin",
+        colorScheme = "Catppuccin",
         sidebar = "Rose Pine",
         terminal = "Lavender",
         windows = "Catppuccin",
@@ -315,10 +322,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Rose Pine",
         active = "Royal violet",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Cream & Coffee",
         mode = ConfigMode.Light,
-        theme = "Gruvbox",
+        colorScheme = "Gruvbox",
         sidebar = "Sepia",
         terminal = "Sand",
         windows = "Gruvbox",
@@ -327,10 +334,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Sepia",
         active = "Amber Glow",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Ocean Breeze",
         mode = ConfigMode.Light,
-        theme = "GitHub",
+        colorScheme = "GitHub",
         sidebar = "Cobalt2",
         terminal = "Sky",
         windows = "GitHub",
@@ -338,10 +345,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Material",
         active = "Ocean",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Spring Garden",
         mode = ConfigMode.Light,
-        theme = "One Dark",
+        colorScheme = "One Dark",
         sidebar = "Gruvbox",
         terminal = "Mint Cream",
         windows = "One Dark",
@@ -350,10 +357,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "One Dark",
         active = "Sea Foam",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Peach Blossom",
         mode = ConfigMode.Light,
-        theme = "Rose Pine",
+        colorScheme = "Rose Pine",
         sidebar = "Catppuccin",
         terminal = "Peach",
         windows = "Rose Pine",
@@ -361,10 +368,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Catppuccin",
         active = "Coral",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Clean Slate",
         mode = ConfigMode.Light,
-        theme = "Mono Black",
+        colorScheme = "Mono Black",
         sidebar = "GitHub",
         terminal = "Spacegray",
         windows = "Pencil",
@@ -372,10 +379,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "GitHub",
         active = "Cobalt",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Ubuntu Rose",
         mode = ConfigMode.Light,
-        theme = "Ubuntu",
+        colorScheme = "Ubuntu",
         sidebar = "Hopscotch",
         terminal = "Pastel Pink",
         windows = "Ubuntu",
@@ -384,10 +391,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Cherry",
     ),
 
-    ThemeConfigPreset(
+    Theme(
         name = "Ivory Tower",
         mode = ConfigMode.Light,
-        theme = "GitHub",
+        colorScheme = "GitHub",
         sidebar = "One Dark",
         terminal = "Paper White",
         windows = "GitHub",
@@ -395,10 +402,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Nord",
         active = "Indigo",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Mint Tea",
         mode = ConfigMode.Light,
-        theme = "Material",
+        colorScheme = "Material",
         sidebar = "Nord",
         terminal = "Mint Cream",
         windows = "Material",
@@ -406,10 +413,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "One Dark",
         active = "Sea Foam",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Sunset Terrace",
         mode = ConfigMode.Light,
-        theme = "Gruvbox",
+        colorScheme = "Gruvbox",
         sidebar = "Monokai",
         terminal = "Peach",
         windows = "Gruvbox",
@@ -418,10 +425,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Gruvbox",
         active = "Coral",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Nordic Frost",
         mode = ConfigMode.Light,
-        theme = "Nord",
+        colorScheme = "Nord",
         sidebar = "Cobalt2",
         terminal = "Ice",
         windows = "Nord",
@@ -429,10 +436,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Material",
         active = "Periwinkle",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Daybreak",
         mode = ConfigMode.Light,
-        theme = "One Dark",
+        colorScheme = "One Dark",
         sidebar = "Catppuccin",
         terminal = "Sky",
         windows = "One Dark",
@@ -440,10 +447,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "GitHub",
         active = "Ocean",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Honey Bee",
         mode = ConfigMode.Light,
-        theme = "Sepia",
+        colorScheme = "Sepia",
         sidebar = "Gruvbox",
         terminal = "Sunflower",
         windows = "Sepia",
@@ -454,61 +461,61 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
 
     // ── Both modes ────────────────────────────────────────────────────
 
-    ThemeConfigPreset(
+    Theme(
         name = "Deep Ocean",
-        theme = "Nord",
+        colorScheme = "Nord",
         sidebar = "Cobalt",
         terminal = "Ocean",
         tabs = "Nord",
         active = "Ice",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Forest Floor",
-        theme = "Gruvbox",
+        colorScheme = "Gruvbox",
         sidebar = "Forest",
         terminal = "Sage",
         tabs = "Gruvbox",
         active = "Olive",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Tokyo Midnight",
-        theme = "Tokyo Night",
+        colorScheme = "Tokyo Night",
         sidebar = "Dracula",
         terminal = "Catppuccin",
         tabs = "Tokyo Night",
         active = "Rose Pine",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Solarized Classic",
-        theme = "Solarized",
+        colorScheme = "Solarized",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Warm Hearth",
-        theme = "Monokai",
+        colorScheme = "Monokai",
         sidebar = "Sepia",
         terminal = "Amber CRT",
         tabs = "Monokai",
         active = "Honey",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Rose Garden",
-        theme = "Rose Pine",
+        colorScheme = "Rose Pine",
         sidebar = "Catppuccin",
         terminal = "Pastel Pink",
         tabs = "Rose Pine",
         active = "Hopscotch",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Monochrome",
-        theme = "Mono Black",
+        colorScheme = "Mono Black",
         sidebar = "Pencil",
         terminal = "Spacegray",
         tabs = "Mono Black",
         active = "GitHub",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Arctic Aurora",
-        theme = "Nord",
+        colorScheme = "Nord",
         sidebar = "Material",
         terminal = "Ice",
         windows = "Nord",
@@ -517,9 +524,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Nord",
         active = "Aqua glow",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Sakura",
-        theme = "Rose Pine",
+        colorScheme = "Rose Pine",
         sidebar = "Hopscotch",
         terminal = "Pastel Pink",
         windows = "Catppuccin",
@@ -528,9 +535,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Rose Pine",
         active = "Hot rose",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Copper Patina",
-        theme = "Material",
+        colorScheme = "Material",
         sidebar = "Gruvbox",
         terminal = "Sea Foam",
         windows = "Material",
@@ -538,9 +545,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Ayu Mirage",
         active = "Honey",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Midnight Violet",
-        theme = "Tokyo Night",
+        colorScheme = "Tokyo Night",
         sidebar = "Catppuccin",
         terminal = "Indigo",
         windows = "Tokyo Night",
@@ -548,9 +555,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Rose Pine",
         active = "Royal violet",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Sandstorm",
-        theme = "Sepia",
+        colorScheme = "Sepia",
         sidebar = "Gruvbox",
         terminal = "Sand",
         windows = "Sepia",
@@ -559,9 +566,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Sepia",
         active = "Apricot",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Electric Blue",
-        theme = "Cobalt2",
+        colorScheme = "Cobalt2",
         sidebar = "Nord",
         terminal = "Cobalt",
         windows = "Cobalt2",
@@ -569,9 +576,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Material",
         active = "Periwinkle",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Jungle",
-        theme = "Ayu",
+        colorScheme = "Ayu",
         sidebar = "Material",
         terminal = "Forest",
         windows = "Ayu",
@@ -580,9 +587,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Ayu Mirage",
         active = "Teal Storm",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Campfire",
-        theme = "Gruvbox",
+        colorScheme = "Gruvbox",
         sidebar = "Sepia",
         terminal = "Amber CRT",
         windows = "Monokai",
@@ -591,9 +598,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Gruvbox",
         active = "Sunset",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Frost",
-        theme = "GitHub",
+        colorScheme = "GitHub",
         sidebar = "Nord",
         terminal = "Sky",
         windows = "GitHub",
@@ -601,9 +608,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Nord",
         active = "Periwinkle",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Twilight",
-        theme = "Ayu Mirage",
+        colorScheme = "Ayu Mirage",
         sidebar = "Tokyo Night",
         terminal = "Lavender",
         windows = "Ayu Mirage",
@@ -611,9 +618,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Dracula",
         active = "Synthwave",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Autumn Leaves",
-        theme = "Monokai",
+        colorScheme = "Monokai",
         sidebar = "Gruvbox",
         terminal = "Amber Glow",
         windows = "Sepia",
@@ -622,9 +629,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Monokai",
         active = "Olive",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Coral Reef",
-        theme = "Night Owl",
+        colorScheme = "Night Owl",
         sidebar = "Material",
         terminal = "Sea Foam",
         windows = "Night Owl",
@@ -633,9 +640,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Night Owl",
         active = "Aqua glow",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Starlight",
-        theme = "One Dark",
+        colorScheme = "One Dark",
         sidebar = "Catppuccin",
         terminal = "Nord",
         windows = "Spacegray",
@@ -643,9 +650,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Tokyo Night",
         active = "Periwinkle",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Driftwood",
-        theme = "Sepia",
+        colorScheme = "Sepia",
         sidebar = "Material",
         terminal = "Peach",
         windows = "Sepia",
@@ -654,9 +661,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         fileBrowser = "Sepia",
         active = "Sand",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Nebula",
-        theme = "Catppuccin",
+        colorScheme = "Catppuccin",
         sidebar = "Tokyo Night",
         terminal = "Royal violet",
         windows = "Catppuccin",
@@ -664,9 +671,9 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         diff = "Rose Pine",
         active = "Synthwave",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Evergreen",
-        theme = "Material",
+        colorScheme = "Material",
         sidebar = "Nord",
         terminal = "Forest",
         windows = "Material",
@@ -683,10 +690,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
     // pulled to the panel hue so the chrome reads as a single coloured
     // frame around the soft content.
 
-    ThemeConfigPreset(
+    Theme(
         name = "Midnight Library",
         mode = ConfigMode.Light,
-        theme = "Sepia",
+        colorScheme = "Sepia",
         sidebar = "Midnight Panel",
         terminal = "Sepia",
         windows = "Sepia",
@@ -697,10 +704,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Tangerine Bar",
         bottomBar = "Midnight Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Emerald Garden",
         mode = ConfigMode.Light,
-        theme = "Mint Chip",
+        colorScheme = "Mint Chip",
         sidebar = "Forest Panel",
         terminal = "Mint Chip",
         windows = "Mint Chip",
@@ -711,10 +718,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Hot Magenta Bar",
         bottomBar = "Forest Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Plum Velvet",
         mode = ConfigMode.Light,
-        theme = "Lavender Dream",
+        colorScheme = "Lavender Dream",
         sidebar = "Royal Plum Panel",
         terminal = "Lavender Dream",
         windows = "Lavender Dream",
@@ -725,10 +732,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Cyan Bar",
         bottomBar = "Royal Plum Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Vintage Wine",
         mode = ConfigMode.Light,
-        theme = "Rose Quartz",
+        colorScheme = "Rose Quartz",
         sidebar = "Burgundy Panel",
         terminal = "Rose Quartz",
         windows = "Rose Quartz",
@@ -739,10 +746,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Tangerine Bar",
         bottomBar = "Burgundy Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Italian Espresso",
         mode = ConfigMode.Light,
-        theme = "Sepia",
+        colorScheme = "Sepia",
         sidebar = "Espresso Panel",
         terminal = "Sepia",
         windows = "Sepia",
@@ -753,10 +760,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Tangerine Bar",
         bottomBar = "Espresso Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Tropical Lagoon",
         mode = ConfigMode.Light,
-        theme = "Tidepool",
+        colorScheme = "Tidepool",
         sidebar = "Deep Teal Panel",
         terminal = "Tidepool",
         windows = "Tidepool",
@@ -767,10 +774,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Hot Magenta Bar",
         bottomBar = "Deep Teal Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Slate Office",
         mode = ConfigMode.Light,
-        theme = "Paper White",
+        colorScheme = "Paper White",
         sidebar = "Slate Panel",
         terminal = "Paper White",
         windows = "Paper White",
@@ -781,10 +788,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Cyan Bar",
         bottomBar = "Slate Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Indigo Bloom",
         mode = ConfigMode.Light,
-        theme = "Lavender Dream",
+        colorScheme = "Lavender Dream",
         sidebar = "Indigo Panel",
         terminal = "Lavender Dream",
         windows = "Lavender Dream",
@@ -795,10 +802,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Hot Magenta Bar",
         bottomBar = "Indigo Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Terracotta Patio",
         mode = ConfigMode.Light,
-        theme = "Marigold",
+        colorScheme = "Marigold",
         sidebar = "Terracotta Panel",
         terminal = "Marigold",
         windows = "Marigold",
@@ -809,10 +816,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Cyan Bar",
         bottomBar = "Terracotta Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Olive Grove",
         mode = ConfigMode.Light,
-        theme = "Citrus Zest",
+        colorScheme = "Citrus Zest",
         sidebar = "Olive Panel",
         terminal = "Citrus Zest",
         windows = "Citrus Zest",
@@ -823,10 +830,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Tangerine Bar",
         bottomBar = "Olive Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Cocoa & Cream",
         mode = ConfigMode.Light,
-        theme = "Peach Sorbet",
+        colorScheme = "Peach Sorbet",
         sidebar = "Mocha Panel",
         terminal = "Peach Sorbet",
         windows = "Peach Sorbet",
@@ -837,10 +844,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Tangerine Bar",
         bottomBar = "Mocha Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Charcoal Pearl",
         mode = ConfigMode.Light,
-        theme = "Paper White",
+        colorScheme = "Paper White",
         sidebar = "Charcoal Panel",
         terminal = "Paper White",
         windows = "Paper White",
@@ -851,10 +858,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Cyan Bar",
         bottomBar = "Charcoal Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Beach Cabana",
         mode = ConfigMode.Light,
-        theme = "Sky Breeze",
+        colorScheme = "Sky Breeze",
         sidebar = "Deep Teal Panel",
         terminal = "Sky Breeze",
         windows = "Sky Breeze",
@@ -865,10 +872,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Tangerine Bar",
         bottomBar = "Deep Teal Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Berry Tart",
         mode = ConfigMode.Light,
-        theme = "Cotton Candy",
+        colorScheme = "Cotton Candy",
         sidebar = "Royal Plum Panel",
         terminal = "Cotton Candy",
         windows = "Cotton Candy",
@@ -879,10 +886,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Hot Magenta Bar",
         bottomBar = "Royal Plum Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Lemon Forest",
         mode = ConfigMode.Light,
-        theme = "Citrus Zest",
+        colorScheme = "Citrus Zest",
         sidebar = "Forest Panel",
         terminal = "Citrus Zest",
         windows = "Citrus Zest",
@@ -893,10 +900,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Lime Bar",
         bottomBar = "Forest Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Watermelon Picnic",
         mode = ConfigMode.Light,
-        theme = "Rose Quartz",
+        colorScheme = "Rose Quartz",
         sidebar = "Forest Panel",
         terminal = "Rose Quartz",
         windows = "Rose Quartz",
@@ -907,10 +914,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Lime Bar",
         bottomBar = "Forest Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Aurora Mist",
         mode = ConfigMode.Light,
-        theme = "Mint Chip",
+        colorScheme = "Mint Chip",
         sidebar = "Indigo Panel",
         terminal = "Mint Chip",
         windows = "Mint Chip",
@@ -921,10 +928,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Hot Magenta Bar",
         bottomBar = "Indigo Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Sunset Diner",
         mode = ConfigMode.Light,
-        theme = "Coral Reef",
+        colorScheme = "Coral Reef",
         sidebar = "Burgundy Panel",
         terminal = "Coral Reef",
         windows = "Coral Reef",
@@ -935,10 +942,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Tangerine Bar",
         bottomBar = "Burgundy Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Pearl Diver",
         mode = ConfigMode.Light,
-        theme = "Tidepool",
+        colorScheme = "Tidepool",
         sidebar = "Midnight Panel",
         terminal = "Tidepool",
         windows = "Tidepool",
@@ -953,10 +960,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
     // deep navy tab/top bar — the signature Slack "navy" light look.
     // Marked Both so dark mode also gets a cohesive three-tier look
     // (darkest navy tabs → mid navy sidebar → dark navy content).
-    ThemeConfigPreset(
+    Theme(
         name = "Slack",
         mode = ConfigMode.Both,
-        theme = "Slack Canvas",
+        colorScheme = "Slack Canvas",
         sidebar = "Slack Slate Panel",
         terminal = "Slack Canvas",
         windows = "Slack Slate Panel",
@@ -967,10 +974,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Slack Navy Panel",
         bottomBar = "Slack Navy Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Confetti Party",
         mode = ConfigMode.Light,
-        theme = "Cotton Candy",
+        colorScheme = "Cotton Candy",
         sidebar = "Royal Plum Panel",
         terminal = "Cotton Candy",
         windows = "Cotton Candy",
@@ -987,10 +994,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
     // a Panel sidebar and a vivid Bar tab strip so the dark UI is full
     // of colour rather than just black/grey.
 
-    ThemeConfigPreset(
+    Theme(
         name = "Neon Carnival",
         mode = ConfigMode.Dark,
-        theme = "Catppuccin",
+        colorScheme = "Catppuccin",
         sidebar = "Hot Magenta Bar",
         terminal = "Catppuccin",
         windows = "Catppuccin",
@@ -1001,10 +1008,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Lime Bar",
         bottomBar = "Royal Plum Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Deep Sea Trench",
         mode = ConfigMode.Dark,
-        theme = "Deep Sea",
+        colorScheme = "Deep Sea",
         sidebar = "Midnight Panel",
         terminal = "Deep Sea",
         windows = "Deep Sea",
@@ -1015,10 +1022,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Cyan Bar",
         bottomBar = "Midnight Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Galactic Drift",
         mode = ConfigMode.Dark,
-        theme = "Nebula",
+        colorScheme = "Nebula",
         sidebar = "Royal Plum Panel",
         terminal = "Nebula",
         windows = "Nebula",
@@ -1029,10 +1036,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Hot Magenta Bar",
         bottomBar = "Royal Plum Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Phoenix Rise",
         mode = ConfigMode.Dark,
-        theme = "Volcanic",
+        colorScheme = "Volcanic",
         sidebar = "Burgundy Panel",
         terminal = "Volcanic",
         windows = "Volcanic",
@@ -1043,10 +1050,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Tangerine Bar",
         bottomBar = "Burgundy Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Forest Spirit",
         mode = ConfigMode.Dark,
-        theme = "Aurora",
+        colorScheme = "Aurora",
         sidebar = "Forest Panel",
         terminal = "Aurora",
         windows = "Aurora",
@@ -1057,10 +1064,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Lime Bar",
         bottomBar = "Forest Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Royal Court",
         mode = ConfigMode.Dark,
-        theme = "Tokyo Night",
+        colorScheme = "Tokyo Night",
         sidebar = "Royal Plum Panel",
         terminal = "Tokyo Night",
         windows = "Tokyo Night",
@@ -1071,10 +1078,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Tangerine Bar",
         bottomBar = "Royal Plum Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Storm Front",
         mode = ConfigMode.Dark,
-        theme = "Night Owl",
+        colorScheme = "Night Owl",
         sidebar = "Slate Panel",
         terminal = "Night Owl",
         windows = "Night Owl",
@@ -1085,10 +1092,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Cyan Bar",
         bottomBar = "Slate Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Volcanic Lab",
         mode = ConfigMode.Dark,
-        theme = "Blood Moon",
+        colorScheme = "Blood Moon",
         sidebar = "Burgundy Panel",
         terminal = "Blood Moon",
         windows = "Blood Moon",
@@ -1099,10 +1106,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Lime Bar",
         bottomBar = "Burgundy Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Northern Lights",
         mode = ConfigMode.Dark,
-        theme = "Aurora",
+        colorScheme = "Aurora",
         sidebar = "Indigo Panel",
         terminal = "Aurora",
         windows = "Aurora",
@@ -1113,10 +1120,10 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
         active = "Hot Magenta Bar",
         bottomBar = "Indigo Panel",
     ),
-    ThemeConfigPreset(
+    Theme(
         name = "Burnished Copper",
         mode = ConfigMode.Dark,
-        theme = "Dragon's Hoard",
+        colorScheme = "Dragon's Hoard",
         sidebar = "Espresso Panel",
         terminal = "Dragon's Hoard",
         windows = "Dragon's Hoard",
@@ -1136,6 +1143,6 @@ val defaultThemeConfigs: List<ThemeConfigPreset> = listOf(
  * that collide with built-in presets, and to identify default entries
  * in the merged configuration list.
  *
- * @see defaultThemeConfigs
+ * @see defaultThemes
  */
-val defaultThemeConfigNames: Set<String> = defaultThemeConfigs.map { it.name }.toSet()
+val defaultThemeConfigNames: Set<String> = defaultThemes.map { it.name }.toSet()

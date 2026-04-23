@@ -1,17 +1,17 @@
 /**
  * Deterministic palette derivation for the Termtastic semantic theme system.
  *
- * Given a [TerminalTheme]'s seed fg/bg colours and a dark/light mode flag,
+ * Given a [ColorScheme]'s seed fg/bg colours and a dark/light mode flag,
  * [resolve] computes the full [ResolvedPalette] (~60 tokens) using colour
  * math: surface shifts, text-hierarchy mixing, border-alpha tinting, and
  * neutral syntax/diff fallbacks.  Designer themes can override any subset
- * of tokens via [TerminalTheme.overrides].
+ * of tokens via [ColorScheme.overrides].
  *
  * The derivation logic mirrors the JavaScript prototype in
  * `Theme System.html`'s `derive(pal, mode)` function exactly.
  *
  * @see ResolvedPalette
- * @see TerminalTheme
+ * @see ColorScheme
  * @see ColorMath
  */
 package se.soderbjorn.termtastic
@@ -41,7 +41,7 @@ private const val TEXT_DISABLED_MIN_CONTRAST = 2.5
 // ── Override key helpers ───────────────────────────────────────────────
 
 /**
- * Looks up an override value from [TerminalTheme.overrides] for the given
+ * Looks up an override value from [ColorScheme.overrides] for the given
  * token [key] and [isDark] mode.
  *
  * Override keys follow the pattern `"group.token.dark"` or
@@ -73,9 +73,9 @@ private fun overrideFor(overrides: Map<String, Long>?, key: String, isDark: Bool
  *
  * @param isDark `true` for dark mode, `false` for light mode
  * @return the fully resolved semantic palette
- * @see TerminalTheme.resolve
+ * @see ColorScheme.resolve
  */
-fun TerminalTheme.resolve(isDark: Boolean): ResolvedPalette {
+fun ColorScheme.resolve(isDark: Boolean): ResolvedPalette {
     val ovr = overrides
     val bg = hexToArgb(if (isDark) darkBg else lightBg)
     val fg = hexToArgb(if (isDark) darkFg else lightFg)
@@ -285,7 +285,7 @@ fun TerminalTheme.resolve(isDark: Boolean): ResolvedPalette {
  * @param systemIsDark whether the host OS is currently in dark mode
  * @return the fully resolved semantic palette
  */
-fun TerminalTheme.resolve(appearance: Appearance, systemIsDark: Boolean): ResolvedPalette {
+fun ColorScheme.resolve(appearance: Appearance, systemIsDark: Boolean): ResolvedPalette {
     val isDark = when (appearance) {
         Appearance.Dark -> true
         Appearance.Light -> false
