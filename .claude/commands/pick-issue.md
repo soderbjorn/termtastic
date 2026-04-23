@@ -64,7 +64,18 @@ Implement the change. Documentation is **mandatory**, not optional — follow `C
 
 For UI changes, build and verify in a browser/app session per the project's standard workflow. If you can't verify something, state that explicitly in the PR body rather than claiming success.
 
-## 5. Commit, push, PR
+## 5. Build before PR (mandatory)
+
+You **must** attempt a build before opening the PR. Never push code and open a PR without first trying to build. This catches compile errors, missing imports, and broken references that would otherwise land in the reviewer's lap.
+
+- Run the project's standard build command (e.g. `./gradlew build`, `npm run build`, or whatever the project uses) from inside the worktree.
+- If the build succeeds, note it in the PR's **Verification** section (e.g. "`./gradlew build` passes locally").
+- If the build **fails**, fix the failures and re-run until it passes. Do not open the PR on a broken build.
+- If the build cannot be run at all in this environment (missing toolchain, sandboxed, etc.), state that explicitly in the PR's **Verification** section as a gap — do not silently skip it and do not claim success.
+
+Only proceed to commit/push/PR once the build has been attempted (and ideally passed).
+
+## 6. Commit, push, PR
 
 Commit in logical chunks. Then:
 
@@ -77,6 +88,25 @@ EOF
 ```
 
 PR must be **full, not draft**. Report the PR URL and the worktree path at the end.
+
+**Comment on the issue linking to the PR.** After the PR is created, post a comment on issue #N that links to the PR and clearly identifies the commenter as Claude Code (not the human repo owner).
+
+```
+gh issue comment <N> --body "$(cat <<'EOF'
+**Claude Code** (an AI coding agent) picked up this issue via the `/pick-issue` skill and opened #<PR> with a proposed fix.
+
+<one or two sentences summarising what the PR does>
+
+🤖 This comment was posted by [Claude Code](https://claude.com/claude-code) acting autonomously — the repo owner has not yet reviewed the PR.
+EOF
+)"
+```
+
+The comment must:
+- State "Claude Code" (or "an AI coding agent") explicitly in the opening line, so readers don't mistake it for a human author.
+- Link to the PR by number (`#<PR>`), which GitHub auto-expands.
+- Include the Claude Code attribution footer verbatim, with the [Claude Code](https://claude.com/claude-code) link intact.
+- Not impersonate the repo owner or make claims about reviewer approval.
 
 **Do not clean up after the PR.** Leave the worktree and the local feature branch in place — do not run `git worktree remove`, `git branch -d`, or anything equivalent. The user wants them kept so they can revisit the work.
 
