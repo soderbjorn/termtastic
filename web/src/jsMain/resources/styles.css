@@ -258,6 +258,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 }
 .app-header .icon-button,
 .app-header .tab-button,
+.app-header .tab-add,
 .app-header .dropdown,
 .app-header .dropdown-menu,
 .app-header .tab-menu-list {
