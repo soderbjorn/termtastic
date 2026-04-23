@@ -391,7 +391,7 @@ private fun start() {
     // Close dropdowns on outside click.
     document.addEventListener("click", {
         (document.getElementById("debug-dropdown") as? HTMLElement)?.classList?.remove("open")
-        val openMenus = document.querySelectorAll(".pane-menu.open, .tab-menu.open, .tab-menu-list.open, .pane-split-flyout.open, .pane-flyout-wrap.open")
+        val openMenus = document.querySelectorAll(".pane-menu.open, .tab-bar-menu.open, .tab-bar-menu-list.open, .pane-split-flyout.open, .pane-flyout-wrap.open")
         for (i in 0 until openMenus.length) {
             (openMenus.item(i) as HTMLElement).classList.remove("open")
         }
