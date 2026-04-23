@@ -286,6 +286,22 @@ sealed class WindowCommand {
     data class RenameTab(val tabId: String, val title: String) : WindowCommand()
 
     /**
+     * Toggle whether [tabId] is hidden from the tab strip. Hidden tabs are
+     * still listed in the tab-bar overflow dropdown so the user can recover
+     * them. The server refuses to hide the last visible tab (the strip would
+     * be empty); when hiding the active tab, the server switches the active
+     * selection to the next visible neighbour so the user lands on a tab
+     * with a strip button instead of nothing.
+     *
+     * @param tabId the id of the tab to hide or unhide
+     * @param hidden `true` to hide the tab from the strip, `false` to restore it
+     * @see TabConfig.hidden
+     */
+    @Serializable
+    @SerialName("setTabHidden")
+    data class SetTabHidden(val tabId: String, val hidden: Boolean) : WindowCommand()
+
+    /**
      * Reorder a tab by moving it before or after another tab via drag-and-drop.
      *
      * @param tabId the id of the tab being moved

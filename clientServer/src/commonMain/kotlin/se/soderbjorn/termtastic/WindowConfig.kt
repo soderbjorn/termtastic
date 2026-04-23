@@ -62,6 +62,16 @@ data class TabConfig(
      * "let the client default to the first pane in DOM order".
      */
     val focusedPaneId: String? = null,
+    /**
+     * Whether this tab is hidden from the tab strip. Hidden tabs still exist
+     * (their panes and PTY sessions are preserved) and are still listed in
+     * the tab-bar overflow dropdown so the user can re-activate or unhide
+     * them. Defaults to `false` so existing persisted blobs deserialize as
+     * fully visible. Toggled by [WindowCommand.SetTabHidden].
+     *
+     * @see WindowCommand.SetTabHidden
+     */
+    val hidden: Boolean = false,
 )
 
 /**

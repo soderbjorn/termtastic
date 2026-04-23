@@ -399,6 +399,60 @@ object WindowState {
     }
 
     /**
+     * Toggle [TabConfig.hidden] on [tabId]. Hidden tabs are dropped from the
+     * tab strip rendering on the client and surfaced only via the tab-bar
+     * overflow dropdown — the rest of the tab (panes, focus, PTY sessions)
+     * survives untouched.
+     *
+     * Policy:
+     *  - Refuse if the tab id is unknown or the flag is already in the
+     *    requested state (no-op snapshot churn).
+     *  - Refuse if hiding [tabId] would leave zero visible tabs — the strip
+     *    must always have at least one button so the user can navigate.
+     *  - When hiding the currently active tab, switch the active selection
+     *    to the next visible neighbour (preferring the tab that takes the
+     *    same visual slot, mirroring [closeTab]'s neighbour fallback).
+     *
+     * Called from `handleWindowCommand` for [WindowCommand.SetTabHidden].
+     *
+     * @param tabId the id of the tab to hide or unhide
+     * @param hidden `true` to hide, `false` to unhide
+     * @see TabConfig.hidden
+     * @see WindowCommand.SetTabHidden
+     */
+    fun setTabHidden(tabId: String, hidden: Boolean) = synchronized(this) {
+        val cfg = _config.value
+        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        if (idx < 0) return@synchronized
+        val tab = cfg.tabs[idx]
+        if (tab.hidden == hidden) return@synchronized
+        // Refuse to hide the last visible tab — the strip must always show
+        // at least one button.
+        if (hidden) {
+            val visibleAfter = cfg.tabs.count { !it.hidden && it.id != tabId }
+            if (visibleAfter == 0) return@synchronized
+        }
+        val newTabs = cfg.tabs.toMutableList()
+        newTabs[idx] = tab.copy(hidden = hidden)
+        // If we just hid the active tab, hop to the next visible neighbour
+        // so the strip still highlights something. Same fallback shape as
+        // closeTab: pick the visible tab whose new index is closest to the
+        // hidden one's old index, biased toward the tab that took its slot.
+        val newActive = if (hidden && cfg.activeTabId == tabId) {
+            val visibleIds = newTabs.filter { !it.hidden }.map { it.id }
+            // Walk forward from the hidden tab's old slot, then backward,
+            // looking for the first visible tab in either direction.
+            val forward = (idx until newTabs.size).firstNotNullOfOrNull { i ->
+                newTabs[i].takeIf { !it.hidden }?.id
+            }
+            forward ?: visibleIds.lastOrNull()
+        } else {
+            cfg.activeTabId
+        }
+        _config.value = cfg.copy(tabs = newTabs, activeTabId = newActive)
+    }
+
+    /**
      * Set the display title of [tabId] to [title] (trimmed, max 80 chars).
      * No-op if the title is empty or unchanged.
      *
