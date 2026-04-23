@@ -885,6 +885,7 @@ fun buildGitView(paneId: String, leaf: dynamic, headerEl: HTMLElement? = null): 
     }
     if (initialAutoRefresh) launchCmd(WindowCommand.SetGitAutoRefresh(paneId = paneId, enabled = true))
 
+    attachDelayedHoverArm(divider)
     divider.addEventListener("mousedown", { ev ->
         val mev = ev as MouseEvent; mev.preventDefault()
         divider.classList.add("dragging")
