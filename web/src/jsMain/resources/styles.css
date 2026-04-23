@@ -711,17 +711,10 @@ body.is-electron-mac .app-header {
     width: 9px;
     margin: 0 -2px;
     flex-shrink: 0;
+    cursor: col-resize;
     background: transparent;
     position: relative;
     z-index: 5;
-}
-/* Cursor + colored highlight are gated on the JS-driven .hover-armed class
-   (applied after ~1s of dwell — see attachDelayedHoverArm) so incidental
-   mouse movement across the divider stays visually quiet. The .dragging
-   class keeps the highlight on while the user is actively resizing. */
-.sidebar-divider.hover-armed,
-.sidebar-divider.dragging {
-    cursor: col-resize;
 }
 .sidebar-divider::after {
     content: "";
@@ -732,7 +725,7 @@ body.is-electron-mac .app-header {
     width: 1px;
     background: var(--separator, #333);
 }
-.sidebar-divider.hover-armed::after,
+.sidebar-divider:hover::after,
 .sidebar-divider.dragging::after {
     background: var(--termtastic-orange);
     width: 2px;
@@ -749,17 +742,10 @@ body.is-electron-mac .app-header {
     height: 9px;
     margin: -2px 0;
     flex-shrink: 0;
+    cursor: row-resize;
     background: transparent;
     position: relative;
     z-index: 5;
-}
-/* See .sidebar-divider above for why cursor + highlight are gated on the
-   .hover-armed / .dragging classes rather than the :hover pseudo-class. */
-.header-divider.hover-armed,
-.header-divider.dragging,
-.usage-bar-divider.hover-armed,
-.usage-bar-divider.dragging {
-    cursor: row-resize;
 }
 .header-divider::after,
 .usage-bar-divider::after {
@@ -771,9 +757,9 @@ body.is-electron-mac .app-header {
     height: 1px;
     background: var(--separator, #333);
 }
-.header-divider.hover-armed::after,
+.header-divider:hover::after,
 .header-divider.dragging::after,
-.usage-bar-divider.hover-armed::after,
+.usage-bar-divider:hover::after,
 .usage-bar-divider.dragging::after {
     background: var(--termtastic-orange);
     height: 2px;
@@ -2266,16 +2252,11 @@ body.appearance-light .pane-picker-btn:hover:not(.disabled) {
 .md-divider {
     width: 9px;
     margin: 0 -2px;
+    cursor: col-resize;
     background: transparent;
     flex-shrink: 0;
     position: relative;
     z-index: 1;
-}
-/* See .sidebar-divider — cursor + highlight are gated on .hover-armed
-   (set after a dwell delay) and .dragging, not the :hover pseudo-class. */
-.md-divider.hover-armed,
-.md-divider.dragging {
-    cursor: col-resize;
 }
 .md-divider::after {
     content: "";
@@ -2286,7 +2267,7 @@ body.appearance-light .pane-picker-btn:hover:not(.disabled) {
     width: 1px;
     background: var(--separator, #333);
 }
-.md-divider.hover-armed::after,
+.md-divider:hover::after,
 .md-divider.dragging::after {
     background: var(--accent, #0e639c);
     width: 2px;
@@ -2971,14 +2952,11 @@ body.appearance-light .link-picker-card:hover {
 .git-divider {
     width: 9px;
     margin: 0 -2px;
+    cursor: col-resize;
     background: transparent;
     flex-shrink: 0;
     position: relative;
     z-index: 1;
-}
-.git-divider.hover-armed,
-.git-divider.dragging {
-    cursor: col-resize;
 }
 .git-divider::after {
     content: "";
@@ -2989,7 +2967,7 @@ body.appearance-light .link-picker-card:hover {
     width: 1px;
     background: var(--separator, #333);
 }
-.git-divider.hover-armed::after,
+.git-divider:hover::after,
 .git-divider.dragging::after {
     background: var(--accent, #0e639c);
     width: 2px;

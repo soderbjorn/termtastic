@@ -47,56 +47,6 @@ private const val MOON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="1
 private const val AUTO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18" fill="currentColor"/></svg>"""
 
 /**
- * Dwell (in milliseconds) before a split-bar reveals its resize affordance on
- * hover. Picked to match the existing rename-arm timer in [PaneHeader], so the
- * two "settle before you act" interactions feel consistent.
- *
- * @see attachDelayedHoverArm
- */
-private const val SPLIT_BAR_HOVER_ARM_MS = 1000
-
-/**
- * Wire a split-bar divider so its hover-state styling (colored highlight and
- * resize cursor) is applied only after the pointer has dwelled on it for
- * [SPLIT_BAR_HOVER_ARM_MS]. Incidental mouse movement across the divider no
- * longer causes an immediate color/cursor flicker — the affordance fades in
- * only when the user is clearly lingering on the bar with intent to resize.
- *
- * Adds `.hover-armed` to [element] after the dwell elapses, and removes it on
- * `mouseleave` or when a drag begins (`mousedown`) — while dragging, the
- * existing `.dragging` class takes over as the source of the highlight.
- *
- * Called from [start] for the sidebar / header / usage-bar dividers, and from
- * [mountFileBrowserPane] and [mountGitPane] for the Markdown and Git list
- * dividers. Mirrors the `armed` timer pattern used in `PaneHeader.createHeader`
- * for the rename-on-hover interaction.
- *
- * @param element The divider element to attach listeners to. Must have its
- *   hover styling in CSS gated on `.hover-armed` (and/or `.dragging`) rather
- *   than the `:hover` pseudo-class.
- * @see PaneHeader
- */
-internal fun attachDelayedHoverArm(element: HTMLElement) {
-    var armTimer: Int = -1
-    fun disarm() {
-        if (armTimer != -1) { window.clearTimeout(armTimer); armTimer = -1 }
-        element.classList.remove("hover-armed")
-    }
-    element.addEventListener("mouseenter", { _ ->
-        disarm()
-        armTimer = window.setTimeout(
-            { armTimer = -1; element.classList.add("hover-armed") },
-            SPLIT_BAR_HOVER_ARM_MS,
-        )
-    })
-    element.addEventListener("mouseleave", { _ -> disarm() })
-    // Once a drag starts, the .dragging class owns the highlight — cancel
-    // any pending arm so we don't layer both classes or leave a stale
-    // hover-armed behind when the mouse leaves mid-drag.
-    element.addEventListener("mousedown", { _ -> disarm() })
-}
-
-/**
  * Returns whether the host reports a dark system colour-scheme preference.
  * Consulted only when the user's [Appearance] is [Appearance.Auto] — in
  * [Appearance.Dark] / [Appearance.Light] the explicit choice always wins.
@@ -517,7 +467,6 @@ private fun start() {
 
     // Sidebar resize via divider drag.
     run {
-        attachDelayedHoverArm(sidebarDividerLocal)
         var dragging = false
         var startX = 0.0
         var startWidth = 0.0
@@ -583,7 +532,6 @@ private fun start() {
     run {
         val hdr = appHeaderEl ?: return@run
         val divider = headerDividerEl ?: return@run
-        attachDelayedHoverArm(divider)
         var dragging = false
         var startY = 0.0
         var startHeight = 0.0
@@ -642,7 +590,6 @@ private fun start() {
     run {
         val bar = usageBar ?: return@run
         val divider = usageBarDividerEl ?: return@run
-        attachDelayedHoverArm(divider)
         var dragging = false
         var startY = 0.0
         var startHeight = 0.0
