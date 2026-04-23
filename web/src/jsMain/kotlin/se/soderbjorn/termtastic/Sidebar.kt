@@ -43,6 +43,31 @@ fun collectLeaves(leaf: dynamic, into: MutableList<LeafInfo>) {
 }
 
 /**
+ * Returns the inline SVG markup for the icon that represents a leaf of the
+ * given content kind. Centralised so the sidebar tree and the tab-bar
+ * overflow dropdown render identical icons for the same pane type.
+ *
+ * @param contentKind the leaf's content kind ("terminal", "fileBrowser", "git").
+ *   Unknown values fall back to the terminal icon.
+ * @param isLink `true` if this leaf is a linked view of another session;
+ *   takes precedence over a plain "terminal" kind so linked terminals show
+ *   the chain icon instead of the terminal icon. Ignored when [contentKind]
+ *   is "fileBrowser" or "git" (those keep their own icons).
+ * @return inline `<svg>...</svg>` markup with `currentColor` strokes/fills,
+ *   ready to drop into an `innerHTML` assignment.
+ */
+fun iconSvgForLeafKind(contentKind: String, isLink: Boolean): String = when {
+    contentKind == "fileBrowser" ->
+        """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M2 4.5 a0.5 0.5 0 0 1 0.5 -0.5 h3.5 l1.25 1.75 h6.25 a0.5 0.5 0 0 1 0.5 0.5 v7.25 a0.5 0.5 0 0 1 -0.5 0.5 H2.5 a0.5 0.5 0 0 1 -0.5 -0.5 Z"/></svg>"""
+    contentKind == "git" ->
+        """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="5" cy="4" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="8" r="1.5"/><line x1="5" y1="5.5" x2="5" y2="10.5"/><path d="M5 5.5 C5 8 8 8 9.5 8"/></svg>"""
+    isLink ->
+        """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M6.5 9.5a3 3 0 0 0 4.24 0l2.5-2.5a3 3 0 0 0-4.24-4.24L7.5 3.76"/><path d="M9.5 6.5a3 3 0 0 0-4.24 0l-2.5 2.5a3 3 0 0 0 4.24 4.24l1-1"/></svg>"""
+    else ->
+        """<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><rect x="1" y="2" width="14" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><polyline points="4,7 6,5 4,3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><line x1="7" y1="7" x2="11" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>"""
+}
+
+/**
  * Re-renders the entire sidebar tree from the current server configuration.
  *
  * Builds a collapsible tree with tab headers and pane items. Tab sections can
@@ -126,15 +151,7 @@ fun renderSidebar(config: dynamic) {
 
             val icon = document.createElement("span") as HTMLElement
             icon.className = "sidebar-pane-icon"
-            icon.innerHTML = if (contentKind == "fileBrowser") {
-                """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M2 4.5 a0.5 0.5 0 0 1 0.5 -0.5 h3.5 l1.25 1.75 h6.25 a0.5 0.5 0 0 1 0.5 0.5 v7.25 a0.5 0.5 0 0 1 -0.5 0.5 H2.5 a0.5 0.5 0 0 1 -0.5 -0.5 Z"/></svg>"""
-            } else if (contentKind == "git") {
-                """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="5" cy="4" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="8" r="1.5"/><line x1="5" y1="5.5" x2="5" y2="10.5"/><path d="M5 5.5 C5 8 8 8 9.5 8"/></svg>"""
-            } else if (isLinked) {
-                """<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M6.5 9.5a3 3 0 0 0 4.24 0l2.5-2.5a3 3 0 0 0-4.24-4.24L7.5 3.76"/><path d="M9.5 6.5a3 3 0 0 0-4.24 0l-2.5 2.5a3 3 0 0 0 4.24 4.24l1-1"/></svg>"""
-            } else {
-                """<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><rect x="1" y="2" width="14" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><polyline points="4,7 6,5 4,3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><line x1="7" y1="7" x2="11" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>"""
-            }
+            icon.innerHTML = iconSvgForLeafKind(contentKind, isLinked)
             item.appendChild(icon)
 
             val sidebarSpinner = document.createElement("span") as HTMLElement

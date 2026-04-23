@@ -72,9 +72,14 @@ fun startRename(titleEl: HTMLElement, paneId: String) {
 /**
  * Starts an inline rename interaction for a tab label.
  *
- * Similar to [startRename] but operates on tab labels in the tab bar. Closes
- * any open tab menus, adds a "renaming" CSS class during editing, and sends
- * [WindowCommand.RenameTab] to the server on commit.
+ * Similar to [startRename] but operates on tab labels in the tab bar. Adds
+ * a "renaming" CSS class during editing and sends [WindowCommand.RenameTab]
+ * to the server on commit.
+ *
+ * Called from the tab-bar overflow dropdown's "Rename tab" item via
+ * [populateTabOverflowMenu] when the active tab is currently visible (has
+ * a strip button); the overflow menu falls back to a `window.prompt` for
+ * hidden active tabs since they have no on-screen label to mutate.
  *
  * @param labelEl the DOM element displaying the current tab label
  * @param tabId the unique tab identifier for the rename command
@@ -84,8 +89,6 @@ fun startTabRename(labelEl: HTMLElement, tabId: String) {
     val current = labelEl.textContent ?: ""
     val parent = labelEl.parentElement ?: return
     parent.classList.add("renaming")
-    val openMenu = parent.querySelector(".tab-menu.open") as? HTMLElement
-    openMenu?.classList?.remove("open")
     val input = document.createElement("input") as HTMLInputElement
     input.type = "text"
     input.className = "tab-label-input"

@@ -250,15 +250,18 @@ fun renderConfig(config: dynamic) {
 
     val savedIndicator = tabBar.querySelector(".tab-active-indicator") as? HTMLElement
     savedIndicator?.let { it.parentElement?.removeChild(it) }
-    val staleMenus = document.querySelectorAll(".tab-menu-list, .pane-split-flyout")
-    for (i in 0 until staleMenus.length) {
-        val el = staleMenus.item(i) as HTMLElement; el.parentElement?.removeChild(el)
+    val stalePaneMenus = document.querySelectorAll(".pane-split-flyout")
+    for (i in 0 until stalePaneMenus.length) {
+        val el = stalePaneMenus.item(i) as HTMLElement; el.parentElement?.removeChild(el)
     }
     tabBar.innerHTML = ""
-    val canCloseTab = tabsArr.size > 1
     val renderedTabIds = HashSet<String>()
 
+    // Hidden tabs are excluded from the strip. They still get a content
+    // section below (so a hidden+active tab keeps rendering its panes) and
+    // they're surfaced through the tab-bar overflow dropdown.
     for (tab in tabsArr) {
+        if (tab.hidden as? Boolean == true) continue
         val tabId = tab.id as String
         val title = tab.title as String
         val tabWrap = document.createElement("div") as HTMLElement
@@ -335,57 +338,6 @@ fun renderConfig(config: dynamic) {
             launchCmd(WindowCommand.MoveTab(tabId = sourceId, targetTabId = tabId, before = before))
         })
 
-        run {
-            val menuWrap = document.createElement("div") as HTMLElement
-            menuWrap.className = "tab-menu"
-            val menuBtn = document.createElement("button") as HTMLElement
-            menuBtn.className = "tab-menu-button"; menuBtn.setAttribute("type", "button")
-            menuBtn.setAttribute("title", "Tab menu"); menuBtn.textContent = "\u22EF"
-            val menuList = document.createElement("div") as HTMLElement
-            menuList.className = "tab-menu-list"
-
-            val renameItem = document.createElement("div") as HTMLElement
-            renameItem.className = "tab-menu-item"; renameItem.textContent = "Rename tab"
-            renameItem.addEventListener("click", { ev ->
-                ev.stopPropagation(); menuWrap.classList.remove("open"); menuList.classList.remove("open")
-                startTabRename(label, tabId)
-            })
-            menuList.appendChild(renameItem)
-
-            if (canCloseTab) {
-                val closeItem = document.createElement("div") as HTMLElement
-                closeItem.className = "tab-menu-item"; closeItem.textContent = "Close tab"
-                closeItem.addEventListener("click", { ev ->
-                    ev.stopPropagation(); menuWrap.classList.remove("open"); menuList.classList.remove("open")
-                    showConfirmDialog("Close tab", "Are you sure you want to close tab <strong>${title}</strong> and all its panes?", "Close") {
-                        tabWrap.classList.add("leaving")
-                        window.setTimeout({ launchCmd(WindowCommand.CloseTab(tabId = tabId)) }, 220)
-                    }
-                })
-                menuList.appendChild(closeItem)
-            }
-
-            menuBtn.addEventListener("click", { ev ->
-                ev.stopPropagation()
-                val openWraps = document.querySelectorAll(".tab-menu.open, .pane-menu.open")
-                for (i in 0 until openWraps.length) { val other = openWraps.item(i) as HTMLElement; if (other !== menuWrap) other.classList.remove("open") }
-                val openLists = document.querySelectorAll(".tab-menu-list.open")
-                for (i in 0 until openLists.length) { val other = openLists.item(i) as HTMLElement; if (other !== menuList) other.classList.remove("open") }
-                val opening = !menuWrap.classList.contains("open")
-                menuWrap.classList.toggle("open"); menuList.classList.toggle("open")
-                if (opening) {
-                    val listWidth = menuList.asDynamic().offsetWidth as Number
-                    val rect = menuBtn.asDynamic().getBoundingClientRect()
-                    val right = rect.right as Double; val bottom = rect.bottom as Double
-                    val leftPos = (right - listWidth.toDouble()).coerceAtLeast(4.0)
-                    menuList.style.left = "${leftPos}px"; menuList.style.top = "${bottom + 4}px"
-                }
-            })
-            menuBtn.setAttribute("draggable", "false")
-            menuBtn.addEventListener("dragstart", { ev -> ev.preventDefault(); ev.stopPropagation() })
-            menuWrap.appendChild(menuBtn); tabWrap.appendChild(menuWrap)
-            document.body?.appendChild(menuList)
-        }
         tabBar.appendChild(tabWrap)
     }
 

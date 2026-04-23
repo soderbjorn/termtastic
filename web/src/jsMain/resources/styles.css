@@ -259,8 +259,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
 .app-header .icon-button,
 .app-header .tab-button,
 .app-header .dropdown,
-.app-header .dropdown-menu,
-.app-header .tab-menu-list {
+.app-header .dropdown-menu {
     -webkit-app-region: no-drag;
     app-region: no-drag;
 }
@@ -460,86 +459,6 @@ body.is-electron-mac .app-header {
     z-index: 1;
 }
 
-/* The menu element is attached to every tab (active and inactive) so every
-   tab reserves the same horizontal space for the ⋯ button — the box never
-   resizes when the active class flips or the user hovers. At rest the
-   glyph is just `visibility: hidden`; it fades in after ~1.5s of hover on
-   the active tab. */
-.tab-menu {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    visibility: hidden;
-}
-
-.tab-button.active:hover .tab-menu {
-    visibility: visible;
-    /* The delay applies on the hover-in transition; on hover-out there is
-       no transition, so the button disappears immediately. */
-    transition: visibility 0s linear 1.5s;
-}
-
-/* Suppress the ⋯ button entirely while the tab is being renamed. */
-.tab-button.renaming .tab-menu {
-    visibility: hidden !important;
-}
-
-/* Once opened, force visibility regardless of hover state so the menu
-   stays put while the dropdown is on screen. */
-.tab-menu.open {
-    visibility: visible !important;
-}
-
-.tab-menu-button {
-    appearance: none;
-    background: transparent;
-    border: none;
-    color: inherit;
-    font-family: inherit;
-    font-size: 14px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 4px;
-    letter-spacing: 1px;
-}
-
-.tab-menu-button:hover {
-    background: var(--separator);
-}
-
-.tab-menu-list {
-    display: none;
-    /* The .tab-bar ancestor uses overflow-x:auto, which would clip an
-       absolutely-positioned dropdown. Render it as a fixed-position layer
-       and let JS place it at the button's screen rect. */
-    position: fixed;
-    top: 0;
-    left: 0;
-    min-width: 160px;
-    background: var(--surface);
-    border: 1px solid var(--separator);
-    border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    padding: 4px;
-    z-index: 1000;
-}
-
-.tab-menu-list.open {
-    display: block;
-}
-
-.tab-menu-item {
-    padding: 6px 10px;
-    border-radius: 4px;
-    font-size: 12px;
-    color: var(--text-primary);
-    cursor: pointer;
-}
-
-.tab-menu-item:hover {
-    background: var(--separator);
-}
 
 .tab-button {
     position: relative;
@@ -1389,6 +1308,100 @@ body.is-electron-mac .app-header {
 /* Dropdowns in header */
 .dropdown {
     position: relative;
+}
+
+/* Tab-bar overflow dropdown sits between the (flex:1) tab strip and the
+   (margin-left:auto) header-actions cluster. Bottom-align it so the three-
+   dots button sits flush with the tab buttons rather than floating up to
+   the top of the header. */
+#tab-overflow-dropdown {
+    align-self: flex-end;
+    flex-shrink: 0;
+    margin-bottom: 1px;
+}
+
+#tab-overflow-button {
+    height: 30px;
+    width: 30px;
+    padding: 0;
+    border-radius: 6px;
+}
+
+/* The overflow menu reuses the .dropdown-menu base for positioning,
+   border, and background; these rules tune width and item layout. */
+.tab-overflow-menu {
+    min-width: 220px;
+    padding: 6px;
+}
+
+.tab-overflow-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.tab-overflow-item:hover {
+    background: var(--separator);
+}
+
+.tab-overflow-item.disabled {
+    color: var(--text-secondary);
+    opacity: 0.5;
+    cursor: default;
+}
+
+.tab-overflow-item.disabled:hover {
+    background: transparent;
+}
+
+.tab-overflow-item-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.tab-overflow-item-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.tab-overflow-separator {
+    height: 1px;
+    background: var(--separator);
+    margin: 6px 4px;
+}
+
+.tab-overflow-section-header {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    padding: 4px 10px 6px;
+}
+
+.tab-overflow-empty {
+    padding: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: center;
 }
 
 .icon-button {

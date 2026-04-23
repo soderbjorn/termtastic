@@ -27,6 +27,25 @@
                  tab buttons. Skipped during the first paint (no width). -->
             <div class="tab-active-indicator" aria-hidden="true"></div>
         </nav>
+        <!-- Tab overflow menu. Anchored to the far-right edge of the tab
+             strip (outside the scrolling nav so it's always visible). Opens
+             a dropdown with Rename / Close / Hide-or-Unhide for the active
+             tab, followed by one entry per hidden tab so the user can
+             re-activate a hidden tab from here. Wired up by
+             initTabOverflowMenu() at boot. -->
+        <div class="dropdown" id="tab-overflow-dropdown">
+            <button class="icon-button" id="tab-overflow-button" type="button"
+                    title="Tab menu">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                     viewBox="0 0 24 24" fill="currentColor"
+                     aria-hidden="true">
+                    <circle cx="12" cy="5" r="1.6"/>
+                    <circle cx="12" cy="12" r="1.6"/>
+                    <circle cx="12" cy="19" r="1.6"/>
+                </svg>
+            </button>
+            <div class="dropdown-menu tab-overflow-menu" id="tab-overflow-menu" role="menu"></div>
+        </div>
         <div class="header-actions">
             <!-- Debug menu. Only shown on dev server (JS checks at boot). -->
             <div class="dropdown" id="debug-dropdown" style="display: none;">

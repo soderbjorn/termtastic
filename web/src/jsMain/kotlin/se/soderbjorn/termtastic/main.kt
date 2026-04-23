@@ -639,6 +639,11 @@ private fun start() {
     // Layout dropdown in the header toolbar.
     initLayoutMenu()
 
+    // Tab-bar overflow (three-dots) dropdown. Anchored at the far right of
+    // the tab strip; exposes rename/close/hide-or-unhide for the active tab
+    // and lists hidden tabs so they can be re-activated.
+    initTabOverflowMenu()
+
     // Connect and go.
     connectWindow()
 
