@@ -180,7 +180,10 @@ private fun isOnlyFocusChange(prev: dynamic, next: dynamic): Boolean {
         if ((pt.title as? String) != (nt.title as? String)) return false
         // Hidden-state toggles change what the tab strip renders (and what
         // the overflow menu offers), so they are *not* focus-only changes.
+        // The sidebar-visibility flag likewise changes what the sidebar tree
+        // renders, so toggling it must trigger a full rebuild.
         if ((pt.isHidden as? Boolean ?: false) != (nt.isHidden as? Boolean ?: false)) return false
+        if ((pt.isHiddenFromSidebar as? Boolean ?: false) != (nt.isHiddenFromSidebar as? Boolean ?: false)) return false
         if (stringify(pt.panes) != stringify(nt.panes)) return false
     }
     return true
