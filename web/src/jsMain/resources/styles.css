@@ -4575,10 +4575,19 @@ body.appearance-light .settings-section-select {
 .app-logo {
     position: fixed;
     right: 14px;
-    bottom: 32px;
+    /* Cleared up from 32px — the previous value put the overlay right on top
+       of the Claude usage bar's content (see @soderbjorn screenshot on
+       #16), because the populated usage bar's effective height
+       (min-height 24 px + 3 px vertical padding + 1 px top border ≈ 28–30 px)
+       didn't leave enough breathing room before the dot's glow ring. 44 px
+       gives the wordmark and its pulse halo a comfortable band above the
+       bottom bar in both the populated and empty states. */
+    bottom: 44px;
     display: flex;
     align-items: center;
-    gap: 8px;
+    /* Slightly wider gap to match the bumped-up dot size so the wordmark
+       and dot still read as a balanced pair rather than crowding. */
+    gap: 9px;
     pointer-events: none;
     user-select: none;
     z-index: 100;
@@ -4615,8 +4624,14 @@ body.appearance-light .app-logo {
    with the opacity pulse. */
 .app-logo-dot {
     display: inline-block;
-    width: 10px;
-    height: 10px;
+    /* Bumped from 10 px → 13 px per @soderbjorn feedback on #16:
+       "make the dot a little bit bigger in relation to the label". 13 px
+       sits at roughly 87% of the 15 px wordmark cap height, which reads as
+       a deliberate circular badge next to the text rather than a small
+       punctuation mark beside it. The glow/pulse ring grows with it (see
+       box-shadow/keyframes below). */
+    width: 13px;
+    height: 13px;
     border-radius: 50%;
     background: var(--text-secondary, #8E8E93);
     box-shadow: 0 0 0 2px rgba(142, 142, 147, 0.18);
@@ -4647,8 +4662,10 @@ body.appearance-light .app-logo {
                     0 0 0 0 rgba(76, 154, 255, 0.45);
     }
     50% {
+        /* Outer halo radius bumped 6 px → 8 px in lockstep with the larger
+           13 px dot so the pulse ring stays visually proportional. */
         box-shadow: 0 0 0 2px rgba(76, 154, 255, 0.25),
-                    0 0 0 6px rgba(76, 154, 255, 0);
+                    0 0 0 8px rgba(76, 154, 255, 0);
     }
 }
 
@@ -4659,8 +4676,10 @@ body.appearance-light .app-logo {
         transform: scale(1);
     }
     50% {
+        /* Outer halo radius bumped 8 px → 10 px in lockstep with the larger
+           13 px dot so the pulse ring stays visually proportional. */
         box-shadow: 0 0 0 2px rgba(255, 105, 97, 0.30),
-                    0 0 0 8px rgba(255, 105, 97, 0);
+                    0 0 0 10px rgba(255, 105, 97, 0);
         transform: scale(1.08);
     }
 }
