@@ -491,10 +491,23 @@ fun TerminalScreen(
                 .padding(paddingValues)
                 .background(bgComposeColor),
         ) {
+            // Small inset around the terminal render surface so glyphs in
+            // the leftmost column / topmost row don't sit flush against the
+            // screen edge. Termux's TerminalView draws directly against its
+            // own getWidth()/getHeight() — it ignores Android view padding —
+            // so we apply the inset at the Compose layer by shrinking the
+            // Box that hosts it. The resulting smaller viewport flows back
+            // through TerminalView.updateSize() to produce an appropriate
+            // (slightly smaller) cols/rows grid automatically.
+            // Horizontal inset is larger than vertical because the
+            // screenshot in issue #15 shows horizontal crowding on phones
+            // while the IME toolbar already provides vertical separation
+            // at the bottom and the top app bar does the same at the top.
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
             ) {
             AndroidView(
                 modifier = Modifier
