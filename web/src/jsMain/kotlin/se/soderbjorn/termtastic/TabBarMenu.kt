@@ -17,7 +17,9 @@
  *
  * @see renderConfig — the single caller; invoked after the visible tab
  *   buttons and the `+` add button have been appended.
- * @see WindowCommand.SetTabHidden for the hide/unhide server round-trip.
+ * @see WindowCommand.SetTabHidden for the tab-bar hide/unhide round-trip.
+ * @see WindowCommand.SetTabHiddenFromSidebar for the sidebar hide/unhide
+ *   round-trip.
  * @see WindowCommand.CloseTab / WindowCommand.RenameTab / WindowCommand.SetActiveTab
  *   for the other actions dispatched from this menu.
  */
@@ -155,12 +157,17 @@ private fun menuSeparator(): HTMLElement {
  *  - "Rename"  — opens the inline rename UI on the active tab's label.
  *  - "Close"   — closes the active tab (only when there is more than one
  *    tab, matching `canCloseTab` elsewhere in the renderer).
- *  - "Hide" / "Unhide" — toggles [TabConfig.isHidden] on the active tab.
- *    A hidden active tab stays active (its content still renders in the
- *    wrap) so the user doesn't lose their place.
+ *  - "Hide" / "Unhide" in tab bar — toggles [TabConfig.isHidden] on the
+ *    active tab. A hidden active tab stays active (its content still
+ *    renders in the wrap) so the user doesn't lose their place.
+ *  - "Hide" / "Unhide" in side bar — toggles
+ *    [TabConfig.isHiddenFromSidebar] on the active tab, independently of
+ *    the tab-bar flag. Dispatched via
+ *    [WindowCommand.SetTabHiddenFromSidebar].
  *  - A separator and one row per hidden tab — clicking a hidden tab
  *    activates it; the user can then Unhide it if they want the strip
- *    entry back.
+ *    entry back. (Hidden-from-sidebar tabs remain reachable through the
+ *    tab strip and so have no separate overflow section.)
  *
  * Invoked once per render from [renderConfig], after the visible tab
  * buttons have been appended. The `New tab` row at the top of the
@@ -198,6 +205,7 @@ internal fun appendTabBarOverflowMenu(
 
     val activeTab: dynamic = tabsArr.firstOrNull { (it.id as? String) == activeTabIdArg }
     val activeIsHidden = (activeTab?.isHidden as? Boolean) == true
+    val activeIsHiddenFromSidebar = (activeTab?.isHiddenFromSidebar as? Boolean) == true
     val hiddenTabs = tabsArr.filter { (it.isHidden as? Boolean) == true }
 
     // Add tab — the standalone `+` button has been folded into the dropdown
@@ -252,11 +260,29 @@ internal fun appendTabBarOverflowMenu(
             })
         }
 
-        // Hide / Unhide — always present so the affordance is discoverable.
+        // Hide / Unhide (tab bar) — always present so the affordance is
+        // discoverable.
         val (icon, label) = if (activeIsHidden) ICON_UNHIDE to "Show in tab bar" else ICON_HIDE to "Hide in tab bar"
         menuList.appendChild(menuRow(icon, label) { _ ->
             menuWrap.classList.remove("open"); menuList.classList.remove("open")
             launchCmd(WindowCommand.SetTabHidden(tabId = activeTabId, hidden = !activeIsHidden))
+        })
+
+        // Hide / Unhide (sidebar) — mirror affordance for the left sidebar
+        // tree, persisted server-side alongside the tab-bar flag. Independent
+        // of the tab-bar toggle: either or both can be set.
+        val (sidebarIcon, sidebarLabel) = if (activeIsHiddenFromSidebar)
+            ICON_UNHIDE to "Show in side bar"
+        else
+            ICON_HIDE to "Hide in side bar"
+        menuList.appendChild(menuRow(sidebarIcon, sidebarLabel) { _ ->
+            menuWrap.classList.remove("open"); menuList.classList.remove("open")
+            launchCmd(
+                WindowCommand.SetTabHiddenFromSidebar(
+                    tabId = activeTabId,
+                    hidden = !activeIsHiddenFromSidebar,
+                )
+            )
         })
     }
 

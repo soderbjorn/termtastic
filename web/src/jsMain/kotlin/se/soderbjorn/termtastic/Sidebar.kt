@@ -61,6 +61,11 @@ fun renderSidebar(config: dynamic) {
     val tabsArr = config.tabs as? Array<dynamic> ?: return
 
     for (tab in tabsArr) {
+        // Respect the per-tab sidebar-visibility flag. Tabs flagged as
+        // sidebar-hidden still render in the tab bar and retain all their
+        // panes and PTY sessions — they are merely omitted from the sidebar
+        // tree so the user can declutter it independently of the strip.
+        if ((tab.isHiddenFromSidebar as? Boolean) == true) continue
         val tabId = tab.id as String
         val tabTitle = tab.title as String
         val isActiveTab = tabId == activeTabId
