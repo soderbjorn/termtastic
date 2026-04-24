@@ -133,19 +133,50 @@ let chromePrefs = loadChromePrefs();
 // The server is the source of truth for the window registry (see
 // server/.../WindowRegistry.kt), but at cold-start the Electron main
 // process needs to know how many BrowserWindows to spawn *before* any
-// renderer has loaded to hit the authed REST surface. We mirror the
-// registry to a JSON file under `userData` every time a window is created
-// or closed, and read it on startup. If the file is missing or malformed
-// we fall back to spawning exactly one window.
+// renderer has loaded to hit the authed REST surface. We maintain two
+// JSON files under `userData`:
+//
+// 1. `electron-windows.json` — the **live** mirror. Updated on every
+//    create/move/resize event, and on `closed` events *except* when
+//    closing the last window (which would erase the restore state
+//    just when we need it most). This file covers the crash-recovery
+//    case — if the process dies mid-session, cold start still finds
+//    a recent snapshot here.
+//
+// 2. `electron-session.json` — the **last-known-good session** snapshot.
+//    Written exactly once per process lifetime, at `before-quit`, from
+//    the currently-live `mainWindows` set. This file is never overwritten
+//    by a `closed` event, so a regular `File > Quit` (or `Cmd+Q` / `Alt+F4`)
+//    records the user's final window layout for the next cold start.
+//    Cold-start restore prefers this file over the live mirror when
+//    present and non-empty.
+//
+// The split fixes the bug where closing every window before relaunching
+// (or quitting the app on non-macOS platforms) erased the restore data,
+// so the next launch would always open one fresh window instead of the
+// user's previous session.
 
 /**
- * Absolute path to the JSON file that mirrors the server-side window
- * registry so Electron main can restore windows before any renderer runs.
+ * Absolute path to the live mirror file, updated continuously as the
+ * user moves, resizes, and closes windows. Used as a crash-recovery
+ * fallback when the session snapshot is absent.
  *
  * @returns {string} Path under Electron's `userData`.
  */
 function windowsMirrorPath() {
   return path.join(app.getPath("userData"), "electron-windows.json");
+}
+
+/**
+ * Absolute path to the session snapshot file, written on `before-quit`
+ * and used by cold-start restore as the primary source of truth for
+ * "which windows should open now?". Never overwritten by in-session
+ * window lifecycle events.
+ *
+ * @returns {string} Path under Electron's `userData`.
+ */
+function sessionSnapshotPath() {
+  return path.join(app.getPath("userData"), "electron-session.json");
 }
 
 /**
@@ -155,8 +186,42 @@ function windowsMirrorPath() {
  *   list of previously-open windows, or empty on first launch / malformed file
  */
 function loadWindowsMirror() {
+  return readWindowEntriesFile(windowsMirrorPath());
+}
+
+/**
+ * Load the session snapshot from disk.
+ *
+ * Called by {@link restoreOrCreateWindows} before consulting the live
+ * mirror, so a clean quit-and-relaunch restores exactly the windows the
+ * user had open at quit time rather than the (possibly empty) live
+ * mirror left behind by the close cascade.
+ *
+ * @returns {Array<{id:string,x:number,y:number,width:number,height:number,displayId?:string}>}
+ *   list of windows that were live at the last `before-quit`, or empty
+ *   when the file is missing / malformed / never written.
+ */
+function loadSessionSnapshot() {
+  return readWindowEntriesFile(sessionSnapshotPath());
+}
+
+/**
+ * Shared JSON-array loader for the two mirror files.
+ *
+ * Extracted because both the live mirror and the session snapshot use
+ * the same on-disk schema; treating them as interchangeable on read
+ * means {@link restoreOrCreateWindows} can fall back from one to the
+ * other without branching.
+ *
+ * @param {string} filePath absolute path to a JSON file produced by
+ *   {@link saveWindowsMirror} or {@link saveSessionSnapshot}
+ * @returns {Array<{id:string,x:number,y:number,width:number,height:number,displayId?:string}>}
+ *   parsed entries, or `[]` on any failure (missing file, bad JSON,
+ *   unexpected shape). Entries without a string `id` are dropped.
+ */
+function readWindowEntriesFile(filePath) {
   try {
-    const raw = fs.readFileSync(windowsMirrorPath(), "utf8");
+    const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((e) => e && typeof e.id === "string");
@@ -261,6 +326,25 @@ function saveWindowsMirror(entries) {
 }
 
 /**
+ * Persist the session snapshot to disk. Called from {@link persistSessionSnapshot}
+ * at `before-quit` time. Kept as a standalone helper so the write-path
+ * layout mirrors {@link saveWindowsMirror} for readability and so tests
+ * (when added) can stub the file write independently of the live mirror.
+ *
+ * @param {Array<object>} entries the window geometry snapshot produced by
+ *   {@link snapshotLiveWindows}.
+ */
+function saveSessionSnapshot(entries) {
+  try {
+    fs.mkdirSync(path.dirname(sessionSnapshotPath()), { recursive: true });
+    fs.writeFileSync(sessionSnapshotPath(), JSON.stringify(entries));
+  } catch (_) {
+    // Cosmetic — worst case the next cold start falls back to the live
+    // mirror (or one fresh window if that's also empty).
+  }
+}
+
+/**
  * Resolve the Electron display id a given bounds rectangle is anchored to.
  *
  * `screen.getDisplayMatching()` returns the Display whose bounds contain
@@ -293,16 +377,18 @@ function displayIdForBounds(bounds) {
 }
 
 /**
- * Serialise every currently-live BrowserWindow into the mirror file.
+ * Build a snapshot of every currently-live BrowserWindow's geometry.
  *
- * Called on any lifecycle event (create/move/resize/close) so the mirror
- * is never more than one event stale.
+ * Factored out of {@link persistWindowsMirror} so {@link persistSessionSnapshot}
+ * can reuse the same serialisation without duplicating the `mainWindows`
+ * iteration. The persisted entry includes the Electron display id so
+ * cold-start restore can clamp the window back onto the same physical
+ * monitor (at least when that monitor is still attached).
  *
- * The persisted entry includes the Electron display id so cold-start
- * restore can clamp the window back onto the same physical monitor (at
- * least when that monitor is still attached).
+ * @returns {Array<{id:string,x:number,y:number,width:number,height:number,displayId:string|null}>}
+ *   one entry per non-destroyed window in creation order.
  */
-function persistWindowsMirror() {
+function snapshotLiveWindows() {
   const out = [];
   for (const [id, win] of mainWindows) {
     if (win.isDestroyed()) continue;
@@ -316,7 +402,50 @@ function persistWindowsMirror() {
       displayId: displayIdForBounds(b),
     });
   }
-  saveWindowsMirror(out);
+  return out;
+}
+
+/**
+ * Serialise every currently-live BrowserWindow into the live mirror file.
+ *
+ * Called on every create/move/resize event, and on `closed` events *except*
+ * when the close would leave the live set empty — in that case the live
+ * mirror would be wiped just as cold-start restore needs it, so we
+ * deliberately preserve the last non-empty snapshot instead. This covers
+ * the "close all windows on macOS, dock-click to reactivate" flow, where
+ * `before-quit` never fires and the session snapshot stays stale from
+ * a previous run (or absent on a fresh install).
+ *
+ * The final-close case is handled by the `closed` handler in
+ * {@link createWindow}, which calls this helper only when at least one
+ * live window remains.
+ */
+function persistWindowsMirror() {
+  saveWindowsMirror(snapshotLiveWindows());
+}
+
+/**
+ * Persist the current live window set to the session snapshot file.
+ *
+ * Called exactly once per process lifetime, from the `before-quit`
+ * handler. Writing at quit time (rather than on every close) guarantees
+ * that the next cold start sees the user's actual last session rather
+ * than the trailing "one window closing after another" state the live
+ * mirror records as windows are being torn down.
+ *
+ * If every window has already been destroyed by the time this runs
+ * (e.g. a plugin closed them synchronously during `before-quit`), we
+ * deliberately leave the previous session snapshot in place rather than
+ * overwriting it with an empty array. That preserves the last-known-good
+ * session across odd shutdown paths.
+ */
+function persistSessionSnapshot() {
+  const live = snapshotLiveWindows();
+  if (live.length === 0) {
+    // Don't erase a valid previous snapshot with an empty one.
+    return;
+  }
+  saveSessionSnapshot(live);
 }
 
 // --- Embedded server bootstrap ----------------------------------------------
@@ -917,12 +1046,22 @@ function createWindow(opts = {}) {
   // cleanup (DELETE /api/windows/<id>) is done from the renderer on
   // `beforeunload` where it still has the auth token in scope; here we
   // just keep the local mirror (used for cold-start restore) in sync.
+  //
+  // Important: if this close would leave the live set empty, we skip
+  // the persist step. Otherwise the live mirror would be overwritten
+  // with `[]` exactly when we need it to remember the user's session
+  // — e.g. macOS `Cmd+W`-ing every window before dock-clicking to
+  // reactivate, where `before-quit` never fires and the session
+  // snapshot would stay stale. Preserving the last non-empty mirror
+  // here lets {@link restoreOrCreateWindows} put those windows back.
   win.on("closed", () => {
     mainWindows.delete(windowId);
     if (mainWindow === win) {
       mainWindow = mainWindows.values().next().value || null;
     }
-    persistWindowsMirror();
+    if (mainWindows.size > 0) {
+      persistWindowsMirror();
+    }
   });
 
   // Keep the mirror up to date as the user moves/resizes windows. The
@@ -1116,7 +1255,16 @@ function showUnreachableOn(win, errorDescription, hint) {
  *   rest of the startup path treats as the "primary" for error UI)
  */
 function restoreOrCreateWindows() {
-  const mirror = loadWindowsMirror();
+  // Prefer the session snapshot written at `before-quit`. It captures
+  // the user's final window layout at the last clean exit and is
+  // immune to the close-cascade erasure that can hollow out the live
+  // mirror. Fall back to the live mirror (useful after a crash, or
+  // for the macOS close-all-then-reactivate flow where before-quit
+  // never ran), and finally to a single fresh window.
+  let mirror = loadSessionSnapshot();
+  if (mirror.length === 0) {
+    mirror = loadWindowsMirror();
+  }
   if (mirror.length === 0) {
     return createWindow();
   }
@@ -1245,6 +1393,16 @@ app.whenReady().then(async () => {
 
   await ensureServerThenCreateWindow();
   registerGlobalShortcut();
+});
+
+// Write the session snapshot *before* windows start tearing down. Fires
+// on `Cmd+Q` / `Alt+F4` / `File > Quit` / `app.quit()` / OS logout —
+// any path that leads to a clean process exit. By the time `will-quit`
+// runs, BrowserWindows are already being destroyed, so we have to grab
+// the snapshot in `before-quit` to record the user's actual final
+// layout for the next cold-start restore.
+app.on("before-quit", () => {
+  persistSessionSnapshot();
 });
 
 app.on("will-quit", () => {
