@@ -57,13 +57,6 @@ import se.soderbjorn.termtastic.WindowEnvelope
 class WindowSocket internal constructor(
     private val client: TermtasticClient,
     private val path: String,
-    /**
-     * The window id this socket is pinned to. Sent to the server as the
-     * `window` query parameter on every connect; the server uses it to
-     * route commands to exactly one window's state slot and to push back
-     * only that window's config / UI settings. See [TermtasticClient.openWindowSocket].
-     */
-    val windowId: String = "primary",
 ) {
     /**
      * Forwarded from [TermtasticClient.windowState] so existing call sites
@@ -121,7 +114,7 @@ class WindowSocket internal constructor(
             var attempt = 0
             while (!closed) {
                 try {
-                    val url = client.wsUrlWithAuth(path, windowId = windowId)
+                    val url = client.wsUrlWithAuth(path)
                     println("WindowSocket: opening $url (attempt ${attempt + 1})")
                     val session = client.httpClient.webSocketSession(url)
                     println("WindowSocket: handshake complete for $url")
@@ -159,7 +152,7 @@ class WindowSocket internal constructor(
                 } catch (t: Throwable) {
                     _activeSession.value = null
                     _connected.value = false
-                    println("WindowSocket: connection to ${client.wsUrlWithAuth(path, windowId = windowId)} failed: $t")
+                    println("WindowSocket: connection to ${client.wsUrlWithAuth(path)} failed: $t")
                     if (!sessionReady.isCompleted) {
                         // First connection failed — propagate to awaitInitialConfig
                         sessionReady.completeExceptionally(t)

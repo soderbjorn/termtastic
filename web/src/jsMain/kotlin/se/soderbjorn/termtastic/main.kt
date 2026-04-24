@@ -138,16 +138,7 @@ private fun start() {
         document.body?.classList?.add("is-electron-mac")
     }
 
-    // Create the TermtasticClient + WindowSocket + AppBackingViewModel.
-    //
-    // The windowId ties this renderer to one specific window slot on the
-    // server: its WindowConfig (tabs, panes) and its UiSettings blob are
-    // pushed only down this WebSocket. In a packaged Electron build the
-    // main process assigns a UUID per BrowserWindow and stuffs it into
-    // `?window=<id>`; in a plain-browser session (or an older Electron
-    // main) readWindowIdFromUrl() falls back to "primary", giving the
-    // classic single-window UX.
-    val windowId = readWindowIdFromUrl()
+    // Create the TermtasticClient + WindowSocket + AppBackingViewModel
     val loc = window.location
     val port = loc.port.toIntOrNull() ?: if (loc.protocol == "https:") 443 else 80
     val serverUrl = ServerUrl(host = loc.hostname, port = port, useTls = loc.protocol == "https:")
@@ -156,7 +147,7 @@ private fun start() {
         authToken = authTokenForSending(),
         identity = ClientIdentity(type = clientTypeAtStart),
     )
-    windowSocket = termtasticClient.openWindowSocket(windowId)
+    windowSocket = termtasticClient.openWindowSocket()
 
     val webSettingsPersister = object : SettingsPersister {
         private fun postSettings(body: dynamic) {
@@ -175,11 +166,7 @@ private fun start() {
             // process. Without this, the cancelled POST never reaches the
             // server and the new renderer re-hydrates from stale DB state.
             init.keepalive = true
-            // Thread the windowId through so the server writes into this
-            // window's settings blob. Two Electron windows can therefore
-            // have independently-themed renderers without stepping on each
-            // other's state.
-            window.fetch("/api/ui-settings?window=" + encodeUriComponent(windowId), init)
+            window.fetch("/api/ui-settings", init)
         }
 
         override suspend fun putSetting(key: String, value: String) {
@@ -213,15 +200,12 @@ private fun start() {
 
     // Hydrate UI settings from server via REST (fast initial load — the
     // WebSocket UiSettings envelope is a backup for cross-client pushes).
-    // The `?window=<id>` parameter selects this renderer's own per-window
-    // blob; without it the server would serve the `primary` window's
-    // settings even in additional Electron windows.
     val uiSettingsInit: dynamic = js("({})")
     uiSettingsInit.headers = json(
         "X-Termtastic-Auth" to authTokenForSending(),
         "X-Termtastic-Client-Type" to clientTypeAtStart,
     )
-    window.fetch("/api/ui-settings?window=" + encodeUriComponent(windowId), uiSettingsInit).then { resp ->
+    window.fetch("/api/ui-settings", uiSettingsInit).then { resp ->
         val ok = resp.asDynamic().ok as Boolean
         if (!ok) return@then null
         resp.json()
@@ -679,9 +663,4 @@ private fun start() {
         fitVisible()
         positionActiveIndicator()
     })
-
-    // Register this BrowserWindow with the server-side multi-window registry.
-    // No-op in plain-browser (non-Electron) clients. See WindowRegistryClient
-    // for the full story; see server/.../WindowRegistry.kt for the storage.
-    installWindowRegistryReporter()
 }

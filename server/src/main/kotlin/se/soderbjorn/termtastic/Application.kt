@@ -42,7 +42,6 @@ import io.ktor.server.plugins.origin
 import io.ktor.server.request.header
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
-import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -91,16 +90,6 @@ import kotlin.math.max
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * Callback installed by [main] for the `/window` WebSocket to announce a
- * freshly-materialised windowId (one that wasn't in the persisted
- * `windows.known` list). The callback hooks the window's config flow into
- * the debounced SQLite saver so new-window state is persisted without
- * waiting for the debounce loop's periodic sweep.
- */
-@Volatile
-private var newWindowObserver: ((String) -> Unit)? = null
-
-/**
  * Application entry point. Initialises the persistence layer, restores the
  * window layout, starts background coroutines for scrollback saving and
  * session-state polling, launches the Claude usage monitor, and starts the
@@ -118,49 +107,19 @@ fun main() {
     // discard.
     val repo = SettingsRepository(AppPaths.databaseFile())
     WindowState.initialize(repo)
-    // Multi-window registry: load any persisted window entries so the first
-    // GET /api/windows reply reflects what was open on the previous launch.
-    // Electron's main process uses that list to decide how many BrowserWindows
-    // to recreate and where to place them.
-    WindowRegistry.initialize(repo)
 
-    // Debounced async saver: every config mutation across any window
-    // eventually writes one row per window to `settings`, but bursts (drag a
-    // splitter, retitle a tab) coalesce into a single write pass.
-    //
-    // We merge all windows' StateFlows into one "any window changed" signal
-    // by collecting each one in its own coroutine. Each arrival kicks the
-    // debouncer via `debounceTick`. `collectLatest` on the tick channel
-    // coalesces bursts; the actual write then iterates across every known
-    // window via `WindowState.persistAllBlocking()`.
+    // Debounced async saver: every config mutation eventually writes one row
+    // to `settings`, but bursts (drag a splitter, retitle a tab) coalesce into
+    // a single write. `drop(1)` skips the initial value StateFlow replays so
+    // we don't immediately rewrite the row we just loaded from.
     val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    val debounceTick = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 16)
-
-    // A small helper to register an observer on a window's flow. Dropping
-    // the first value avoids immediately rewriting the row we just loaded
-    // from disk. Called once per initially-known window, and again when a
-    // brand-new window id is materialised on first `/window` subscribe.
-    val subscribedWindows = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    fun observeWindow(windowId: String) {
-        if (!subscribedWindows.add(windowId)) return
-        persistenceScope.launch {
-            WindowState.config(windowId)
-                .drop(1)
-                .collect { debounceTick.tryEmit(Unit) }
-        }
-    }
-    for (id in WindowState.knownWindowIds()) observeWindow(id)
-
     persistenceScope.launch {
-        debounceTick
+        WindowState.config
+            .drop(1)
             .debounce(2_000.milliseconds)
-            .collectLatest {
-                // Make sure any window that came online after boot (new
-                // Electron File > New Window) is also observed. Cheap —
-                // `observeWindow` de-dupes.
-                for (id in WindowState.knownWindowIds()) observeWindow(id)
-                runCatching { WindowState.persistAllBlocking() }
-                    .onFailure { LoggerFactory.getLogger("WindowPersistence").warn("Failed to persist window configs", it) }
+            .collectLatest { cfg ->
+                runCatching { repo.saveWindowConfig(cfg.withBlankSessionIds()) }
+                    .onFailure { LoggerFactory.getLogger("WindowPersistence").warn("Failed to persist window config", it) }
             }
     }
 
@@ -180,14 +139,8 @@ fun main() {
             if (sid != null && sid.isNotEmpty()) out.add(leaf.id to sid)
         }
         val pairs = mutableListOf<Pair<String, String>>()
-        // Scrollback is per-leaf and a leaf lives in exactly one window
-        // (pane ids are globally unique). Iterate across every known window
-        // so no scrollback bytes are dropped for panes sitting in a
-        // non-primary Electron window.
-        for (windowId in WindowState.knownWindowIds()) {
-            for (tab in WindowState.config(windowId).value.tabs) {
-                tab.panes.forEach { collect(it.leaf, pairs) }
-            }
+        for (tab in WindowState.config.value.tabs) {
+            tab.panes.forEach { collect(it.leaf, pairs) }
         }
         for ((leafId, sessionId) in pairs) {
             val session = TerminalSessions.get(sessionId) ?: continue
@@ -231,7 +184,7 @@ fun main() {
         // changes that landed inside the debounce window.
         runCatching {
             runBlocking {
-                WindowState.persistAllBlocking()
+                repo.saveWindowConfig(WindowState.config.value.withBlankSessionIds())
                 saveAllScrollback(force = true)
             }
         }
@@ -239,11 +192,6 @@ fun main() {
         persistenceScope.cancel()
         repo.close()
     })
-
-    // Expose the `observeWindow` registrar to the /window WebSocket so new
-    // window ids coming online at runtime get wired into the debounce path
-    // without waiting for the next tick.
-    newWindowObserver = ::observeWindow
 
     val port = System.getProperty("termtastic.port")?.toIntOrNull()
         ?: SERVER_PORT
@@ -329,21 +277,13 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
         }
 
         // UI preferences (terminal theme, dark/light/auto, sidebar state, …).
-        // Stored per-window as a JSON blob so adding a new setting never
-        // requires server changes — the client just uses a new key.
-        //
-        // The client supplies its windowId as the `?window=<id>` query
-        // parameter. Missing/blank defaults to PRIMARY_WINDOW_ID so the
-        // plain-browser client (no Electron wrapper) and the Android app
-        // still get a sensible single-window UX.
+        // Stored as a single JSON blob so adding a new setting never requires
+        // server changes — the client just uses a new key.
         get("/api/ui-settings") {
             val token = call.readAuthToken()
             val info = call.readClientInfo()
             when (DeviceAuth.authorize(token, info, settingsRepo)) {
-                DeviceAuth.Decision.APPROVED -> {
-                    val windowId = call.readWindowId()
-                    call.respond(settingsRepo.getUiSettings(windowId))
-                }
+                DeviceAuth.Decision.APPROVED -> call.respond(settingsRepo.getUiSettings())
                 DeviceAuth.Decision.REJECTED,
                 DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
             }
@@ -353,72 +293,9 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
             val info = call.readClientInfo()
             when (DeviceAuth.authorize(token, info, settingsRepo)) {
                 DeviceAuth.Decision.APPROVED -> {
-                    val windowId = call.readWindowId()
                     val incoming = call.receive<JsonObject>()
-                    settingsRepo.mergeUiSettings(windowId, incoming)
+                    settingsRepo.mergeUiSettings(incoming)
                     call.respond(HttpStatusCode.NoContent)
-                }
-                DeviceAuth.Decision.REJECTED,
-                DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
-            }
-        }
-
-        // --- Multi-window registry -------------------------------------------
-        //
-        // Electron-only surface. The renderer reports its BrowserWindow's
-        // screen geometry here so the server can recreate the same windows
-        // on the next launch. See WindowRegistry for the data model and
-        // electron/main.js for the spawn-on-startup restore flow.
-
-        get("/api/windows") {
-            val token = call.readAuthToken()
-            val info = call.readClientInfo()
-            when (DeviceAuth.authorize(token, info, settingsRepo)) {
-                DeviceAuth.Decision.APPROVED -> call.respond(WindowRegistry.list())
-                DeviceAuth.Decision.REJECTED,
-                DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
-            }
-        }
-        post("/api/windows") {
-            val token = call.readAuthToken()
-            val info = call.readClientInfo()
-            when (DeviceAuth.authorize(token, info, settingsRepo)) {
-                DeviceAuth.Decision.APPROVED -> {
-                    val incoming = call.receive<WindowRecord>()
-                    // Reject empty ids early so garbage can't pollute the
-                    // persisted blob. Non-finite numbers can't enter via JSON
-                    // decoding so no further sanitisation is needed here.
-                    if (incoming.id.isBlank()) {
-                        call.respond(HttpStatusCode.BadRequest, "id required")
-                        return@post
-                    }
-                    val stored = WindowRegistry.upsert(incoming)
-                    call.respond(stored)
-                }
-                DeviceAuth.Decision.REJECTED,
-                DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
-            }
-        }
-        delete("/api/windows/{id}") {
-            val token = call.readAuthToken()
-            val info = call.readClientInfo()
-            when (DeviceAuth.authorize(token, info, settingsRepo)) {
-                DeviceAuth.Decision.APPROVED -> {
-                    val id = call.parameters["id"].orEmpty()
-                    if (id.isBlank()) {
-                        call.respond(HttpStatusCode.BadRequest, "id required")
-                        return@delete
-                    }
-                    // Drop the window from both the registry (geometry)
-                    // and the state registry (tabs/panes). Orphaned PTY
-                    // sessions — those no other window links — are
-                    // destroyed as a side effect of removeWindow().
-                    val removedGeom = WindowRegistry.remove(id)
-                    val removedState = WindowState.removeWindow(id)
-                    call.respond(
-                        if (removedGeom || removedState) HttpStatusCode.NoContent
-                        else HttpStatusCode.NotFound
-                    )
                 }
                 DeviceAuth.Decision.REJECTED,
                 DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
@@ -536,24 +413,11 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
                     return@webSocket
                 }
             }
-            // Pin this WebSocket to its windowId. The renderer supplies this
-            // via the `?window=<id>` query string populated by Electron
-            // main; the plain-browser client / Android both default to
-            // PRIMARY_WINDOW_ID. Materialises the slot if this is the
-            // first time we're hearing about this window.
-            val windowId = call.readWindowId()
-            WindowState.getOrCreateSlot(windowId)
-            // Hook this window's config flow into the debounced persister
-            // (no-op if already subscribed). Handles the "new Electron
-            // window just opened" case.
-            newWindowObserver?.invoke(windowId)
-
-            // Push the current config and every subsequent change for this
-            // window. StateFlow replays its current value to new
-            // collectors, so a fresh client sees the latest snapshot
-            // immediately.
+            // Push the current config and every subsequent change. StateFlow
+            // replays its current value to new collectors, so a fresh client
+            // sees the latest snapshot immediately.
             val pushJob = launch {
-                WindowState.config(windowId).collect { cfg ->
+                WindowState.config.collect { cfg ->
                     val payload = windowJson.encodeToString<WindowEnvelope>(WindowEnvelope.Config(cfg))
                     send(Frame.Text(payload))
                 }
@@ -561,10 +425,7 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
 
             // Push AI assistant state (working/waiting/idle) for every
             // session. Sent as a separate message type so state changes
-            // (every 2 s) don't trigger full config re-renders. Session
-            // state is process-global — a linked pane in window B is
-            // backed by the same PTY as its origin in window A, so every
-            // window observes the same state map.
+            // (every 2 s) don't trigger full config re-renders.
             val statePushJob = launch {
                 sessionStates.collect { states ->
                     val payload = windowJson.encodeToString<WindowEnvelope>(WindowEnvelope.State(states))
@@ -580,12 +441,10 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
                 }
             }
 
-            // Push this window's UI settings (theme, appearance, sidebar
-            // width) so the renderer stays in sync with cross-client
-            // edits. Each window is an independent settings blob — two
-            // Electron main windows can have different themes.
+            // Push UI settings (theme, appearance, sidebar width) so every
+            // renderer stays in sync when the user flips dark/light mode.
             val uiSettingsPushJob = launch {
-                settingsRepo.uiSettingsFlow(windowId).collect { s ->
+                settingsRepo.uiSettings.collect { s ->
                     val payload = windowJson.encodeToString<WindowEnvelope>(WindowEnvelope.UiSettings(s))
                     send(Frame.Text(payload))
                 }
@@ -597,7 +456,6 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
             // it registered. The context is destroyed in the finally block,
             // which closes every watcher.
             val ctx = WindowConnectionContext(
-                windowId = windowId,
                 send = { env -> send(Frame.Text(windowJson.encodeToString<WindowEnvelope>(env))) },
                 scope = this,
                 settingsRepo = settingsRepo,
@@ -633,18 +491,6 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
  *
  * Returning null lets [DeviceAuth.authorize] treat the request as unknown.
  */
-/**
- * Read the client's window id from the `window` query parameter (set by the
- * Kotlin/JS renderer from the URL, which Electron's main process populated
- * when it created the BrowserWindow). Falls back to [PRIMARY_WINDOW_ID] for
- * the plain-browser client and the Android app, both of which treat the
- * server as single-window.
- */
-private fun io.ktor.server.application.ApplicationCall.readWindowId(): String {
-    val id = request.queryParameters["window"]?.takeIf { it.isNotBlank() }
-    return id ?: PRIMARY_WINDOW_ID
-}
-
 private fun io.ktor.server.application.ApplicationCall.readAuthToken(): String? {
     val cookie = request.cookies["termtastic_auth"]
     if (!cookie.isNullOrBlank()) return cookie
@@ -692,7 +538,6 @@ private val controlJson = Json { ignoreUnknownKeys = true }
  * drops.
  */
 internal class WindowConnectionContext(
-    val windowId: String,
     val send: suspend (WindowEnvelope) -> Unit,
     val scope: kotlinx.coroutines.CoroutineScope,
     val settingsRepo: SettingsRepository,
@@ -808,15 +653,14 @@ private fun buildGitListEnvelope(paneId: String, cwd: String?): WindowEnvelope.G
  */
 private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionContext) {
     val cmd = runCatching { windowJson.decodeFromString<WindowCommand>(text) }.getOrNull() ?: return
-    val wid = ctx.windowId
     when (cmd) {
         is WindowCommand.FileBrowserListDir -> {
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             val content = leaf.content as? FileBrowserContent ?: return
             ctx.send(buildFileBrowserDirEnvelope(cmd.paneId, leaf.cwd, cmd.dirRelPath, content.fileFilter, content.sortBy))
         }
         is WindowCommand.FileBrowserOpenFile -> {
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             if (leaf.content !is FileBrowserContent) return
             val cwd = leaf.cwd
             if (cwd.isNullOrBlank()) {
@@ -827,11 +671,11 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             if (read == null) {
                 // Clear the persisted selection so a reconnect/reload doesn't
                 // keep trying to open a file that no longer exists.
-                WindowState.setFileBrowserSelected(wid, cmd.paneId, null)
+                WindowState.setFileBrowserSelected(cmd.paneId, null)
                 ctx.send(buildFileBrowserErrorEnvelope(cmd.paneId, "Cannot read ${cmd.relPath}"))
                 return
             }
-            WindowState.setFileBrowserSelected(wid, cmd.paneId, cmd.relPath)
+            WindowState.setFileBrowserSelected(cmd.paneId, cmd.relPath)
             val envelope: WindowEnvelope = when (read) {
                 is FileBrowserCatalog.FileRead.Binary -> WindowEnvelope.FileBrowserContentMsg(
                     paneId = cmd.paneId,
@@ -869,20 +713,20 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             ctx.send(envelope)
         }
         is WindowCommand.FileBrowserSetExpanded ->
-            WindowState.setFileBrowserExpanded(wid, cmd.paneId, cmd.dirRelPath, cmd.expanded)
-        is WindowCommand.SetFileBrowserLeftWidth -> WindowState.setFileBrowserLeftWidth(wid, cmd.paneId, cmd.px)
-        is WindowCommand.SetFileBrowserFontSize -> WindowState.setFileBrowserFontSize(wid, cmd.paneId, cmd.size)
-        is WindowCommand.SetTerminalFontSize -> WindowState.setTerminalFontSize(wid, cmd.paneId, cmd.size)
-        is WindowCommand.SetPaneColorScheme -> WindowState.setPaneColorScheme(wid, cmd.paneId, cmd.scheme)
+            WindowState.setFileBrowserExpanded(cmd.paneId, cmd.dirRelPath, cmd.expanded)
+        is WindowCommand.SetFileBrowserLeftWidth -> WindowState.setFileBrowserLeftWidth(cmd.paneId, cmd.px)
+        is WindowCommand.SetFileBrowserFontSize -> WindowState.setFileBrowserFontSize(cmd.paneId, cmd.size)
+        is WindowCommand.SetTerminalFontSize -> WindowState.setTerminalFontSize(cmd.paneId, cmd.size)
+        is WindowCommand.SetPaneColorScheme -> WindowState.setPaneColorScheme(cmd.paneId, cmd.scheme)
         is WindowCommand.SetFileBrowserAutoRefresh -> {
             // Filesystem watching is out of scope for the initial file-browser
             // cut — we just persist the flag. Reinstate a watcher here when it's
             // ported across from the old markdown implementation.
-            WindowState.setFileBrowserAutoRefresh(wid, cmd.paneId, cmd.enabled)
+            WindowState.setFileBrowserAutoRefresh(cmd.paneId, cmd.enabled)
         }
         is WindowCommand.SetFileBrowserFilter -> {
-            val updated = WindowState.setFileBrowserFilter(wid, cmd.paneId, cmd.filter)
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val updated = WindowState.setFileBrowserFilter(cmd.paneId, cmd.filter)
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             // Re-push every currently-expanded dir (plus root) under the new
             // filter so the client repaints without a follow-up round-trip.
             val toRefresh = (updated?.expandedDirs ?: emptySet()) + ""
@@ -894,8 +738,8 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             }
         }
         is WindowCommand.SetFileBrowserSort -> {
-            val updated = WindowState.setFileBrowserSort(wid, cmd.paneId, cmd.sort) ?: return
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val updated = WindowState.setFileBrowserSort(cmd.paneId, cmd.sort) ?: return
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             val toRefresh = updated.expandedDirs + ""
             for (dir in toRefresh) {
                 ctx.send(buildFileBrowserDirEnvelope(
@@ -904,7 +748,7 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             }
         }
         is WindowCommand.FileBrowserExpandAll -> {
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             val content = leaf.content as? FileBrowserContent ?: return
             val cwd = leaf.cwd
             if (cwd.isNullOrBlank()) return
@@ -915,20 +759,20 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
                     paneId = cmd.paneId, dirRelPath = dir, entries = entries,
                 ))
             }
-            WindowState.setFileBrowserExpandedAll(wid, cmd.paneId, walk.expandedDirs)
+            WindowState.setFileBrowserExpandedAll(cmd.paneId, walk.expandedDirs)
             // Truncation (cap on entries / depth) is silent so the right-pane
             // file content doesn't get clobbered by an error envelope.
         }
         is WindowCommand.FileBrowserCollapseAll -> {
-            WindowState.clearFileBrowserExpanded(wid, cmd.paneId)
+            WindowState.clearFileBrowserExpanded(cmd.paneId)
         }
         is WindowCommand.GitList -> {
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             if (leaf.content !is GitContent) return
             ctx.send(buildGitListEnvelope(cmd.paneId, leaf.cwd))
         }
         is WindowCommand.GitDiff -> {
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             if (leaf.content !is GitContent) return
             val cwd = leaf.cwd
             if (cwd.isNullOrBlank()) {
@@ -938,7 +782,7 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             val cwdPath = java.nio.file.Paths.get(cwd)
             val hunks = GitCatalog.readDiff(cwdPath, cmd.filePath)
             if (hunks == null) {
-                WindowState.setGitSelected(wid, cmd.paneId, null)
+                WindowState.setGitSelected(cmd.paneId, null)
                 ctx.send(WindowEnvelope.GitError(cmd.paneId, "Cannot read diff for ${cmd.filePath}"))
                 return
             }
@@ -952,7 +796,7 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             // For split mode, supply old and new file content.
             val oldContent = GitCatalog.readGitFile(cwdPath, cmd.filePath, "HEAD")
             val newContent = GitCatalog.readWorkingFile(cwdPath, cmd.filePath)
-            WindowState.setGitSelected(wid, cmd.paneId, cmd.filePath)
+            WindowState.setGitSelected(cmd.paneId, cmd.filePath)
             ctx.send(WindowEnvelope.GitDiffResult(
                 paneId = cmd.paneId,
                 filePath = cmd.filePath,
@@ -962,23 +806,23 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
                 newContent = newContent,
             ))
         }
-        is WindowCommand.SetGitLeftWidth -> WindowState.setGitLeftWidth(wid, cmd.paneId, cmd.px)
-        is WindowCommand.SetGitDiffMode -> WindowState.setGitDiffMode(wid, cmd.paneId, cmd.mode)
-        is WindowCommand.SetGitGraphicalDiff -> WindowState.setGitGraphicalDiff(wid, cmd.paneId, cmd.enabled)
-        is WindowCommand.SetGitDiffFontSize -> WindowState.setGitDiffFontSize(wid, cmd.paneId, cmd.size)
+        is WindowCommand.SetGitLeftWidth -> WindowState.setGitLeftWidth(cmd.paneId, cmd.px)
+        is WindowCommand.SetGitDiffMode -> WindowState.setGitDiffMode(cmd.paneId, cmd.mode)
+        is WindowCommand.SetGitGraphicalDiff -> WindowState.setGitGraphicalDiff(cmd.paneId, cmd.enabled)
+        is WindowCommand.SetGitDiffFontSize -> WindowState.setGitDiffFontSize(cmd.paneId, cmd.size)
         is WindowCommand.SetGitAutoRefresh -> {
-            val newState = WindowState.setGitAutoRefresh(wid, cmd.paneId, cmd.enabled) ?: return
+            val newState = WindowState.setGitAutoRefresh(cmd.paneId, cmd.enabled) ?: return
             if (!cmd.enabled) {
                 ctx.cancelGitWatcher(cmd.paneId)
                 return
             }
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             val cwd = leaf.cwd ?: return
             val handle = GitWatcher.register(
                 scope = ctx.scope,
                 root = java.nio.file.Paths.get(cwd),
             ) {
-                val current = WindowState.findLeaf(wid, cmd.paneId) ?: return@register
+                val current = WindowState.findLeaf(cmd.paneId) ?: return@register
                 val gitContent = current.content as? GitContent ?: return@register
                 ctx.send(buildGitListEnvelope(cmd.paneId, current.cwd))
                 // Also re-send the diff for the currently selected file.
@@ -1007,8 +851,8 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             // Inherit cwd from the pane the user triggered "new window" from
             // so the git view has a repository to inspect. Without this the
             // pane opens with cwd=null and buildGitListEnvelope returns empty.
-            val inheritedCwd = cmd.anchorPaneId?.let { WindowState.findLeaf(wid, it)?.cwd }
-            val newLeaf = WindowState.addGitToTab(wid, cmd.tabId, initialCwd = inheritedCwd)
+            val inheritedCwd = cmd.anchorPaneId?.let { WindowState.findLeaf(it)?.cwd }
+            val newLeaf = WindowState.addGitToTab(cmd.tabId, initialCwd = inheritedCwd)
             if (newLeaf != null) {
                 ctx.send(buildGitListEnvelope(newLeaf.id, newLeaf.cwd))
             }
@@ -1019,53 +863,50 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             // would catch leaks on disconnect, but doing it eagerly here
             // releases file descriptors as soon as the user expects.
             ctx.cancelGitWatcher(cmd.paneId)
-            WindowState.closePane(wid, cmd.paneId)
+            WindowState.closePane(cmd.paneId)
         }
         is WindowCommand.CloseSession -> {
-            // Close the session in every window so a linked pane in another
-            // Electron window doesn't keep the PTY alive after the user
-            // explicitly asked for it to be torn down.
-            WindowState.closeSessionEverywhere(cmd.sessionId)
+            WindowState.closeSession(cmd.sessionId)
         }
-        is WindowCommand.Rename -> WindowState.renamePane(wid, cmd.paneId, cmd.title)
-        is WindowCommand.AddTab -> WindowState.addTab(wid)
-        is WindowCommand.CloseTab -> WindowState.closeTab(wid, cmd.tabId)
-        is WindowCommand.RenameTab -> WindowState.renameTab(wid, cmd.tabId, cmd.title)
-        is WindowCommand.MoveTab -> WindowState.moveTab(wid, cmd.tabId, cmd.targetTabId, cmd.before)
-        is WindowCommand.SetTabHidden -> WindowState.setTabHidden(wid, cmd.tabId, cmd.hidden)
-        is WindowCommand.SetTabHiddenFromSidebar -> WindowState.setTabHiddenFromSidebar(wid, cmd.tabId, cmd.hidden)
+        is WindowCommand.Rename -> WindowState.renamePane(cmd.paneId, cmd.title)
+        is WindowCommand.AddTab -> WindowState.addTab()
+        is WindowCommand.CloseTab -> WindowState.closeTab(cmd.tabId)
+        is WindowCommand.RenameTab -> WindowState.renameTab(cmd.tabId, cmd.title)
+        is WindowCommand.MoveTab -> WindowState.moveTab(cmd.tabId, cmd.targetTabId, cmd.before)
+        is WindowCommand.SetTabHidden -> WindowState.setTabHidden(cmd.tabId, cmd.hidden)
+        is WindowCommand.SetTabHiddenFromSidebar -> WindowState.setTabHiddenFromSidebar(cmd.tabId, cmd.hidden)
         is WindowCommand.AddPaneToTab -> {
             // Inherit cwd from the anchor pane so a new terminal split off
             // from an existing pane starts in the same directory instead of
             // resetting to $HOME.
-            val inheritedCwd = cmd.anchorPaneId?.let { WindowState.findLeaf(wid, it)?.cwd }
-            WindowState.addPaneToTab(wid, cmd.tabId, initialCwd = inheritedCwd)
+            val inheritedCwd = cmd.anchorPaneId?.let { WindowState.findLeaf(it)?.cwd }
+            WindowState.addPaneToTab(cmd.tabId, initialCwd = inheritedCwd)
         }
         is WindowCommand.AddFileBrowserToTab -> {
             // Inherit cwd from the anchor pane so the file browser opens on
             // the user's current directory, not an empty root.
-            val inheritedCwd = cmd.anchorPaneId?.let { WindowState.findLeaf(wid, it)?.cwd }
-            val newLeaf = WindowState.addFileBrowserToTab(wid, cmd.tabId, initialCwd = inheritedCwd)
+            val inheritedCwd = cmd.anchorPaneId?.let { WindowState.findLeaf(it)?.cwd }
+            val newLeaf = WindowState.addFileBrowserToTab(cmd.tabId, initialCwd = inheritedCwd)
             if (newLeaf != null) {
                 ctx.send(buildFileBrowserDirEnvelope(newLeaf.id, newLeaf.cwd, ""))
             }
         }
-        is WindowCommand.AddLinkToTab -> WindowState.addLinkToTab(wid, cmd.tabId, cmd.targetSessionId)
+        is WindowCommand.AddLinkToTab -> WindowState.addLinkToTab(cmd.tabId, cmd.targetSessionId)
         is WindowCommand.SetPaneGeom ->
-            WindowState.setPaneGeometry(wid, cmd.paneId, cmd.x, cmd.y, cmd.width, cmd.height)
-        is WindowCommand.RaisePane -> WindowState.raisePane(wid, cmd.paneId)
-        is WindowCommand.ToggleMaximized -> WindowState.toggleMaximized(wid, cmd.paneId)
+            WindowState.setPaneGeometry(cmd.paneId, cmd.x, cmd.y, cmd.width, cmd.height)
+        is WindowCommand.RaisePane -> WindowState.raisePane(cmd.paneId)
+        is WindowCommand.ToggleMaximized -> WindowState.toggleMaximized(cmd.paneId)
         is WindowCommand.ApplyLayout ->
-            WindowState.applyLayout(wid, cmd.tabId, cmd.layout, cmd.primaryPaneId)
-        is WindowCommand.MovePaneToTab -> WindowState.movePaneToTab(wid, cmd.paneId, cmd.targetTabId)
-        is WindowCommand.SwapPanes -> WindowState.swapPanes(wid, cmd.paneAId, cmd.paneBId)
-        is WindowCommand.SetActiveTab -> WindowState.setActiveTab(wid, cmd.tabId)
-        is WindowCommand.SetFocusedPane -> WindowState.setFocusedPane(wid, cmd.tabId, cmd.paneId)
+            WindowState.applyLayout(cmd.tabId, cmd.layout, cmd.primaryPaneId)
+        is WindowCommand.MovePaneToTab -> WindowState.movePaneToTab(cmd.paneId, cmd.targetTabId)
+        is WindowCommand.SwapPanes -> WindowState.swapPanes(cmd.paneAId, cmd.paneBId)
+        is WindowCommand.SetActiveTab -> WindowState.setActiveTab(cmd.tabId)
+        is WindowCommand.SetFocusedPane -> WindowState.setFocusedPane(cmd.tabId, cmd.paneId)
         is WindowCommand.SetStateOverride -> TerminalSessions.setStateOverride(cmd.sessionId, cmd.mode)
         is WindowCommand.OpenSettings -> SettingsDialog.show(ctx.settingsRepo)
         is WindowCommand.RefreshUsage -> ctx.usageMonitor.requestRefresh()
         is WindowCommand.GetWorktreeDefaults -> {
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             val cwd = leaf.cwd
             if (cwd.isNullOrBlank()) {
                 ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "No working directory for this pane"))
@@ -1093,7 +934,7 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             ))
         }
         is WindowCommand.CreateWorktree -> {
-            val leaf = WindowState.findLeaf(wid, cmd.paneId) ?: return
+            val leaf = WindowState.findLeaf(cmd.paneId) ?: return
             val cwd = leaf.cwd
             if (cwd.isNullOrBlank()) {
                 ctx.send(WindowEnvelope.WorktreeError(cmd.paneId, "No working directory for this pane"))
@@ -1164,9 +1005,9 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
             // keystrokes go to the TUI's stdin instead of the shell sitting
             // behind it.
             val newCwd = worktreePath.toAbsolutePath().toString()
-            val hostTabId = WindowState.tabIdOfPane(wid, cmd.paneId)
+            val hostTabId = WindowState.tabIdOfPane(cmd.paneId)
             if (hostTabId != null) {
-                WindowState.addPaneToTab(wid, hostTabId, initialCwd = newCwd)
+                WindowState.addPaneToTab(hostTabId, initialCwd = newCwd)
             }
             ctx.send(WindowEnvelope.WorktreeCreated(paneId = cmd.paneId, newCwd = newCwd))
         }

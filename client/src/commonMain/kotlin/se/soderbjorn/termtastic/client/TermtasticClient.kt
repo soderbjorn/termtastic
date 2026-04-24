@@ -108,24 +108,13 @@ class TermtasticClient(
     }
 
     /**
-     * Open (or return) a websocket to `/window` for the given window id.
-     *
-     * The returned [WindowSocket] is hot: the `config` / `states` StateFlows
-     * start emitting as soon as the server pushes the first envelopes. Call
-     * [WindowSocket.close] to tear down the socket and its coroutine.
-     *
-     * The window id is what namespaces every piece of state coming over the
-     * wire — the `Config` envelope, the `UiSettings` envelope, and the
-     * per-window-scoped [se.soderbjorn.termtastic.WindowCommand]s. Each
-     * Electron main BrowserWindow has its own window id (assigned by
-     * electron/main.js and passed to the Kotlin/JS renderer via the URL's
-     * `?window=<id>` query param). The plain-browser client and the Android
-     * app default to `"primary"`.
-     *
-     * @param windowId the client-assigned window id to pin this socket to.
+     * Open (or return) a websocket to `/window`. The returned [WindowSocket]
+     * is hot: the `config` / `states` StateFlows start emitting as soon as the
+     * server pushes the first envelopes. Call [WindowSocket.close] to tear
+     * down the socket and its coroutine.
      */
-    fun openWindowSocket(windowId: String = "primary"): WindowSocket =
-        WindowSocket(client = this, path = "/window", windowId = windowId)
+    fun openWindowSocket(): WindowSocket =
+        WindowSocket(client = this, path = "/window")
 
     /**
      * Open a websocket to `/pty/{sessionId}`. Emits the 64 KB ring-buffer
@@ -135,18 +124,12 @@ class TermtasticClient(
         PtySocket(client = this, sessionId = sessionId)
 
     /**
-     * URL helper that appends `?auth=<token>` (plus client metadata and,
-     * optionally, the window id) for websocket endpoints. The server's
-     * readAuthToken looks at cookie → query → header in that order, so this
-     * wins even in environments where cookie jars don't cooperate with
-     * upgrade requests.
-     *
-     * @param path     the endpoint path, e.g. `/window` or `/pty/s12`.
-     * @param windowId if non-null, appended as `&window=<id>` so the server
-     *   routes this socket's commands to the given window's state slot.
-     *   PTY sockets pass null; the `/window` socket passes its pinned id.
+     * URL helper that appends `?auth=<token>` for websocket endpoints. The
+     * server's readAuthToken looks at cookie → query → header in that order,
+     * so this wins even in environments where cookie jars don't cooperate
+     * with upgrade requests.
      */
-    internal fun wsUrlWithAuth(path: String, windowId: String? = null): String {
+    internal fun wsUrlWithAuth(path: String): String {
         val sb = StringBuilder(serverUrl.wsUrl(path))
         sb.append("?auth=").append(urlEncode(authToken))
         sb.append("&clientType=").append(urlEncode(identity.type))
@@ -155,9 +138,6 @@ class TermtasticClient(
         }
         identity.selfReportedIp?.takeIf { it.isNotBlank() }?.let {
             sb.append("&clientIp=").append(urlEncode(it))
-        }
-        windowId?.takeIf { it.isNotBlank() }?.let {
-            sb.append("&window=").append(urlEncode(it))
         }
         return sb.toString()
     }
