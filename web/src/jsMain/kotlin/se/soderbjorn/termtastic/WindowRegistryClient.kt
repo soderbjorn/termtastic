@@ -55,35 +55,63 @@ internal fun readWindowIdFromUrl(): String {
  * and the Electron local mirror is the authoritative source for the
  * cold-start restore path.
  *
+ * Enriches the payload with the Electron display id when the preload
+ * bridge exposes it: the server stashes the value opaquely so a later
+ * admin UI or the Electron main process (via its own mirror) can place
+ * the window back on the same physical monitor after a restart.
+ *
  * @param id the client-assigned window id (see [readWindowIdFromUrl])
  */
 internal fun reportWindowGeometry(id: String) {
-    // window.screenX/screenY and outerWidth/outerHeight give the full
-    // BrowserWindow bounds in screen pixels. Electron exposes these in
-    // the renderer context without further plumbing.
-    val payload = json(
-        "id" to id,
-        "x" to (window.asDynamic().screenX as? Number ?: 0),
-        "y" to (window.asDynamic().screenY as? Number ?: 0),
-        "width" to (window.asDynamic().outerWidth as? Number ?: window.innerWidth),
-        "height" to (window.asDynamic().outerHeight as? Number ?: window.innerHeight),
-        "displayId" to null,
-        "updatedAt" to 0,
-    )
-    val init: dynamic = js("({})")
-    init.method = "POST"
-    init.headers = json(
-        "Content-Type" to "application/json",
-        "X-Termtastic-Auth" to authTokenForSending(),
-        "X-Termtastic-Client-Type" to clientTypeAtStart,
-    )
-    init.body = JSON.stringify(payload)
-    init.keepalive = true
-    try {
-        window.fetch("/api/windows", init)
-    } catch (_: Throwable) {
-        // Cosmetic — the server-side registry is best-effort from the
-        // renderer; Electron's local mirror is the restore source of truth.
+    // Kick off the display-id probe first so the POST body picks up the
+    // result without another round-trip. Non-Electron clients skip the
+    // probe entirely — `electronApi` is undefined there.
+    val electronApi = window.asDynamic().electronApi
+    val displayPromise: dynamic = if (electronApi != null && electronApi.getCurrentWindowDisplayId != null) {
+        try { electronApi.getCurrentWindowDisplayId() } catch (_: Throwable) { null }
+    } else null
+
+    fun postGeometry(displayId: String?) {
+        // window.screenX/screenY and outerWidth/outerHeight give the full
+        // BrowserWindow bounds in screen pixels. Electron exposes these
+        // in the renderer context without further plumbing.
+        val payload = json(
+            "id" to id,
+            "x" to (window.asDynamic().screenX as? Number ?: 0),
+            "y" to (window.asDynamic().screenY as? Number ?: 0),
+            "width" to (window.asDynamic().outerWidth as? Number ?: window.innerWidth),
+            "height" to (window.asDynamic().outerHeight as? Number ?: window.innerHeight),
+            "displayId" to displayId,
+            "updatedAt" to 0,
+        )
+        val init: dynamic = js("({})")
+        init.method = "POST"
+        init.headers = json(
+            "Content-Type" to "application/json",
+            "X-Termtastic-Auth" to authTokenForSending(),
+            "X-Termtastic-Client-Type" to clientTypeAtStart,
+        )
+        init.body = JSON.stringify(payload)
+        init.keepalive = true
+        try {
+            window.fetch("/api/windows", init)
+        } catch (_: Throwable) {
+            // Cosmetic — the server-side registry is best-effort from the
+            // renderer; Electron's local mirror is the restore source of truth.
+        }
+    }
+
+    if (displayPromise != null) {
+        try {
+            displayPromise.then({ value: dynamic ->
+                val asString = value as? String
+                postGeometry(asString)
+            }).catch({ _: dynamic -> postGeometry(null) })
+        } catch (_: Throwable) {
+            postGeometry(null)
+        }
+    } else {
+        postGeometry(null)
     }
 }
 

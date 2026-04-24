@@ -12,7 +12,7 @@
  *   recreate window on dock click).
  */
 
-const { app, BrowserWindow, Menu, globalShortcut, ipcMain, session } = require("electron");
+const { app, BrowserWindow, Menu, globalShortcut, ipcMain, screen, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
@@ -151,7 +151,7 @@ function windowsMirrorPath() {
 /**
  * Load the mirrored registry from disk.
  *
- * @returns {Array<{id:string,x:number,y:number,width:number,height:number}>}
+ * @returns {Array<{id:string,x:number,y:number,width:number,height:number,displayId?:string}>}
  *   list of previously-open windows, or empty on first launch / malformed file
  */
 function loadWindowsMirror() {
@@ -162,6 +162,83 @@ function loadWindowsMirror() {
     return parsed.filter((e) => e && typeof e.id === "string");
   } catch (_) {
     return [];
+  }
+}
+
+/**
+ * Clamp a persisted window rect onto a still-attached Electron display.
+ *
+ * If the user last left the window on a monitor that has since been
+ * disconnected, restoring with the original `x`/`y` would place the
+ * BrowserWindow offscreen and the user would never see it. This helper
+ * first tries to find a display matching the persisted `displayId`; if
+ * that display is gone, it re-centres the rectangle on the primary
+ * display while preserving the window's size.
+ *
+ * `screen` requires `app.whenReady()` to have resolved, so this helper
+ * is only safe to call from the restore path (which always runs after
+ * the ready event).
+ *
+ * @param {{id:string,x:number,y:number,width:number,height:number,displayId?:string}} entry
+ * @returns {{x:number,y:number,width:number,height:number}} bounds safe to pass to BrowserWindow
+ */
+function clampEntryToAttachedDisplay(entry) {
+  const width = Math.max(320, Number.isFinite(entry.width) ? entry.width : 1280);
+  const height = Math.max(240, Number.isFinite(entry.height) ? entry.height : 800);
+  const x = Number.isFinite(entry.x) ? entry.x : null;
+  const y = Number.isFinite(entry.y) ? entry.y : null;
+  try {
+    const displays = screen.getAllDisplays();
+    // If we have a displayId hint, honour it first — it's the cheapest way
+    // to land the window back on the intended monitor, and it survives
+    // changing external-display arrangements that shift the global
+    // coordinate system.
+    if (entry.displayId) {
+      const match = displays.find((d) => String(d.id) === String(entry.displayId));
+      if (match) {
+        // Keep the original (x, y) if they still land on that display;
+        // otherwise re-centre the window within the display's workArea.
+        const wa = match.workArea;
+        const xOnDisplay = x !== null && x >= wa.x && x + width <= wa.x + wa.width;
+        const yOnDisplay = y !== null && y >= wa.y && y + height <= wa.y + wa.height;
+        if (xOnDisplay && yOnDisplay) return { x, y, width, height };
+        return {
+          x: Math.round(wa.x + (wa.width - width) / 2),
+          y: Math.round(wa.y + (wa.height - height) / 2),
+          width,
+          height,
+        };
+      }
+      // Fall through: persisted display is no longer attached.
+    }
+    // No hint, or hint stale. If (x,y) still live inside some attached
+    // display, trust them. Otherwise re-centre on the primary display.
+    if (x !== null && y !== null) {
+      const covering = displays.find((d) =>
+        x >= d.workArea.x &&
+        y >= d.workArea.y &&
+        x + width <= d.workArea.x + d.workArea.width &&
+        y + height <= d.workArea.y + d.workArea.height
+      );
+      if (covering) return { x, y, width, height };
+    }
+    const primary = screen.getPrimaryDisplay();
+    return {
+      x: Math.round(primary.workArea.x + (primary.workArea.width - width) / 2),
+      y: Math.round(primary.workArea.y + (primary.workArea.height - height) / 2),
+      width,
+      height,
+    };
+  } catch (_) {
+    // `screen` unavailable — fall back to the persisted bounds verbatim
+    // and let Electron clamp them if it must. This is the pre-monitor-
+    // tracking behaviour.
+    return {
+      x: x !== null ? x : undefined,
+      y: y !== null ? y : undefined,
+      width,
+      height,
+    };
   }
 }
 
@@ -184,17 +261,60 @@ function saveWindowsMirror(entries) {
 }
 
 /**
+ * Resolve the Electron display id a given bounds rectangle is anchored to.
+ *
+ * `screen.getDisplayMatching()` returns the Display whose bounds contain
+ * most of the rectangle — the correct answer for restore-on-next-launch
+ * because it snaps a window that the user last left on a secondary
+ * monitor back to that same monitor, even if it's been disconnected and
+ * reconnected. `screen` is only available after `app.whenReady()`, so
+ * callers that run earlier than that should guard against it being
+ * uninitialised (the helper returns `null` when `screen` throws).
+ *
+ * Falls back to `null` on any failure so a transient Electron error
+ * doesn't wedge the lifecycle persist path.
+ *
+ * @param {{x:number,y:number,width:number,height:number}} bounds
+ * @returns {string|null} the display id as a string, or null on failure
+ */
+function displayIdForBounds(bounds) {
+  try {
+    if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return null;
+    const d = screen.getDisplayMatching({
+      x: bounds.x,
+      y: bounds.y,
+      width: Math.max(1, bounds.width || 1),
+      height: Math.max(1, bounds.height || 1),
+    });
+    return d && typeof d.id !== "undefined" ? String(d.id) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * Serialise every currently-live BrowserWindow into the mirror file.
  *
  * Called on any lifecycle event (create/move/resize/close) so the mirror
  * is never more than one event stale.
+ *
+ * The persisted entry includes the Electron display id so cold-start
+ * restore can clamp the window back onto the same physical monitor (at
+ * least when that monitor is still attached).
  */
 function persistWindowsMirror() {
   const out = [];
   for (const [id, win] of mainWindows) {
     if (win.isDestroyed()) continue;
     const b = win.getBounds();
-    out.push({ id, x: b.x, y: b.y, width: b.width, height: b.height });
+    out.push({
+      id,
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      displayId: displayIdForBounds(b),
+    });
   }
   saveWindowsMirror(out);
 }
@@ -519,25 +639,33 @@ function buildAppMenu() {
           label: "New Window",
           accelerator: "CmdOrCtrl+N",
           click: () => {
-            // Opens an additional main window with a fresh window id. The
-            // renderer reads `?window=<id>` from the URL and will
-            // eventually use that id to key per-window state — tabs,
-            // theme, sidebar widths — against the server. For now every
-            // window shares the same WindowState singleton, so the new
-            // window opens on the same tabs as the rest. See the
-            // "follow-ups" section of the PR for the per-window state
-            // split-out.
+            // Open an additional main window with a fresh window id. The
+            // renderer reads `?window=<id>` from the URL and routes every
+            // piece of per-window state — tabs, theme, sidebar widths —
+            // through the server under that id, so a new window comes up
+            // with its own clean slate (tabs default to "Tab 1", theme
+            // to the project default) until the user customises it.
             const win = createWindow();
             win.focus();
           },
         },
+        { type: "separator" },
+        {
+          // "Close Window" on both platforms — maps to `close` (not
+          // `quit`) so Cmd/Ctrl+W closes just the focused window, and
+          // the remaining windows keep running. On macOS this mirrors
+          // the Safari/Finder convention; on Windows/Linux it matches
+          // the typical browser File-menu shape.
+          label: "Close Window",
+          accelerator: "CmdOrCtrl+W",
+          role: "close",
+        },
         ...(isMac
-          ? [
-              { type: "separator" },
-              { role: "close" },
-            ]
+          ? []
           : [
               { type: "separator" },
+              // Non-Mac platforms keep Quit in the File menu per
+              // convention (Mac puts it in the app menu).
               { role: "quit" },
             ]),
       ],
@@ -608,6 +736,26 @@ ipcMain.handle("set-window-background-color", (event, color) => {
   if (typeof color !== "string" || !color) return;
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win && !win.isDestroyed()) win.setBackgroundColor(color);
+});
+
+/**
+ * IPC handler: reply with the Electron display id the sender's
+ * BrowserWindow currently lives on. Consumed by the Kotlin/JS
+ * `WindowRegistryClient` so server-persisted registry entries record the
+ * monitor a window was last seen on; the next cold start uses that hint
+ * to place the window back on the same physical display.
+ *
+ * @param {Electron.IpcMainEvent} event  IPC event (sender identifies window).
+ * @returns {string|null}               display id, or null on failure.
+ */
+ipcMain.handle("get-current-window-display-id", (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return null;
+    return displayIdForBounds(win.getBounds());
+  } catch (_) {
+    return null;
+  }
 });
 
 /**
@@ -974,14 +1122,13 @@ function restoreOrCreateWindows() {
   }
   let last = null;
   for (const entry of mirror) {
+    // Clamp to a still-attached display. Without this, a window last
+    // seen on a second monitor that has since been unplugged would open
+    // offscreen and be invisible to the user.
+    const bounds = clampEntryToAttachedDisplay(entry);
     last = createWindow({
       windowId: entry.id,
-      bounds: {
-        x: entry.x,
-        y: entry.y,
-        width: entry.width,
-        height: entry.height,
-      },
+      bounds,
     });
   }
   return last;

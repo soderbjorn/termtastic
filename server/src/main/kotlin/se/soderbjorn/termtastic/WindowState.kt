@@ -1,11 +1,12 @@
 /**
- * Window, tab, and pane state management for Termtastic.
+ * Per-window tab/pane state management for Termtastic.
  *
- * This file contains the [WindowState] singleton, which is the authoritative
- * source of truth for the entire window layout: tabs, the free-form list of
- * panes in each tab, and the per-pane file-browser and git state. Every
- * mutation flows through this object so the resulting [WindowConfig]
- * StateFlow is the single stream clients subscribe to.
+ * This file contains the [WindowState] registry, which owns one [WindowSlot]
+ * per Electron main BrowserWindow. Each slot has its own [WindowConfig]
+ * [kotlinx.coroutines.flow.StateFlow] containing that window's tabs, panes,
+ * file-browser and git state. Every mutation flows through a windowId-
+ * addressed entry point so the `/window` WebSocket for a specific window only
+ * observes the state of that one window.
  *
  * Also contains helper functions:
  *  - [prettifyPath] -- collapses `$HOME` to `~` for display titles.
@@ -13,10 +14,16 @@
  *  - [WindowConfig.withBlankSessionIds] -- strips live PTY ids before
  *    persisting to SQLite.
  *
- * Mutations are synchronized and emit new [WindowConfig] snapshots that the
- * `/window` WebSocket pushes to all connected clients. The debounced
- * persistence writer in [Application.main] picks up changes and writes them
- * to SQLite.
+ * PTY [TerminalSessions] are process-global, not window-scoped: a session can
+ * be linked from panes in multiple windows, and is destroyed only when no
+ * window references it anywhere. Pane and tab ids are also globally unique
+ * across all windows (shared counters in this object) so an id can be
+ * authoritatively traced back to exactly one window.
+ *
+ * Persistence layout (no backwards compat with the old single-window v3
+ * blob — issue #18 explicitly drops that):
+ *  - `windows.known` — JSON-encoded list of windowIds with persisted state.
+ *  - `window.config.v4.<id>` — one [WindowConfig] blob per window id.
  *
  * @see WindowConfig
  * @see TabConfig
@@ -24,25 +31,39 @@
  * @see PaneGeometry the snap/clamp utility every geometry mutation routes through
  * @see TerminalSessions
  * @see SettingsRepository
+ * @see WindowRegistry the sibling registry that tracks Electron BrowserWindow geometry
  */
 package se.soderbjorn.termtastic
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import se.soderbjorn.termtastic.persistence.SettingsRepository
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
 
 // The @Serializable data classes (WindowConfig, TabConfig, Pane, LeafNode,
-// LeafContent + subclasses) live in the :clientServer KMP
-// module so the web and android clients can deserialize the same wire types
-// the server produces. See clientServer/src/commonMain/kotlin/se/soderbjorn/termtastic/.
+// LeafContent + subclasses) live in the :clientServer KMP module so the web
+// and android clients can deserialize the same wire types the server
+// produces. See clientServer/src/commonMain/kotlin/se/soderbjorn/termtastic/.
 //
 // The mutation logic (the WindowState object below) stays server-side since
 // it touches TerminalSessions, the SQLite persistence layer, and live PTYs.
 
+
+/**
+ * Default windowId used by clients that don't assert one. The plain-browser
+ * client (no Electron wrapper) and the Android app both sit here. The
+ * Electron renderer always supplies its own id via the `?window=<id>` URL
+ * query param assigned by [electron/main.js], so this default only ever
+ * covers the non-Electron cases.
+ */
+const val PRIMARY_WINDOW_ID: String = "primary"
 
 /**
  * Collapse `$HOME` to `~` in [path] for display. Anything else is left intact —
@@ -95,67 +116,119 @@ internal fun WindowConfig.withBlankSessionIds(): WindowConfig {
 }
 
 /**
- * Process-wide window state. All mutations funnel through here so the
- * resulting [config] flow is the only source clients need to subscribe to.
+ * Process-wide window state registry. All mutations funnel through here so
+ * each window's [config] flow is the single source clients need to subscribe
+ * to.
  *
- * Mutations are guarded by `synchronized(this)` because the cost of contention
- * is negligible (commands are infrequent and human-driven) and the alternative
- * — reasoning about reentrant locks while we also create/destroy PTYs — isn't
- * worth it for the volume.
+ * Mutations are guarded per-window by `synchronized(slot)`. The volume of
+ * window-state mutations is tiny (human-driven clicks and drags) so
+ * contention is negligible; the alternative — reasoning about reentrant
+ * locks while we also create/destroy PTYs — isn't worth it for the volume.
+ *
+ * PTY session destruction needs a **global** view across every window,
+ * because a terminal pane in window A and a linked pane in window B may
+ * reference the same session id. The guard against premature shutdown is
+ * [isSessionReferencedAnywhere], consulted by every code path that would
+ * otherwise call [TerminalSessions.destroy].
  */
 object WindowState {
     private val log = LoggerFactory.getLogger(WindowState::class.java)
 
+    // Counters are singleton — shared across every window — so pane/tab ids
+    // are globally unique. That means `findLeaf(paneId)` can traverse a
+    // single window's tabs (the one owning the pane) and we never risk two
+    // different windows handing back the same id.
     private val nodeIdCounter = AtomicLong(0)
     private val tabIdCounter = AtomicLong(0)
 
     private fun newNodeId(): String = "n${nodeIdCounter.incrementAndGet()}"
     private fun newTabId(): String = "t${tabIdCounter.incrementAndGet()}"
 
-    // Starts empty; [initialize] populates it from disk or [buildDefault] on
-    // first boot. Keeping the flow empty until initialize() runs avoids
-    // creating throwaway PTYs that the loaded config would immediately replace.
-    private val _config: MutableStateFlow<WindowConfig> = MutableStateFlow(WindowConfig(emptyList()))
-    val config: StateFlow<WindowConfig> = _config.asStateFlow()
+    /**
+     * Per-window state slot. Each Electron main BrowserWindow owns one of
+     * these, keyed by windowId. The [config] flow is what the `/window`
+     * WebSocket for that window subscribes to.
+     */
+    class WindowSlot internal constructor(val windowId: String, initial: WindowConfig) {
+        internal val _config = MutableStateFlow(initial)
+        /** Live config snapshot for this window. */
+        val config: StateFlow<WindowConfig> = _config.asStateFlow()
+    }
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    // The map is populated on [initialize]; mutated only by [getOrCreate]
+    // / [remove], which synchronize on the object. Reads are wait-free.
+    private val slots = ConcurrentHashMap<String, WindowSlot>()
+
+    @Volatile
+    private var repo: SettingsRepository? = null
 
     @Volatile
     private var initialized: Boolean = false
 
+    private const val KNOWN_WINDOWS_KEY = "windows.known"
+    private const val WINDOW_CONFIG_PREFIX = "window.config.v4."
+
+    private fun knownWindowsKey() = KNOWN_WINDOWS_KEY
+    private fun configKeyFor(id: String) = "$WINDOW_CONFIG_PREFIX$id"
+
     /**
-     * One-shot bootstrap: try to restore the persisted window config, otherwise
-     * fall back to a fresh default. Must be called from `main()` exactly once,
-     * before any other access to [config].
+     * One-shot bootstrap. Called from [main] exactly once before any HTTP
+     * route is served so the first `/window` subscribe for any known
+     * windowId immediately sees the persisted state.
      *
-     * On a successful restore, persisted leaf [LeafNode.sessionId]s are
-     * discarded (they refer to PTYs from a previous process) and replaced with
-     * freshly minted [TerminalSessions]. Tab order, titles, and pane geometry
-     * are preserved verbatim.
+     * Discovers known windows from the `windows.known` index, then loads
+     * each one's blob. If neither the index nor any per-window blob
+     * exists, materialises a single [PRIMARY_WINDOW_ID] slot with a fresh
+     * default config so the server is always usable on first boot.
+     *
+     * Note: this deliberately does not fall back to the old
+     * `window.config.v3` key — issue #18 dropped backwards compatibility
+     * with the single-window schema.
+     *
+     * @param repo the settings repository to read/write per-window blobs
      */
     @Synchronized
     fun initialize(repo: SettingsRepository) {
         if (initialized) return
         initialized = true
+        this.repo = repo
 
-        val loaded = repo.loadWindowConfig()
-        val cfg = if (loaded != null && loaded.tabs.isNotEmpty()) {
-            try {
-                rehydrate(loaded, repo)
-            } catch (t: Throwable) {
-                log.warn("Failed to rehydrate persisted window config; using default", t)
-                buildDefault()
-            }
+        val knownIds = loadKnownWindowIds(repo)
+        if (knownIds.isEmpty()) {
+            // Fresh install (or a user who dropped their settings DB). Create
+            // the primary window with a default config; the renderer that
+            // connects first will flesh it out via commands.
+            val primary = WindowSlot(PRIMARY_WINDOW_ID, buildDefault())
+            slots[PRIMARY_WINDOW_ID] = primary
+            persistKnownWindowIds()
+            persist(primary)
         } else {
-            buildDefault()
+            for (id in knownIds) {
+                val loaded = loadWindowConfig(repo, id)
+                val cfg = if (loaded != null && loaded.tabs.isNotEmpty()) {
+                    try {
+                        rehydrate(loaded, repo)
+                    } catch (t: Throwable) {
+                        log.warn("Failed to rehydrate persisted config for window $id; using default", t)
+                        buildDefault()
+                    }
+                } else {
+                    buildDefault()
+                }
+                slots[id] = WindowSlot(id, cfg)
+            }
         }
-        _config.value = cfg
 
-        // GC stored scrollback for leaves that no longer exist in the tree
-        // (closed panes from previous sessions). Done after cfg is committed
-        // so we GC against the authoritative post-rehydrate leaf set.
+        // GC stored scrollback for leaves that no longer exist in ANY window
+        // — a scrollback row keyed by a dead leaf id just wastes disk.
         runCatching {
             val live = HashSet<String>()
-            for (tab in cfg.tabs) {
-                tab.panes.forEach { live.add(it.leaf.id) }
+            for (slot in slots.values) {
+                for (tab in slot._config.value.tabs) {
+                    tab.panes.forEach { live.add(it.leaf.id) }
+                }
             }
             for (stale in repo.allScrollbackLeafIds() - live) {
                 repo.deleteScrollback(stale)
@@ -164,23 +237,137 @@ object WindowState {
     }
 
     /**
-     * Walk a freshly-loaded config and:
-     *  1. mint a new [TerminalSessions] for every leaf, replacing the stale id;
-     *  2. retarget the node/tab id counters past the highest persisted ids so
-     *     subsequent panes/tabs don't collide.
+     * Return (or lazily create) the [WindowSlot] for [windowId]. Creating a
+     * slot persists it to [KNOWN_WINDOWS_KEY] and flushes a default config
+     * for it so subsequent process restarts rediscover the window.
+     *
+     * Called by every public mutation/query entry point and by the
+     * `/window` WebSocket handler when a renderer connects with a fresh
+     * `?window=<id>` it hasn't reported before.
+     *
+     * @param windowId the client-assigned window id
+     * @return the existing or newly-materialised slot
+     */
+    fun getOrCreateSlot(windowId: String): WindowSlot {
+        val existing = slots[windowId]
+        if (existing != null) return existing
+        synchronized(this) {
+            val again = slots[windowId]
+            if (again != null) return again
+            val slot = WindowSlot(windowId, buildDefault())
+            slots[windowId] = slot
+            persistKnownWindowIds()
+            persist(slot)
+            return slot
+        }
+    }
+
+    /**
+     * Return the current [WindowConfig] for [windowId]. Materialises the
+     * slot lazily if it didn't already exist.
+     */
+    fun config(windowId: String): StateFlow<WindowConfig> = getOrCreateSlot(windowId).config
+
+    /**
+     * List every known windowId (slots currently alive in memory). Used by
+     * the persistence saver to iterate across every window without caring
+     * about the registry.
+     */
+    fun knownWindowIds(): List<String> = slots.keys.toList()
+
+    /**
+     * Remove a slot and delete its persisted blob. Called when the user
+     * closes an Electron BrowserWindow (the renderer's
+     * `DELETE /api/windows/{id}` path).
+     *
+     * Destroys PTY sessions that only that window referenced. Sessions
+     * referenced by other windows keep running.
+     *
+     * @param windowId the window id being dropped
+     * @return `true` if an entry existed and was removed
+     */
+    fun removeWindow(windowId: String): Boolean {
+        val r = repo
+        val removed = synchronized(this) {
+            val slot = slots.remove(windowId) ?: return@synchronized null
+            slot
+        } ?: return false
+        // Collect sessions that *were* referenced only by this window.
+        val orphaned = collectSessionIds(removed._config.value) - collectSessionIdsAcrossLiveSlots()
+        orphaned.forEach { TerminalSessions.destroy(it) }
+        if (r != null) {
+            runCatching { r.putString(configKeyFor(windowId), "") }
+            persistKnownWindowIds()
+        }
+        return true
+    }
+
+    // ---- persistence helpers -------------------------------------------------
+
+    private fun loadKnownWindowIds(repo: SettingsRepository): List<String> {
+        val raw = repo.getString(KNOWN_WINDOWS_KEY) ?: return emptyList()
+        return runCatching {
+            json.decodeFromString(ListSerializer(String.serializer()), raw)
+        }.getOrElse {
+            log.warn("Failed to decode $KNOWN_WINDOWS_KEY; starting empty", it)
+            emptyList()
+        }
+    }
+
+    private fun persistKnownWindowIds() {
+        val r = repo ?: return
+        val ids = slots.keys.sorted()
+        val encoded = json.encodeToString(ListSerializer(String.serializer()), ids)
+        runCatching { r.putString(KNOWN_WINDOWS_KEY, encoded) }
+            .onFailure { log.warn("Failed to persist known windows index", it) }
+    }
+
+    private fun loadWindowConfig(repo: SettingsRepository, windowId: String): WindowConfig? {
+        val raw = repo.getString(configKeyFor(windowId))?.takeIf { it.isNotBlank() } ?: return null
+        return runCatching { windowJson.decodeFromString(WindowConfig.serializer(), raw) }
+            .getOrElse {
+                log.warn("Failed to decode window config for $windowId; using default", it)
+                null
+            }
+    }
+
+    /**
+     * Write the given slot's current (blanked) config to the k/v store.
+     * Called on slot creation / removal and by [persistAll] from the
+     * debounced saver in [Application.main].
+     */
+    internal fun persist(slot: WindowSlot) {
+        val r = repo ?: return
+        val blanked = slot._config.value.withBlankSessionIds()
+        val encoded = windowJson.encodeToString(WindowConfig.serializer(), blanked)
+        runCatching { r.putString(configKeyFor(slot.windowId), encoded) }
+            .onFailure { log.warn("Failed to persist window config for ${slot.windowId}", it) }
+    }
+
+    /**
+     * Persist every live window to SQLite. Triggered by the debounced
+     * saver in [Application.main] whenever any window's config flow emits.
+     */
+    suspend fun persistAllBlocking() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        for (slot in slots.values) persist(slot)
+    }
+
+    /**
+     * Rehydrate a freshly-loaded config:
+     *  1. mint a new [TerminalSessions] for every terminal leaf, replacing
+     *     the stale id (the persisted sessionId referred to a PTY from a
+     *     previous JVM process);
+     *  2. retarget the node/tab id counters past the highest persisted ids
+     *     so subsequent panes/tabs across all windows don't collide.
      */
     private fun rehydrate(loaded: WindowConfig, repo: SettingsRepository): WindowConfig {
-        var maxNodeId = 0L
-        var maxTabId = 0L
+        var maxNodeId = nodeIdCounter.get()
+        var maxTabId = tabIdCounter.get()
 
         fun trackNodeId(id: String) {
             id.removePrefix("n").toLongOrNull()?.let { if (it > maxNodeId) maxNodeId = it }
         }
 
-        // Walking a persisted leaf: terminal leaves get a freshly spawned PTY
-        // (the persisted sessionId is dead — the previous process owned it).
-        // Legacy leaves with `content == null` are treated as terminal so old
-        // blobs round-trip unchanged.
         fun rebuildLeaf(leaf: LeafNode): LeafNode {
             trackNodeId(leaf.id)
             return when (leaf.content) {
@@ -206,14 +393,9 @@ object WindowState {
             tab.copy(panes = rebuiltPanes)
         }
 
-        // Counters use incrementAndGet, so set them to the current max — the
-        // next call returns max+1.
         nodeIdCounter.set(maxNodeId)
         tabIdCounter.set(maxTabId)
 
-        // Validate the persisted activeTabId / focusedPaneId references —
-        // anything that no longer exists gets cleared so the client falls back
-        // cleanly to the first tab / first pane.
         val tabIdSet = rebuiltTabs.map { it.id }.toSet()
         val validatedActive = loaded.activeTabId?.takeIf { it in tabIdSet }
         val sanitizedTabs = rebuiltTabs.map { tab ->
@@ -224,11 +406,7 @@ object WindowState {
         return WindowConfig(tabs = sanitizedTabs, activeTabId = validatedActive)
     }
 
-
     private fun buildDefault(): WindowConfig {
-        // A fresh window starts with a single tab containing a single pane at
-        // a snap-aligned medium position/size. Users can create more panes from
-        // the new-window icon in the header.
         val s1 = TerminalSessions.create()
         val leaf = LeafNode(
             id = newNodeId(),
@@ -253,11 +431,6 @@ object WindowState {
         return WindowConfig(listOf(tab1))
     }
 
-    /**
-     * Pick a random `(x, y)` origin on the 10% grid for a new pane of [size]
-     * so the pane stays fully inside the tab area. Used by every "add pane"
-     * entry point (new-window icon, empty-tab placeholder, cross-tab move).
-     */
     private fun randomSnappedOrigin(size: Double = PaneGeometry.DEFAULT_SIZE): Pair<Double, Double> {
         val maxSteps = ((1.0 - size) / PaneGeometry.SNAP).toInt().coerceAtLeast(0)
         val sx = Random.nextInt(0, maxSteps + 1) * PaneGeometry.SNAP
@@ -265,250 +438,209 @@ object WindowState {
         return sx to sy
     }
 
-    /** Next available z in [tab]'s stacking order. */
     private fun nextZ(tab: TabConfig): Long =
         (tab.panes.maxOfOrNull { it.z } ?: 0L) + 1L
 
-    /**
-     * Return [tab] with every pane's `maximized` flag cleared. Adding a new
-     * pane to a tab that already has one maximized would otherwise leave
-     * the new pane hidden behind the full-screen sibling; demoting first
-     * makes the new pane immediately visible.
-     */
     private fun demoteMaximized(tab: TabConfig): TabConfig {
         if (tab.panes.none { it.maximized }) return tab
         return tab.copy(panes = tab.panes.map { if (it.maximized) it.copy(maximized = false) else it })
     }
 
-    /**
-     * Create a new tab with a single terminal pane and append it to the tab list.
-     * The new pane gets a fresh PTY session.
-     */
-    fun addTab() = synchronized(this) {
-        val cfg = _config.value
-        val sessionId = TerminalSessions.create()
-        val nextNumber = cfg.tabs.size + 1
-        val leaf = LeafNode(
-            id = newNodeId(),
-            sessionId = sessionId,
-            title = "Session ${sessionId.removePrefix("s")}",
-            content = TerminalContent(sessionId),
-        )
-        val (ox, oy) = randomSnappedOrigin()
-        val newTab = TabConfig(
-            id = newTabId(),
-            title = "Tab $nextNumber",
-            panes = listOf(
-                Pane(
-                    leaf = leaf,
-                    x = ox, y = oy,
-                    width = PaneGeometry.DEFAULT_SIZE,
-                    height = PaneGeometry.DEFAULT_SIZE,
-                    z = 1L,
-                )
-            ),
-        )
-        _config.value = cfg.copy(tabs = cfg.tabs + newTab)
-    }
+    // ---- Windowed mutations -------------------------------------------------
+    //
+    // Each public method takes `windowId` as its first parameter and operates
+    // on that window's slot only. Pane and tab ids are globally unique across
+    // windows (via the shared counters above), so a caller can route a
+    // `paneId` to the correct window by searching slots. For the common case
+    // where the caller already knows the windowId (e.g. the /window
+    // WebSocket handler), the windowed entry points are strictly cheaper.
 
-    /**
-     * Close the tab with [tabId], destroying any PTY sessions that are no
-     * longer referenced by any remaining pane. No-op if there is only one
-     * tab left (the UI has no way to recover from zero tabs).
-     *
-     * @param tabId the id of the tab to close
-     */
-    fun closeTab(tabId: String) = synchronized(this) {
-        val cfg = _config.value
-        // Never leave the user with zero tabs — the UI has no way to recover.
-        if (cfg.tabs.size <= 1) return@synchronized
-        if (cfg.tabs.none { it.id == tabId }) return@synchronized
-        val before = collectSessionIds(cfg)
-        val newTabs = cfg.tabs.filterNot { it.id == tabId }
-        // If the closed tab was active, fall back to the tab that took its
-        // visual slot (same index, clamped) so the user lands on a neighbour
-        // instead of being teleported back to tab 1.
-        val newActive = if (cfg.activeTabId == tabId) {
-            val oldIdx = cfg.tabs.indexOfFirst { it.id == tabId }
-            newTabs.getOrNull(oldIdx.coerceAtMost(newTabs.size - 1))?.id
-        } else {
-            cfg.activeTabId
+    fun addTab(windowId: String) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val sessionId = TerminalSessions.create()
+            val nextNumber = cfg.tabs.size + 1
+            val leaf = LeafNode(
+                id = newNodeId(),
+                sessionId = sessionId,
+                title = "Session ${sessionId.removePrefix("s")}",
+                content = TerminalContent(sessionId),
+            )
+            val (ox, oy) = randomSnappedOrigin()
+            val newTab = TabConfig(
+                id = newTabId(),
+                title = "Tab $nextNumber",
+                panes = listOf(
+                    Pane(
+                        leaf = leaf,
+                        x = ox, y = oy,
+                        width = PaneGeometry.DEFAULT_SIZE,
+                        height = PaneGeometry.DEFAULT_SIZE,
+                        z = 1L,
+                    )
+                ),
+            )
+            slot._config.value = cfg.copy(tabs = cfg.tabs + newTab)
         }
-        val newCfg = cfg.copy(tabs = newTabs, activeTabId = newActive)
-        _config.value = newCfg
-        val after = collectSessionIds(newCfg)
-        (before - after).forEach { TerminalSessions.destroy(it) }
     }
 
-    /**
-     * Mark [tabId] as the currently-selected tab. No-op if the id is unknown
-     * or already active. Persisted via the StateFlow → debounced save flow.
-     */
-    fun setActiveTab(tabId: String) = synchronized(this) {
-        val cfg = _config.value
-        if (cfg.activeTabId == tabId) return@synchronized
-        if (cfg.tabs.none { it.id == tabId }) return@synchronized
-        _config.value = cfg.copy(activeTabId = tabId)
-    }
-
-    /**
-     * Record that the user just focused [paneId] in [tabId]. The pane must
-     * actually live in that tab; otherwise the call is ignored. Used by the
-     * client to remember "where I was typing in this tab" so a tab switch
-     * can restore focus to the right pane (and survive a server restart).
-     */
-    fun setFocusedPane(tabId: String, paneId: String) = synchronized(this) {
-        val cfg = _config.value
-        val tabIdx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (tabIdx < 0) return@synchronized
-        val tab = cfg.tabs[tabIdx]
-        // Verify the pane still belongs to this tab — otherwise we'd persist
-        // a stale reference that rehydrate() would have to clean up later.
-        val livePanes = HashSet<String>()
-        tab.panes.forEach { livePanes.add(it.leaf.id) }
-        if (paneId !in livePanes) return@synchronized
-        if (tab.focusedPaneId == paneId) return@synchronized
-        val newTabs = cfg.tabs.toMutableList()
-        newTabs[tabIdx] = tab.copy(focusedPaneId = paneId)
-        _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /**
-     * Move [tabId] so that it sits immediately before or after [targetTabId]
-     * (depending on [before]). No-ops if either id is unknown, or if the tab
-     * is already in the requested slot.
-     */
-    fun moveTab(tabId: String, targetTabId: String, before: Boolean) = synchronized(this) {
-        if (tabId == targetTabId) return@synchronized
-        val cfg = _config.value
-        val srcIdx = cfg.tabs.indexOfFirst { it.id == tabId }
-        val tgtIdx = cfg.tabs.indexOfFirst { it.id == targetTabId }
-        if (srcIdx < 0 || tgtIdx < 0) return@synchronized
-
-        val moving = cfg.tabs[srcIdx]
-        // Remove first, then compute the insertion index against the
-        // shortened list so "before/after target" stays correct regardless of
-        // direction.
-        val without = cfg.tabs.toMutableList().also { it.removeAt(srcIdx) }
-        val newTargetIdx = without.indexOfFirst { it.id == targetTabId }
-        val insertAt = if (before) newTargetIdx else newTargetIdx + 1
-        // Skip no-op moves so we don't churn the config flow.
-        if (insertAt == srcIdx) return@synchronized
-        without.add(insertAt, moving)
-        _config.value = cfg.copy(tabs = without)
-    }
-
-    /**
-     * Mark [tabId] as hidden or visible in the tab strip. Hidden tabs keep all
-     * their panes and PTY sessions intact; the web client simply omits them
-     * from the tab-button row and offers them in the tab-bar overflow menu
-     * instead. No-op if the id is unknown or the flag is already at the
-     * requested value.
-     *
-     * The active tab is left unchanged. A hidden tab can still be the active
-     * one — its content continues to render inside the tab area, while the
-     * overflow menu exposes an "Unhide" action for it. That way the user
-     * can toggle the tab strip entry for whatever is currently in view
-     * without losing their place.
-     *
-     * Called from `handleWindowCommand` on [WindowCommand.SetTabHidden],
-     * dispatched by the web client's tab-bar overflow menu.
-     *
-     * @param tabId the id of the tab to hide or unhide
-     * @param hidden `true` to hide the tab, `false` to make it visible
-     * @see TabConfig.isHidden
-     * @see WindowCommand.SetTabHidden
-     */
-    fun setTabHidden(tabId: String, hidden: Boolean) = synchronized(this) {
-        val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (idx < 0) return@synchronized
-        val tab = cfg.tabs[idx]
-        if (tab.isHidden == hidden) return@synchronized
-        val newTabs = cfg.tabs.toMutableList()
-        newTabs[idx] = tab.copy(isHidden = hidden)
-        _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /**
-     * Mark [tabId] as hidden or visible in the left sidebar's tab tree.
-     * Sidebar-hidden tabs keep every pane and PTY session intact and still
-     * participate in the tab bar; the web client simply omits them from the
-     * sidebar render. No-op if the id is unknown or the flag already matches
-     * the requested value.
-     *
-     * Orthogonal to [setTabHidden]: a tab can be shown in the strip but
-     * hidden from the sidebar, and vice versa. The active tab and focus
-     * state are left unchanged — sidebar-hiding is a pure UI affordance.
-     *
-     * Called from `handleWindowCommand` on
-     * [WindowCommand.SetTabHiddenFromSidebar], dispatched by the tab-bar
-     * overflow menu's "Show in side bar" / "Hide in side bar" entry.
-     *
-     * @param tabId the id of the tab to hide or unhide in the sidebar
-     * @param hidden `true` to hide from the sidebar, `false` to show it
-     * @see TabConfig.isHiddenFromSidebar
-     * @see WindowCommand.SetTabHiddenFromSidebar
-     */
-    fun setTabHiddenFromSidebar(tabId: String, hidden: Boolean) = synchronized(this) {
-        val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (idx < 0) return@synchronized
-        val tab = cfg.tabs[idx]
-        if (tab.isHiddenFromSidebar == hidden) return@synchronized
-        val newTabs = cfg.tabs.toMutableList()
-        newTabs[idx] = tab.copy(isHiddenFromSidebar = hidden)
-        _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /**
-     * Set the display title of [tabId] to [title] (trimmed, max 80 chars).
-     * No-op if the title is empty or unchanged.
-     *
-     * @param tabId the id of the tab to rename
-     * @param title the new title text
-     */
-    fun renameTab(tabId: String, title: String) = synchronized(this) {
-        val sanitized = title.trim().take(80)
-        if (sanitized.isEmpty()) return@synchronized
-        val cfg = _config.value
-        var changed = false
-        val newTabs = cfg.tabs.map { tab ->
-            if (tab.id == tabId && tab.title != sanitized) {
-                changed = true
-                tab.copy(title = sanitized)
-            } else tab
+    fun closeTab(windowId: String, tabId: String) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            if (cfg.tabs.size <= 1) return
+            if (cfg.tabs.none { it.id == tabId }) return
+            val before = collectSessionIds(cfg)
+            val newTabs = cfg.tabs.filterNot { it.id == tabId }
+            val newActive = if (cfg.activeTabId == tabId) {
+                val oldIdx = cfg.tabs.indexOfFirst { it.id == tabId }
+                newTabs.getOrNull(oldIdx.coerceAtMost(newTabs.size - 1))?.id
+            } else {
+                cfg.activeTabId
+            }
+            val newCfg = cfg.copy(tabs = newTabs, activeTabId = newActive)
+            slot._config.value = newCfg
+            destroyOrphanedSessions(beforeSlot = slot, removedFromSlot = before - collectSessionIds(newCfg))
         }
-        if (changed) _config.value = cfg.copy(tabs = newTabs)
+    }
+
+    fun setActiveTab(windowId: String, tabId: String) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            if (cfg.activeTabId == tabId) return
+            if (cfg.tabs.none { it.id == tabId }) return
+            slot._config.value = cfg.copy(activeTabId = tabId)
+        }
+    }
+
+    fun setFocusedPane(windowId: String, tabId: String, paneId: String) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val tabIdx = cfg.tabs.indexOfFirst { it.id == tabId }
+            if (tabIdx < 0) return
+            val tab = cfg.tabs[tabIdx]
+            val livePanes = HashSet<String>()
+            tab.panes.forEach { livePanes.add(it.leaf.id) }
+            if (paneId !in livePanes) return
+            if (tab.focusedPaneId == paneId) return
+            val newTabs = cfg.tabs.toMutableList()
+            newTabs[tabIdx] = tab.copy(focusedPaneId = paneId)
+            slot._config.value = cfg.copy(tabs = newTabs)
+        }
+    }
+
+    fun moveTab(windowId: String, tabId: String, targetTabId: String, before: Boolean) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            if (tabId == targetTabId) return
+            val cfg = slot._config.value
+            val srcIdx = cfg.tabs.indexOfFirst { it.id == tabId }
+            val tgtIdx = cfg.tabs.indexOfFirst { it.id == targetTabId }
+            if (srcIdx < 0 || tgtIdx < 0) return
+
+            val moving = cfg.tabs[srcIdx]
+            val without = cfg.tabs.toMutableList().also { it.removeAt(srcIdx) }
+            val newTargetIdx = without.indexOfFirst { it.id == targetTabId }
+            val insertAt = if (before) newTargetIdx else newTargetIdx + 1
+            if (insertAt == srcIdx) return
+            without.add(insertAt, moving)
+            slot._config.value = cfg.copy(tabs = without)
+        }
+    }
+
+    fun setTabHidden(windowId: String, tabId: String, hidden: Boolean) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+            if (idx < 0) return
+            val tab = cfg.tabs[idx]
+            if (tab.isHidden == hidden) return
+            val newTabs = cfg.tabs.toMutableList()
+            newTabs[idx] = tab.copy(isHidden = hidden)
+            slot._config.value = cfg.copy(tabs = newTabs)
+        }
+    }
+
+    fun setTabHiddenFromSidebar(windowId: String, tabId: String, hidden: Boolean) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+            if (idx < 0) return
+            val tab = cfg.tabs[idx]
+            if (tab.isHiddenFromSidebar == hidden) return
+            val newTabs = cfg.tabs.toMutableList()
+            newTabs[idx] = tab.copy(isHiddenFromSidebar = hidden)
+            slot._config.value = cfg.copy(tabs = newTabs)
+        }
+    }
+
+    fun renameTab(windowId: String, tabId: String, title: String) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val sanitized = title.trim().take(80)
+            if (sanitized.isEmpty()) return
+            val cfg = slot._config.value
+            var changed = false
+            val newTabs = cfg.tabs.map { tab ->
+                if (tab.id == tabId && tab.title != sanitized) {
+                    changed = true
+                    tab.copy(title = sanitized)
+                } else tab
+            }
+            if (changed) slot._config.value = cfg.copy(tabs = newTabs)
+        }
     }
 
     /**
-     * Find a leaf by id across all panes. Returns null if no leaf with
-     * [paneId] exists. Used by file-browser / git command handlers that need
-     * a leaf's cwd or current content state.
+     * Find the leaf [paneId] in the window [windowId]. Returns null if the
+     * pane doesn't live in that window (or doesn't exist at all).
      */
-    fun findLeaf(paneId: String): LeafNode? = synchronized(this) {
-        val cfg = _config.value
+    fun findLeaf(windowId: String, paneId: String): LeafNode? {
+        val slot = slots[windowId] ?: return null
+        val cfg = slot._config.value
         for (tab in cfg.tabs) {
-            tab.panes.firstOrNull { it.leaf.id == paneId }?.let { return@synchronized it.leaf }
+            tab.panes.firstOrNull { it.leaf.id == paneId }?.let { return it.leaf }
         }
-        null
+        return null
     }
 
     /**
-     * Return the id of the tab that contains [paneId], or null if the pane
-     * isn't found. Used by flows that want to add a sibling pane to the same
-     * tab as an anchor (worktree creation, for instance).
+     * Global (any-window) pane lookup. Used by cross-window bookkeeping —
+     * notably the PTY cwd watcher that pushes OSC 7 updates without knowing
+     * which window a pane lives in.
+     *
+     * @return a pair of (windowId, leaf) if found, else null.
      */
-    fun tabIdOfPane(paneId: String): String? = synchronized(this) {
-        val cfg = _config.value
-        for (tab in cfg.tabs) {
-            if (tab.panes.any { it.leaf.id == paneId }) return@synchronized tab.id
+    fun findLeafAnywhere(paneId: String): Pair<String, LeafNode>? {
+        for ((id, slot) in slots) {
+            val cfg = slot._config.value
+            for (tab in cfg.tabs) {
+                tab.panes.firstOrNull { it.leaf.id == paneId }?.let {
+                    return id to it.leaf
+                }
+            }
         }
-        null
+        return null
     }
 
-    /** Find the first leaf that references [sessionId], across all tabs. */
+    /**
+     * Return the id of the tab inside [windowId] that contains [paneId], or
+     * null if the pane isn't in that window.
+     */
+    fun tabIdOfPane(windowId: String, paneId: String): String? {
+        val slot = slots[windowId] ?: return null
+        val cfg = slot._config.value
+        for (tab in cfg.tabs) {
+            if (tab.panes.any { it.leaf.id == paneId }) return tab.id
+        }
+        return null
+    }
+
     private fun findLeafBySession(cfg: WindowConfig, sessionId: String): LeafNode? {
         for (tab in cfg.tabs) {
             tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
@@ -516,18 +648,14 @@ object WindowState {
         return null
     }
 
-    /**
-     * Apply [transform] to the [FileBrowserContent] of pane [paneId], if it
-     * exists and is currently a file-browser pane. Used by the small fleet of
-     * setFileBrowser* commands so each handler doesn't have to walk the list
-     * itself.
-     */
     private fun updateFileBrowserContent(
+        windowId: String,
         paneId: String,
         transform: (FileBrowserContent) -> FileBrowserContent,
     ): FileBrowserContent? {
-        synchronized(this) {
-            val cfg = _config.value
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
             var newState: FileBrowserContent? = null
             fun mutate(leaf: LeafNode): LeafNode {
                 if (leaf.id != paneId) return leaf
@@ -544,77 +672,64 @@ object WindowState {
                     )
                 }
             )
-            if (newState != null) _config.value = newCfg
+            if (newState != null) slot._config.value = newCfg
             return newState
         }
     }
 
-    /**
-     * Set the currently-selected file in the file-browser pane [paneId].
-     *
-     * @param paneId the leaf pane id
-     * @param relPath relative path of the selected file, or null to clear selection
-     * @return the updated [FileBrowserContent], or null if the pane was not found
-     */
-    fun setFileBrowserSelected(paneId: String, relPath: String?): FileBrowserContent? =
-        updateFileBrowserContent(paneId) { it.copy(selectedRelPath = relPath) }
+    fun setFileBrowserSelected(windowId: String, paneId: String, relPath: String?): FileBrowserContent? =
+        updateFileBrowserContent(windowId, paneId) { it.copy(selectedRelPath = relPath) }
 
-    /**
-     * Toggle the expanded state of a directory in the file-browser tree.
-     *
-     * @param paneId the leaf pane id
-     * @param dirRelPath relative path of the directory to expand/collapse
-     * @param expanded true to expand, false to collapse
-     * @return the updated [FileBrowserContent], or null if the pane was not found
-     */
-    fun setFileBrowserExpanded(paneId: String, dirRelPath: String, expanded: Boolean): FileBrowserContent? =
-        updateFileBrowserContent(paneId) {
+    fun setFileBrowserExpanded(windowId: String, paneId: String, dirRelPath: String, expanded: Boolean): FileBrowserContent? =
+        updateFileBrowserContent(windowId, paneId) {
             val next = if (expanded) it.expandedDirs + dirRelPath else it.expandedDirs - dirRelPath
             if (next == it.expandedDirs) it else it.copy(expandedDirs = next)
         }
 
-    fun setFileBrowserLeftWidth(paneId: String, px: Int): FileBrowserContent? {
+    fun setFileBrowserLeftWidth(windowId: String, paneId: String, px: Int): FileBrowserContent? {
         val clamped = px.coerceIn(0, 640)
-        return updateFileBrowserContent(paneId) { it.copy(leftColumnWidthPx = clamped) }
+        return updateFileBrowserContent(windowId, paneId) { it.copy(leftColumnWidthPx = clamped) }
     }
 
-    fun setFileBrowserAutoRefresh(paneId: String, enabled: Boolean): FileBrowserContent? =
-        updateFileBrowserContent(paneId) { it.copy(autoRefresh = enabled) }
+    fun setFileBrowserAutoRefresh(windowId: String, paneId: String, enabled: Boolean): FileBrowserContent? =
+        updateFileBrowserContent(windowId, paneId) { it.copy(autoRefresh = enabled) }
 
-    fun setFileBrowserFilter(paneId: String, filter: String): FileBrowserContent? {
+    fun setFileBrowserFilter(windowId: String, paneId: String, filter: String): FileBrowserContent? {
         val normalized = filter.trim().ifEmpty { null }
-        return updateFileBrowserContent(paneId) { it.copy(fileFilter = normalized) }
+        return updateFileBrowserContent(windowId, paneId) { it.copy(fileFilter = normalized) }
     }
 
-    fun setFileBrowserSort(paneId: String, sort: FileBrowserSort): FileBrowserContent? =
-        updateFileBrowserContent(paneId) {
+    fun setFileBrowserSort(windowId: String, paneId: String, sort: FileBrowserSort): FileBrowserContent? =
+        updateFileBrowserContent(windowId, paneId) {
             if (it.sortBy == sort) it else it.copy(sortBy = sort)
         }
 
-    fun setFileBrowserExpandedAll(paneId: String, dirs: Set<String>): FileBrowserContent? =
-        updateFileBrowserContent(paneId) {
+    fun setFileBrowserExpandedAll(windowId: String, paneId: String, dirs: Set<String>): FileBrowserContent? =
+        updateFileBrowserContent(windowId, paneId) {
             val merged = it.expandedDirs + dirs
             if (merged == it.expandedDirs) it else it.copy(expandedDirs = merged)
         }
 
-    fun clearFileBrowserExpanded(paneId: String): FileBrowserContent? =
-        updateFileBrowserContent(paneId) {
+    fun clearFileBrowserExpanded(windowId: String, paneId: String): FileBrowserContent? =
+        updateFileBrowserContent(windowId, paneId) {
             if (it.expandedDirs.isEmpty()) it else it.copy(expandedDirs = emptySet())
         }
 
-    fun setFileBrowserFontSize(paneId: String, size: Int): FileBrowserContent? {
+    fun setFileBrowserFontSize(windowId: String, paneId: String, size: Int): FileBrowserContent? {
         val clamped = size.coerceIn(8, 24)
-        return updateFileBrowserContent(paneId) { it.copy(fontSize = clamped) }
+        return updateFileBrowserContent(windowId, paneId) { it.copy(fontSize = clamped) }
     }
 
     // ---- Terminal pane mutations --------------------------------------------
 
     private fun updateTerminalContent(
+        windowId: String,
         paneId: String,
         transform: (TerminalContent) -> TerminalContent,
     ): TerminalContent? {
-        synchronized(this) {
-            val cfg = _config.value
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
             var newState: TerminalContent? = null
             fun mutate(leaf: LeafNode): LeafNode {
                 if (leaf.id != paneId) return leaf
@@ -631,24 +746,26 @@ object WindowState {
                     )
                 }
             )
-            if (newState != null) _config.value = newCfg
+            if (newState != null) slot._config.value = newCfg
             return newState
         }
     }
 
-    fun setTerminalFontSize(paneId: String, size: Int): TerminalContent? {
+    fun setTerminalFontSize(windowId: String, paneId: String, size: Int): TerminalContent? {
         val clamped = size.coerceIn(8, 24)
-        return updateTerminalContent(paneId) { it.copy(fontSize = clamped) }
+        return updateTerminalContent(windowId, paneId) { it.copy(fontSize = clamped) }
     }
 
     // ---- Git pane mutations ------------------------------------------------
 
     private fun updateGitContent(
+        windowId: String,
         paneId: String,
         transform: (GitContent) -> GitContent,
     ): GitContent? {
-        synchronized(this) {
-            val cfg = _config.value
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
             var newState: GitContent? = null
             fun mutate(leaf: LeafNode): LeafNode {
                 if (leaf.id != paneId) return leaf
@@ -665,325 +782,279 @@ object WindowState {
                     )
                 }
             )
-            if (newState != null) _config.value = newCfg
+            if (newState != null) slot._config.value = newCfg
             return newState
         }
     }
 
+    fun setGitSelected(windowId: String, paneId: String, filePath: String?): GitContent? =
+        updateGitContent(windowId, paneId) { it.copy(selectedFilePath = filePath) }
 
-    /**
-     * Set the currently-selected file in the git pane [paneId].
-     *
-     * @param paneId the leaf pane id
-     * @param filePath the selected file path, or null to clear selection
-     * @return the updated [GitContent], or null if the pane was not found
-     */
-    fun setGitSelected(paneId: String, filePath: String?): GitContent? =
-        updateGitContent(paneId) { it.copy(selectedFilePath = filePath) }
-
-    fun setGitLeftWidth(paneId: String, px: Int): GitContent? {
+    fun setGitLeftWidth(windowId: String, paneId: String, px: Int): GitContent? {
         val clamped = px.coerceIn(0, 640)
-        return updateGitContent(paneId) { it.copy(leftColumnWidthPx = clamped) }
+        return updateGitContent(windowId, paneId) { it.copy(leftColumnWidthPx = clamped) }
     }
 
-    fun setGitDiffMode(paneId: String, mode: GitDiffMode): GitContent? =
-        updateGitContent(paneId) { it.copy(diffMode = mode) }
+    fun setGitDiffMode(windowId: String, paneId: String, mode: GitDiffMode): GitContent? =
+        updateGitContent(windowId, paneId) { it.copy(diffMode = mode) }
 
-    fun setGitGraphicalDiff(paneId: String, enabled: Boolean): GitContent? =
-        updateGitContent(paneId) { it.copy(graphicalDiff = enabled) }
+    fun setGitGraphicalDiff(windowId: String, paneId: String, enabled: Boolean): GitContent? =
+        updateGitContent(windowId, paneId) { it.copy(graphicalDiff = enabled) }
 
-    fun setGitDiffFontSize(paneId: String, size: Int): GitContent? {
+    fun setGitDiffFontSize(windowId: String, paneId: String, size: Int): GitContent? {
         val clamped = size.coerceIn(8, 24)
-        return updateGitContent(paneId) { it.copy(diffFontSize = clamped) }
+        return updateGitContent(windowId, paneId) { it.copy(diffFontSize = clamped) }
     }
 
-    fun setGitAutoRefresh(paneId: String, enabled: Boolean): GitContent? =
-        updateGitContent(paneId) { it.copy(autoRefresh = enabled) }
+    fun setGitAutoRefresh(windowId: String, paneId: String, enabled: Boolean): GitContent? =
+        updateGitContent(windowId, paneId) { it.copy(autoRefresh = enabled) }
 
-    /**
-     * Remove the pane [paneId] from its tab. Destroys any PTY session that is
-     * no longer referenced by any remaining pane. Tabs are not removed even
-     * if they become empty — the empty-state placeholder lets the user create
-     * a new pane in-place.
-     *
-     * @param paneId the id of the pane to close
-     */
-    fun closePane(paneId: String) = synchronized(this) {
-        val cfg = _config.value
-        val before = collectSessionIds(cfg)
-        val newTabs = cfg.tabs.map { tab ->
-            val newPanes = tab.panes.filterNot { it.leaf.id == paneId }
-            // Drop the tab's saved focus if it pointed at the pane we're
-            // killing — otherwise the next render would chase a ghost.
-            val newFocus = if (tab.focusedPaneId == paneId) null else tab.focusedPaneId
-            if (newPanes.size == tab.panes.size &&
-                newFocus == tab.focusedPaneId
-            ) tab
-            else tab.copy(panes = newPanes, focusedPaneId = newFocus)
-        }
-        val newCfg = cfg.copy(tabs = newTabs)
-        if (newCfg == cfg) return@synchronized
-        _config.value = newCfg
-        val after = collectSessionIds(newCfg)
-        (before - after).forEach { TerminalSessions.destroy(it) }
-    }
-
-    /**
-     * Close every pane that references [sessionId]. Used when the user
-     * confirms closing a terminal that has linked panes — all views of the
-     * session are removed and the PTY is destroyed.
-     */
-    fun closeSession(sessionId: String) = synchronized(this) {
-        if (sessionId.isEmpty()) return@synchronized
-        val cfg = _config.value
-        val before = collectSessionIds(cfg)
-
-        val newTabs = cfg.tabs.map { tab ->
-            val newPanes = tab.panes.filterNot { it.leaf.sessionId == sessionId }
-            val liveIds = HashSet<String>()
-            newPanes.forEach { liveIds.add(it.leaf.id) }
-            val newFocus = tab.focusedPaneId?.takeIf { it in liveIds }
-            tab.copy(panes = newPanes, focusedPaneId = newFocus)
-        }
-        val newCfg = cfg.copy(tabs = newTabs)
-        if (newCfg == cfg) return@synchronized
-        _config.value = newCfg
-        val after = collectSessionIds(newCfg)
-        (before - after).forEach { TerminalSessions.destroy(it) }
-    }
-
-    /**
-     * Set or clear the custom display name for [paneId]. An empty [title]
-     * clears the custom name and lets the cwd-based title take over.
-     *
-     * @param paneId the id of the pane to rename
-     * @param title the new custom name, or empty to clear
-     */
-    fun renamePane(paneId: String, title: String) = synchronized(this) {
-        val sanitized = title.trim().take(80)
-        // Empty input clears the custom name and lets the cwd-based title take
-        // over (today's web client suppresses empty submissions, so this is
-        // forward-compat for an "unname" affordance).
-        val newCustomName: String? = sanitized.ifEmpty { null }
-        val cfg = _config.value
-        var changed = false
-        fun renameLeaf(leaf: LeafNode): LeafNode {
-            if (leaf.id != paneId) return leaf
-            val newTitle = computeLeafTitle(newCustomName, leaf.cwd, leaf.title)
-            if (leaf.customName == newCustomName && leaf.title == newTitle) return leaf
-            changed = true
-            return leaf.copy(customName = newCustomName, title = newTitle)
-        }
-        val newCfg = cfg.copy(
-            tabs = cfg.tabs.map { tab ->
-                tab.copy(
-                    panes = tab.panes.map { p -> p.copy(leaf = renameLeaf(p.leaf)) },
-                )
+    fun closePane(windowId: String, paneId: String) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val before = collectSessionIds(cfg)
+            val newTabs = cfg.tabs.map { tab ->
+                val newPanes = tab.panes.filterNot { it.leaf.id == paneId }
+                val newFocus = if (tab.focusedPaneId == paneId) null else tab.focusedPaneId
+                if (newPanes.size == tab.panes.size && newFocus == tab.focusedPaneId) tab
+                else tab.copy(panes = newPanes, focusedPaneId = newFocus)
             }
-        )
-        if (changed) _config.value = newCfg
-    }
-
-    /**
-     * Push a freshly-detected working directory for the pane backed by
-     * [sessionId]. No-ops if the cwd hasn't changed; recomputes [LeafNode.title]
-     * so a pane that has no custom name reflects the new directory.
-     */
-    fun updatePaneCwd(sessionId: String, cwd: String) = synchronized(this) {
-        if (cwd.isBlank()) return@synchronized
-        val cfg = _config.value
-        var changed = false
-        fun maybeUpdate(leaf: LeafNode): LeafNode {
-            if (leaf.sessionId != sessionId || leaf.cwd == cwd) return leaf
-            changed = true
-            val newTitle = computeLeafTitle(leaf.customName, cwd, leaf.title)
-            return leaf.copy(cwd = cwd, title = newTitle)
+            val newCfg = cfg.copy(tabs = newTabs)
+            if (newCfg == cfg) return
+            slot._config.value = newCfg
+            val after = collectSessionIds(newCfg)
+            destroyOrphanedSessions(beforeSlot = slot, removedFromSlot = before - after)
         }
-        val newCfg = cfg.copy(
-            tabs = cfg.tabs.map { tab ->
-                tab.copy(
-                    panes = tab.panes.map { p -> p.copy(leaf = maybeUpdate(p.leaf)) },
-                )
-            }
-        )
-        if (changed) _config.value = newCfg
     }
 
     /**
-     * Update the position and size of a pane after the user drags or resizes
-     * it. Inputs are snapped and clamped via [PaneGeometry.normalize] so the
-     * pane always lands on the 10% grid and stays fully inside the tab area.
-     * No-op if [paneId] isn't found.
+     * Close every pane in [windowId] that references [sessionId], and — if
+     * no other window still references it — destroy the PTY itself.
+     *
+     * For cross-window session closures the caller should iterate over
+     * [knownWindowIds] and call this per window, or use [closeSessionEverywhere].
      */
+    fun closeSession(windowId: String, sessionId: String) {
+        if (sessionId.isEmpty()) return
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val before = collectSessionIds(cfg)
+
+            val newTabs = cfg.tabs.map { tab ->
+                val newPanes = tab.panes.filterNot { it.leaf.sessionId == sessionId }
+                val liveIds = HashSet<String>()
+                newPanes.forEach { liveIds.add(it.leaf.id) }
+                val newFocus = tab.focusedPaneId?.takeIf { it in liveIds }
+                tab.copy(panes = newPanes, focusedPaneId = newFocus)
+            }
+            val newCfg = cfg.copy(tabs = newTabs)
+            if (newCfg == cfg) return
+            slot._config.value = newCfg
+            val after = collectSessionIds(newCfg)
+            destroyOrphanedSessions(beforeSlot = slot, removedFromSlot = before - after)
+        }
+    }
+
+    /**
+     * Close [sessionId] in every known window and destroy the PTY. Used by
+     * commands the user triggers explicitly to wipe a live terminal
+     * globally rather than unlink it from the current window only.
+     */
+    fun closeSessionEverywhere(sessionId: String) {
+        if (sessionId.isEmpty()) return
+        for (id in knownWindowIds()) {
+            closeSession(id, sessionId)
+        }
+        // Best-effort: if no slot still references it, ensure destruction
+        // (the per-window closures already handle this, this is belt-and-
+        // braces in case of a race).
+        if (!isSessionReferencedAnywhere(sessionId)) {
+            TerminalSessions.destroy(sessionId)
+        }
+    }
+
+    fun renamePane(windowId: String, paneId: String, title: String) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val sanitized = title.trim().take(80)
+            val newCustomName: String? = sanitized.ifEmpty { null }
+            val cfg = slot._config.value
+            var changed = false
+            fun renameLeaf(leaf: LeafNode): LeafNode {
+                if (leaf.id != paneId) return leaf
+                val newTitle = computeLeafTitle(newCustomName, leaf.cwd, leaf.title)
+                if (leaf.customName == newCustomName && leaf.title == newTitle) return leaf
+                changed = true
+                return leaf.copy(customName = newCustomName, title = newTitle)
+            }
+            val newCfg = cfg.copy(
+                tabs = cfg.tabs.map { tab ->
+                    tab.copy(
+                        panes = tab.panes.map { p -> p.copy(leaf = renameLeaf(p.leaf)) },
+                    )
+                }
+            )
+            if (changed) slot._config.value = newCfg
+        }
+    }
+
+    /**
+     * Push a freshly-detected working directory for every pane backed by
+     * [sessionId] — in every window. A linked pane in one window should
+     * update its title in lockstep with the originating pane in another.
+     */
+    fun updatePaneCwd(sessionId: String, cwd: String) {
+        if (cwd.isBlank()) return
+        for (slot in slots.values) {
+            synchronized(slot) {
+                val cfg = slot._config.value
+                var changed = false
+                fun maybeUpdate(leaf: LeafNode): LeafNode {
+                    if (leaf.sessionId != sessionId || leaf.cwd == cwd) return leaf
+                    changed = true
+                    val newTitle = computeLeafTitle(leaf.customName, cwd, leaf.title)
+                    return leaf.copy(cwd = cwd, title = newTitle)
+                }
+                val newCfg = cfg.copy(
+                    tabs = cfg.tabs.map { tab ->
+                        tab.copy(
+                            panes = tab.panes.map { p -> p.copy(leaf = maybeUpdate(p.leaf)) },
+                        )
+                    }
+                )
+                if (changed) slot._config.value = newCfg
+            }
+        }
+    }
+
     fun setPaneGeometry(
+        windowId: String,
         paneId: String,
         x: Double,
         y: Double,
         width: Double,
         height: Double,
-    ) = synchronized(this) {
-        val box = PaneGeometry.normalize(x, y, width, height)
-        val cfg = _config.value
-        var changed = false
-        val newTabs = cfg.tabs.map { tab ->
-            val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
-            if (idx < 0) return@map tab
-            val current = tab.panes[idx]
-            if (current.x == box.x && current.y == box.y &&
-                current.width == box.width && current.height == box.height
-            ) return@map tab
-            changed = true
-            val newPanes = tab.panes.toMutableList()
-            newPanes[idx] = current.copy(x = box.x, y = box.y, width = box.width, height = box.height)
-            tab.copy(panes = newPanes)
-        }
-        if (changed) _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /**
-     * Override or clear the per-pane color-scheme assignment.
-     *
-     * @param paneId the pane whose [Pane.colorScheme] to set
-     * @param scheme the scheme name, or `null` to clear the override
-     * @see WindowCommand.SetPaneColorScheme
-     * @see setPaneGeometry for the sibling pane-level mutator pattern
-     */
-    fun setPaneColorScheme(paneId: String, scheme: String?) = synchronized(this) {
-        val cfg = _config.value
-        var changed = false
-        val newTabs = cfg.tabs.map { tab ->
-            val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
-            if (idx < 0) return@map tab
-            val current = tab.panes[idx]
-            if (current.colorScheme == scheme) return@map tab
-            changed = true
-            val newPanes = tab.panes.toMutableList()
-            newPanes[idx] = current.copy(colorScheme = scheme)
-            tab.copy(panes = newPanes)
-        }
-        if (changed) _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /**
-     * Bring the pane [paneId] to the top of its tab's stacking order by
-     * setting its z to `max + 1`. No-op if the pane isn't found or is
-     * already strictly on top.
-     */
-    fun raisePane(paneId: String) = synchronized(this) {
-        val cfg = _config.value
-        var changed = false
-        val newTabs = cfg.tabs.map { tab ->
-            val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
-            if (idx < 0) return@map tab
-            val current = tab.panes[idx]
-            val maxZ = tab.panes.maxOf { it.z }
-            if (current.z == maxZ && tab.panes.count { it.z == maxZ } == 1) return@map tab
-            changed = true
-            val newPanes = tab.panes.toMutableList()
-            newPanes[idx] = current.copy(z = maxZ + 1)
-            tab.copy(panes = newPanes)
-        }
-        if (changed) _config.value = cfg.copy(tabs = newTabs)
-    }
-
-    /**
-     * Toggle the maximized flag on [paneId]. When becoming maximized, any
-     * other maximized pane in the same tab is demoted and this pane's z is
-     * bumped to the top. When restoring, the pane's stored geometry is left
-     * untouched so it returns to its prior size/position.
-     */
-    fun toggleMaximized(paneId: String) = synchronized(this) {
-        val cfg = _config.value
-        var changed = false
-        val newTabs = cfg.tabs.map { tab ->
-            val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
-            if (idx < 0) return@map tab
-            val current = tab.panes[idx]
-            val nowMax = !current.maximized
-            val topZ = tab.panes.maxOf { it.z }
-            changed = true
-            val newPanes = tab.panes.mapIndexed { i, p ->
-                when {
-                    i == idx -> p.copy(
-                        maximized = nowMax,
-                        z = if (nowMax) topZ + 1 else p.z,
-                    )
-                    nowMax && p.maximized -> p.copy(maximized = false)
-                    else -> p
-                }
+    ) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val box = PaneGeometry.normalize(x, y, width, height)
+            val cfg = slot._config.value
+            var changed = false
+            val newTabs = cfg.tabs.map { tab ->
+                val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+                if (idx < 0) return@map tab
+                val current = tab.panes[idx]
+                if (current.x == box.x && current.y == box.y &&
+                    current.width == box.width && current.height == box.height
+                ) return@map tab
+                changed = true
+                val newPanes = tab.panes.toMutableList()
+                newPanes[idx] = current.copy(x = box.x, y = box.y, width = box.width, height = box.height)
+                tab.copy(panes = newPanes)
             }
-            tab.copy(panes = newPanes)
+            if (changed) slot._config.value = cfg.copy(tabs = newTabs)
         }
-        if (changed) _config.value = cfg.copy(tabs = newTabs)
     }
 
-    /**
-     * Arrange every pane in [tabId] using one of the predefined layout
-     * algorithms. The pane with [primaryPaneId] (or the first pane if that
-     * is null/invalid) always wins slot 0 — the biggest slot. The remaining
-     * panes are assigned to the other slots ordered by **descending current
-     * area** (width × height), so the user's manual sizing is preserved as a
-     * priority signal: whatever they've grown becomes second-biggest, and so
-     * on. Tab order is only consulted to break ties between equal-area panes.
-     * Also clears any maximized flag so the layout takes effect visually.
-     */
-    fun applyLayout(tabId: String, layout: String, primaryPaneId: String?) = synchronized(this) {
-        val cfg = _config.value
-        val tabIdx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (tabIdx < 0) return@synchronized
-        val tab = cfg.tabs[tabIdx]
-        if (tab.panes.isEmpty()) return@synchronized
-
-        val primary = tab.panes.firstOrNull { it.leaf.id == primaryPaneId } ?: tab.panes.first()
-        val rest = tab.panes
-            .filter { it.leaf.id != primary.leaf.id }
-            .sortedWith(
-                compareByDescending<Pane> { it.width * it.height }
-                    .thenBy { tab.panes.indexOf(it) }
-            )
-        val ordered = listOf(primary) + rest
-        val boxes = computeLayout(layout, ordered.size)
-
-        val boxById = ordered.withIndex().associate { (i, p) -> p.leaf.id to boxes[i] }
-        val newPanes = tab.panes.map { p ->
-            val b = boxById[p.leaf.id] ?: return@map p
-            p.copy(x = b.x, y = b.y, width = b.width, height = b.height, maximized = false)
+    fun setPaneColorScheme(windowId: String, paneId: String, scheme: String?) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            var changed = false
+            val newTabs = cfg.tabs.map { tab ->
+                val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+                if (idx < 0) return@map tab
+                val current = tab.panes[idx]
+                if (current.colorScheme == scheme) return@map tab
+                changed = true
+                val newPanes = tab.panes.toMutableList()
+                newPanes[idx] = current.copy(colorScheme = scheme)
+                tab.copy(panes = newPanes)
+            }
+            if (changed) slot._config.value = cfg.copy(tabs = newTabs)
         }
-        val newTabs = cfg.tabs.toMutableList()
-        newTabs[tabIdx] = tab.copy(panes = newPanes)
-        _config.value = cfg.copy(tabs = newTabs)
     }
 
-    /**
-     * Compute the list of pane boxes for [layout] with [n] total panes. Index
-     * 0 is always the slot the caller should assign to the focused (biggest)
-     * pane; subsequent indices are the remaining, uniformly-sized sibling
-     * slots so the caller can assign area-ranked panes in order.
-     *
-     * Every layout is designed to produce at most three distinct size classes
-     * (primary, secondary, rest-equal), with the smallest slot's dominant
-     * dimension never falling below ~25% at common pane counts. There is no
-     * cascade family here: strips are always filled with equal-sized slots,
-     * so no pane ends up as a super-narrow sliver.
-     *
-     * Layout families:
-     *  - **grid / columns / rows** — size-neutral resets (1 size class).
-     *  - **hero-** — 65/35 split, primary big, siblings in equal-size strip.
-     *  - **split-** — 50/50 split, primary half, siblings in equal-size strip.
-     *  - **sidebar-** — 75/25 split with a narrow strip of equal sibling cells.
-     *  - **t-shape / t-shape-inv** — 70/30 two-cell bar + equal-size strip.
-     *  - **l-shape / l-shape-tr / l-shape-bl / l-shape-br** — corner hero +
-     *    full-edge sibling + equal strip along the primary's remaining edge.
-     *  - **big-2-stack / -right / -bottom** — wide primary + one medium +
-     *    stacked equal siblings in the remaining quadrant.
-     *
-     * Unknown [layout] keys fall back to [grid] for robustness.
-     *
-     * @param layout the layout key (must match one in `LayoutMenu.kt`)
-     * @param n the number of panes to place; must be ≥ 0
-     * @return a list of [PaneBox] of size [n] in rank order
-     * @see equalStrip
-     */
+    fun raisePane(windowId: String, paneId: String) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            var changed = false
+            val newTabs = cfg.tabs.map { tab ->
+                val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+                if (idx < 0) return@map tab
+                val current = tab.panes[idx]
+                val maxZ = tab.panes.maxOf { it.z }
+                if (current.z == maxZ && tab.panes.count { it.z == maxZ } == 1) return@map tab
+                changed = true
+                val newPanes = tab.panes.toMutableList()
+                newPanes[idx] = current.copy(z = maxZ + 1)
+                tab.copy(panes = newPanes)
+            }
+            if (changed) slot._config.value = cfg.copy(tabs = newTabs)
+        }
+    }
+
+    fun toggleMaximized(windowId: String, paneId: String) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            var changed = false
+            val newTabs = cfg.tabs.map { tab ->
+                val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+                if (idx < 0) return@map tab
+                val current = tab.panes[idx]
+                val nowMax = !current.maximized
+                val topZ = tab.panes.maxOf { it.z }
+                changed = true
+                val newPanes = tab.panes.mapIndexed { i, p ->
+                    when {
+                        i == idx -> p.copy(
+                            maximized = nowMax,
+                            z = if (nowMax) topZ + 1 else p.z,
+                        )
+                        nowMax && p.maximized -> p.copy(maximized = false)
+                        else -> p
+                    }
+                }
+                tab.copy(panes = newPanes)
+            }
+            if (changed) slot._config.value = cfg.copy(tabs = newTabs)
+        }
+    }
+
+    fun applyLayout(windowId: String, tabId: String, layout: String, primaryPaneId: String?) {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val tabIdx = cfg.tabs.indexOfFirst { it.id == tabId }
+            if (tabIdx < 0) return
+            val tab = cfg.tabs[tabIdx]
+            if (tab.panes.isEmpty()) return
+
+            val primary = tab.panes.firstOrNull { it.leaf.id == primaryPaneId } ?: tab.panes.first()
+            val rest = tab.panes
+                .filter { it.leaf.id != primary.leaf.id }
+                .sortedWith(
+                    compareByDescending<Pane> { it.width * it.height }
+                        .thenBy { tab.panes.indexOf(it) }
+                )
+            val ordered = listOf(primary) + rest
+            val boxes = computeLayout(layout, ordered.size)
+
+            val boxById = ordered.withIndex().associate { (i, p) -> p.leaf.id to boxes[i] }
+            val newPanes = tab.panes.map { p ->
+                val b = boxById[p.leaf.id] ?: return@map p
+                p.copy(x = b.x, y = b.y, width = b.width, height = b.height, maximized = false)
+            }
+            val newTabs = cfg.tabs.toMutableList()
+            newTabs[tabIdx] = tab.copy(panes = newPanes)
+            slot._config.value = cfg.copy(tabs = newTabs)
+        }
+    }
+
     private fun computeLayout(layout: String, n: Int): List<PaneBox> {
         if (n <= 0) return emptyList()
         if (n == 1) return listOf(PaneBox(0.0, 0.0, 1.0, 1.0))
@@ -1012,8 +1083,6 @@ object WindowState {
                 equalStrip(n - 1, ox = 0.0, oy = 0.75, sx = 1.0, sy = 0.25, axis = "horizontal")
 
             "t-shape" -> when (n) {
-                // n=2 has no bottom row to fill, so degrade to the hero-left
-                // shape at 70/30 so the layout still feels like itself.
                 2 -> listOf(
                     PaneBox(0.0, 0.0, 0.70, 1.0),
                     PaneBox(0.70, 0.0, 0.30, 1.0),
@@ -1118,7 +1187,6 @@ object WindowState {
             "columns" -> equalColumns(n)
             "rows" -> equalRows(n)
             else -> {
-                // "grid" (default): even tiling with primary at top-left.
                 val cols = kotlin.math.ceil(kotlin.math.sqrt(n.toDouble())).toInt().coerceAtLeast(1)
                 val rows = kotlin.math.ceil(n.toDouble() / cols).toInt().coerceAtLeast(1)
                 val w = 1.0 / cols
@@ -1132,24 +1200,6 @@ object WindowState {
         }
     }
 
-    /**
-     * Fill a rectangular strip with [count] equally-sized slots along [axis].
-     * The strip's top-left is at (`ox`, `oy`) and it spans (`sx`, `sy`) of
-     * the tab area. For `"horizontal"` the slots share `sy` as height and
-     * split `sx` into equal widths; for `"vertical"` they share `sx` as
-     * width and split `sy` into equal heights.
-     *
-     * Equal sizing keeps every layout at ≤ 3 size classes (primary +
-     * optional secondary + rest-equal) and avoids cascade-produced slivers.
-     *
-     * @param count number of slots to produce; 0 returns an empty list
-     * @param ox strip origin x (fraction of tab area)
-     * @param oy strip origin y (fraction of tab area)
-     * @param sx strip width (fraction of tab area)
-     * @param sy strip height (fraction of tab area)
-     * @param axis `"horizontal"` or `"vertical"`
-     * @return list of [PaneBox] of identical size
-     */
     private fun equalStrip(
         count: Int,
         ox: Double,
@@ -1170,261 +1220,257 @@ object WindowState {
         return out
     }
 
-    /**
-     * Tile the full tab area into [n] equal-width columns, primary at left.
-     * Used by the `columns` layout.
-     */
     private fun equalColumns(n: Int): List<PaneBox> = (0 until n).map { i ->
         val w = 1.0 / n
         PaneBox(i * w, 0.0, w, 1.0)
     }
 
-    /**
-     * Tile the full tab area into [n] equal-height rows, primary at top.
-     * Used by the `rows` layout.
-     */
     private fun equalRows(n: Int): List<PaneBox> = (0 until n).map { i ->
         val h = 1.0 / n
         PaneBox(0.0, i * h, 1.0, h)
     }
 
-    /**
-     * Spawn a fresh shell as a new pane in [tabId]. Used by the new-window
-     * icon and by the empty-tab placeholder's "New pane" button. If
-     * [initialCwd] is provided the new shell starts there; otherwise the
-     * new PTY inherits the user's home.
-     */
-    fun addPaneToTab(tabId: String, initialCwd: String? = null): LeafNode? = synchronized(this) {
-        val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
-        val sessionId = TerminalSessions.create(initialCwd = initialCwd)
-        val fallbackTitle = "Session ${sessionId.removePrefix("s")}"
-        val leaf = LeafNode(
-            id = newNodeId(),
-            sessionId = sessionId,
-            cwd = initialCwd,
-            title = computeLeafTitle(null, initialCwd, fallbackTitle),
-            content = TerminalContent(sessionId),
-        )
-        val (ox, oy) = randomSnappedOrigin()
-        val newPane = Pane(
-            leaf = leaf,
-            x = ox, y = oy,
-            width = PaneGeometry.DEFAULT_SIZE,
-            height = PaneGeometry.DEFAULT_SIZE,
-            z = nextZ(tab),
-        )
-        val newTabs = cfg.tabs.toMutableList()
-        val demoted = demoteMaximized(tab)
-        newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
-        _config.value = cfg.copy(tabs = newTabs)
-        leaf
+    fun addPaneToTab(windowId: String, tabId: String, initialCwd: String? = null): LeafNode? {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+            if (idx < 0) return null
+            val tab = cfg.tabs[idx]
+            val sessionId = TerminalSessions.create(initialCwd = initialCwd)
+            val fallbackTitle = "Session ${sessionId.removePrefix("s")}"
+            val leaf = LeafNode(
+                id = newNodeId(),
+                sessionId = sessionId,
+                cwd = initialCwd,
+                title = computeLeafTitle(null, initialCwd, fallbackTitle),
+                content = TerminalContent(sessionId),
+            )
+            val (ox, oy) = randomSnappedOrigin()
+            val newPane = Pane(
+                leaf = leaf,
+                x = ox, y = oy,
+                width = PaneGeometry.DEFAULT_SIZE,
+                height = PaneGeometry.DEFAULT_SIZE,
+                z = nextZ(tab),
+            )
+            val newTabs = cfg.tabs.toMutableList()
+            val demoted = demoteMaximized(tab)
+            newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
+            slot._config.value = cfg.copy(tabs = newTabs)
+            return leaf
+        }
     }
 
-    /** Add a file-browser pane to [tabId]. */
-    fun addFileBrowserToTab(tabId: String, initialCwd: String? = null): LeafNode? = synchronized(this) {
-        val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
-        val leaf = LeafNode(
-            id = newNodeId(),
-            sessionId = "",
-            cwd = initialCwd,
-            title = computeLeafTitle(null, initialCwd, "Files"),
-            content = FileBrowserContent(),
-        )
-        val (ox, oy) = randomSnappedOrigin()
-        val newPane = Pane(
-            leaf = leaf,
-            x = ox, y = oy,
-            width = PaneGeometry.DEFAULT_SIZE,
-            height = PaneGeometry.DEFAULT_SIZE,
-            z = nextZ(tab),
-        )
-        val newTabs = cfg.tabs.toMutableList()
-        val demoted = demoteMaximized(tab)
-        newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
-        _config.value = cfg.copy(tabs = newTabs)
-        leaf
+    fun addFileBrowserToTab(windowId: String, tabId: String, initialCwd: String? = null): LeafNode? {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+            if (idx < 0) return null
+            val tab = cfg.tabs[idx]
+            val leaf = LeafNode(
+                id = newNodeId(),
+                sessionId = "",
+                cwd = initialCwd,
+                title = computeLeafTitle(null, initialCwd, "Files"),
+                content = FileBrowserContent(),
+            )
+            val (ox, oy) = randomSnappedOrigin()
+            val newPane = Pane(
+                leaf = leaf,
+                x = ox, y = oy,
+                width = PaneGeometry.DEFAULT_SIZE,
+                height = PaneGeometry.DEFAULT_SIZE,
+                z = nextZ(tab),
+            )
+            val newTabs = cfg.tabs.toMutableList()
+            val demoted = demoteMaximized(tab)
+            newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
+            slot._config.value = cfg.copy(tabs = newTabs)
+            return leaf
+        }
     }
 
-    /** Add a git overview pane to [tabId]. */
-    fun addGitToTab(tabId: String, initialCwd: String? = null): LeafNode? = synchronized(this) {
-        val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
-        val leaf = LeafNode(
-            id = newNodeId(),
-            sessionId = "",
-            cwd = initialCwd,
-            title = computeLeafTitle(null, initialCwd, "Git"),
-            content = GitContent(),
-        )
-        val (ox, oy) = randomSnappedOrigin()
-        val newPane = Pane(
-            leaf = leaf,
-            x = ox, y = oy,
-            width = PaneGeometry.DEFAULT_SIZE,
-            height = PaneGeometry.DEFAULT_SIZE,
-            z = nextZ(tab),
-        )
-        val newTabs = cfg.tabs.toMutableList()
-        val demoted = demoteMaximized(tab)
-        newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
-        _config.value = cfg.copy(tabs = newTabs)
-        leaf
+    fun addGitToTab(windowId: String, tabId: String, initialCwd: String? = null): LeafNode? {
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+            if (idx < 0) return null
+            val tab = cfg.tabs[idx]
+            val leaf = LeafNode(
+                id = newNodeId(),
+                sessionId = "",
+                cwd = initialCwd,
+                title = computeLeafTitle(null, initialCwd, "Git"),
+                content = GitContent(),
+            )
+            val (ox, oy) = randomSnappedOrigin()
+            val newPane = Pane(
+                leaf = leaf,
+                x = ox, y = oy,
+                width = PaneGeometry.DEFAULT_SIZE,
+                height = PaneGeometry.DEFAULT_SIZE,
+                z = nextZ(tab),
+            )
+            val newTabs = cfg.tabs.toMutableList()
+            val demoted = demoteMaximized(tab)
+            newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
+            slot._config.value = cfg.copy(tabs = newTabs)
+            return leaf
+        }
     }
 
-    /**
-     * Add a linked terminal pane to [tabId] that shares the PTY session
-     * [targetSessionId]. No new process is spawned.
-     */
-    fun addLinkToTab(tabId: String, targetSessionId: String): LeafNode? = synchronized(this) {
-        if (TerminalSessions.get(targetSessionId) == null) return@synchronized null
-        val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
-        if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
-        val sourceTitle = findLeafBySession(cfg, targetSessionId)?.title ?: "Terminal"
-        val leaf = LeafNode(
-            id = newNodeId(),
-            sessionId = targetSessionId,
-            title = sourceTitle,
-            content = TerminalContent(targetSessionId),
-            isLink = true,
-        )
-        val (ox, oy) = randomSnappedOrigin()
-        val newPane = Pane(
-            leaf = leaf,
-            x = ox, y = oy,
-            width = PaneGeometry.DEFAULT_SIZE,
-            height = PaneGeometry.DEFAULT_SIZE,
-            z = nextZ(tab),
-        )
-        val newTabs = cfg.tabs.toMutableList()
-        val demoted = demoteMaximized(tab)
-        newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
-        _config.value = cfg.copy(tabs = newTabs)
-        leaf
+    fun addLinkToTab(windowId: String, tabId: String, targetSessionId: String): LeafNode? {
+        if (TerminalSessions.get(targetSessionId) == null) return null
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+            if (idx < 0) return null
+            val tab = cfg.tabs[idx]
+            val sourceTitle = findLeafBySession(cfg, targetSessionId)?.title ?: "Terminal"
+            val leaf = LeafNode(
+                id = newNodeId(),
+                sessionId = targetSessionId,
+                title = sourceTitle,
+                content = TerminalContent(targetSessionId),
+                isLink = true,
+            )
+            val (ox, oy) = randomSnappedOrigin()
+            val newPane = Pane(
+                leaf = leaf,
+                x = ox, y = oy,
+                width = PaneGeometry.DEFAULT_SIZE,
+                height = PaneGeometry.DEFAULT_SIZE,
+                z = nextZ(tab),
+            )
+            val newTabs = cfg.tabs.toMutableList()
+            val demoted = demoteMaximized(tab)
+            newTabs[idx] = demoted.copy(panes = demoted.panes + newPane)
+            slot._config.value = cfg.copy(tabs = newTabs)
+            return leaf
+        }
     }
 
-    /**
-     * Move the pane [paneId] from whichever tab currently holds it into
-     * [targetTabId]. The pane lands at a random snapped origin on top of
-     * any existing panes in the target.
-     */
-    fun movePaneToTab(paneId: String, targetTabId: String) = synchronized(this) {
-        if (paneId.isEmpty() || targetTabId.isEmpty()) return@synchronized
-        val cfg = _config.value
-        val targetIdx = cfg.tabs.indexOfFirst { it.id == targetTabId }
-        if (targetIdx < 0) return@synchronized
+    fun movePaneToTab(windowId: String, paneId: String, targetTabId: String) {
+        if (paneId.isEmpty() || targetTabId.isEmpty()) return
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            val targetIdx = cfg.tabs.indexOfFirst { it.id == targetTabId }
+            if (targetIdx < 0) return
 
-        // Locate the source.
-        var sourceIdx = -1
-        var movedLeaf: LeafNode? = null
-        var newSourcePanes: List<Pane>? = null
+            var sourceIdx = -1
+            var movedLeaf: LeafNode? = null
+            var newSourcePanes: List<Pane>? = null
 
-        for ((idx, tab) in cfg.tabs.withIndex()) {
-            val paneIdx = tab.panes.indexOfFirst { it.leaf.id == paneId }
-            if (paneIdx >= 0) {
-                sourceIdx = idx
-                movedLeaf = tab.panes[paneIdx].leaf
-                newSourcePanes = tab.panes.toMutableList().also { it.removeAt(paneIdx) }
-                break
+            for ((idx, tab) in cfg.tabs.withIndex()) {
+                val paneIdx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+                if (paneIdx >= 0) {
+                    sourceIdx = idx
+                    movedLeaf = tab.panes[paneIdx].leaf
+                    newSourcePanes = tab.panes.toMutableList().also { it.removeAt(paneIdx) }
+                    break
+                }
+            }
+            if (sourceIdx < 0 || movedLeaf == null || newSourcePanes == null) return
+            if (sourceIdx == targetIdx) return
+
+            val newTabs = cfg.tabs.toMutableList()
+            val sourceFocus = cfg.tabs[sourceIdx].focusedPaneId
+            val wasFocusedInSource = sourceFocus == paneId
+            val newSourceFocus = if (wasFocusedInSource) null else sourceFocus
+            newTabs[sourceIdx] = cfg.tabs[sourceIdx].copy(
+                panes = newSourcePanes,
+                focusedPaneId = newSourceFocus,
+            )
+            val targetTab = newTabs[targetIdx]
+            val (ox, oy) = randomSnappedOrigin()
+            val newPane = Pane(
+                leaf = movedLeaf,
+                x = ox, y = oy,
+                width = PaneGeometry.DEFAULT_SIZE,
+                height = PaneGeometry.DEFAULT_SIZE,
+                z = nextZ(targetTab),
+            )
+            val demotedTarget = demoteMaximized(targetTab)
+            val newTargetFocus = if (wasFocusedInSource) paneId else demotedTarget.focusedPaneId
+            newTabs[targetIdx] = demotedTarget.copy(
+                panes = demotedTarget.panes + newPane,
+                focusedPaneId = newTargetFocus,
+            )
+            slot._config.value = cfg.copy(tabs = newTabs)
+        }
+    }
+
+    fun swapPanes(windowId: String, aId: String, bId: String) {
+        if (aId.isEmpty() || bId.isEmpty() || aId == bId) return
+        val slot = getOrCreateSlot(windowId)
+        synchronized(slot) {
+            val cfg = slot._config.value
+            for ((tabIdx, tab) in cfg.tabs.withIndex()) {
+                val aIdx = tab.panes.indexOfFirst { it.leaf.id == aId }
+                val bIdx = tab.panes.indexOfFirst { it.leaf.id == bId }
+                if (aIdx < 0 || bIdx < 0) continue
+                val a = tab.panes[aIdx]
+                val b = tab.panes[bIdx]
+                val topZ = tab.panes.maxOf { it.z }
+                val newPanes = tab.panes.toMutableList()
+                newPanes[aIdx] = a.copy(
+                    x = b.x, y = b.y, width = b.width, height = b.height,
+                    z = topZ + 1,
+                )
+                newPanes[bIdx] = b.copy(x = a.x, y = a.y, width = a.width, height = a.height)
+                val newTabs = cfg.tabs.toMutableList()
+                newTabs[tabIdx] = tab.copy(panes = newPanes)
+                slot._config.value = cfg.copy(tabs = newTabs)
+                return
             }
         }
-        if (sourceIdx < 0 || movedLeaf == null || newSourcePanes == null) return@synchronized
-        if (sourceIdx == targetIdx) return@synchronized
-
-        val newTabs = cfg.tabs.toMutableList()
-        // Clear the source tab's saved focus if it pointed at the moving
-        // pane — that pane no longer lives in the source tab. Remember
-        // whether the moving pane was the source's focused one so we can
-        // carry that focus into the target tab; otherwise a cross-tab move
-        // would silently deactivate the pane.
-        val sourceFocus = cfg.tabs[sourceIdx].focusedPaneId
-        val wasFocusedInSource = sourceFocus == paneId
-        val newSourceFocus = if (wasFocusedInSource) null else sourceFocus
-        newTabs[sourceIdx] = cfg.tabs[sourceIdx].copy(
-            panes = newSourcePanes,
-            focusedPaneId = newSourceFocus,
-        )
-        val targetTab = newTabs[targetIdx]
-        val (ox, oy) = randomSnappedOrigin()
-        val newPane = Pane(
-            leaf = movedLeaf,
-            x = ox, y = oy,
-            width = PaneGeometry.DEFAULT_SIZE,
-            height = PaneGeometry.DEFAULT_SIZE,
-            z = nextZ(targetTab),
-        )
-        val demotedTarget = demoteMaximized(targetTab)
-        val newTargetFocus = if (wasFocusedInSource) paneId else demotedTarget.focusedPaneId
-        newTabs[targetIdx] = demotedTarget.copy(
-            panes = demotedTarget.panes + newPane,
-            focusedPaneId = newTargetFocus,
-        )
-        _config.value = cfg.copy(tabs = newTabs)
     }
 
     /**
-     * Swap the positions and sizes of two panes that share a tab. Pane A
-     * (the drag source) inherits B's x/y/width/height and is raised to the
-     * top of the stacking order so the user's dragged pane stays visually
-     * on top; pane B takes A's former geometry and keeps its existing z.
-     * No-op if either id is missing, if they are the same pane, or if they
-     * live in different tabs — cross-tab moves go through [movePaneToTab].
-     *
-     * Dispatched from the web client when the user drops a pane's header
-     * icon onto another pane in the same tab.
+     * Check whether [sessionId] is referenced by any leaf in any window's
+     * current config. Used by session-destruction paths to make sure we
+     * never kill a PTY a linked pane in a sibling window still needs.
      */
-    fun swapPanes(aId: String, bId: String) = synchronized(this) {
-        if (aId.isEmpty() || bId.isEmpty() || aId == bId) return@synchronized
-        val cfg = _config.value
-        for ((tabIdx, tab) in cfg.tabs.withIndex()) {
-            val aIdx = tab.panes.indexOfFirst { it.leaf.id == aId }
-            val bIdx = tab.panes.indexOfFirst { it.leaf.id == bId }
-            if (aIdx < 0 || bIdx < 0) continue
-            val a = tab.panes[aIdx]
-            val b = tab.panes[bIdx]
-            val topZ = tab.panes.maxOf { it.z }
-            val newPanes = tab.panes.toMutableList()
-            newPanes[aIdx] = a.copy(
-                x = b.x, y = b.y, width = b.width, height = b.height,
-                z = topZ + 1,
-            )
-            newPanes[bIdx] = b.copy(x = a.x, y = a.y, width = a.width, height = a.height)
-            val newTabs = cfg.tabs.toMutableList()
-            newTabs[tabIdx] = tab.copy(panes = newPanes)
-            _config.value = cfg.copy(tabs = newTabs)
-            return@synchronized
+    fun isSessionReferencedAnywhere(sessionId: String): Boolean {
+        if (sessionId.isEmpty()) return false
+        for (slot in slots.values) {
+            if (collectSessionIds(slot._config.value).contains(sessionId)) return true
         }
+        return false
     }
-
-    /**
-     * Check whether [sessionId] is referenced by any leaf in the current config.
-     *
-     * @param sessionId the terminal session id to look for
-     * @return true if at least one leaf references this session
-     */
-    fun hasSession(sessionId: String): Boolean =
-        collectSessionIds(_config.value).contains(sessionId)
 
     private fun collectSessionIds(cfg: WindowConfig): Set<String> {
         val out = HashSet<String>()
         fun add(leaf: LeafNode) {
-            // Skip non-terminal leaves: they have no PTY to track. Even for
-            // terminal leaves we guard against the empty string, which only
-            // appears in transient states (e.g. just-blanked persisted blobs).
             if (leaf.sessionId.isNotEmpty()) out.add(leaf.sessionId)
         }
-        cfg.tabs.forEach { tab ->
-            tab.panes.forEach { add(it.leaf) }
-        }
+        cfg.tabs.forEach { tab -> tab.panes.forEach { add(it.leaf) } }
         return out
+    }
+
+    private fun collectSessionIdsAcrossLiveSlots(): Set<String> {
+        val out = HashSet<String>()
+        for (slot in slots.values) out += collectSessionIds(slot._config.value)
+        return out
+    }
+
+    /**
+     * Destroy any PTY in [removedFromSlot] that isn't referenced by any
+     * other slot's current config. Called after any mutation that drops
+     * panes from [beforeSlot].
+     */
+    private fun destroyOrphanedSessions(beforeSlot: WindowSlot, removedFromSlot: Set<String>) {
+        if (removedFromSlot.isEmpty()) return
+        // `beforeSlot` is already synchronized by the caller.
+        for (sid in removedFromSlot) {
+            if (!isSessionReferencedAnywhere(sid)) {
+                TerminalSessions.destroy(sid)
+            }
+        }
     }
 }

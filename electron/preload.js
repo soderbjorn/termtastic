@@ -68,4 +68,22 @@ contextBridge.exposeInMainWorld("electronApi", {
    */
   setElectronCustomTitleBar: (enabled) =>
     ipcRenderer.invoke("set-custom-title-bar", enabled),
+
+  // --- Multi-window display tracking --------------------------------------
+
+  /**
+   * Resolve the Electron display id the current BrowserWindow lives on.
+   *
+   * Called by the Kotlin/JS `WindowRegistryClient` when it reports the
+   * window's geometry to the server-side `/api/windows` endpoint so the
+   * persisted entry remembers which physical monitor the window was last
+   * seen on. The server stores the value opaquely; the next cold start
+   * can honour it via `clampEntryToAttachedDisplay` in `electron/main.js`.
+   *
+   * @returns {Promise<string|null>} the display id as a string, or null
+   *   if the Electron `screen` module can't determine it (e.g. the
+   *   window was destroyed between the call and the IPC round-trip).
+   */
+  getCurrentWindowDisplayId: () =>
+    ipcRenderer.invoke("get-current-window-display-id"),
 });
