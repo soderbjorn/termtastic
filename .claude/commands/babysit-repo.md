@@ -1,5 +1,5 @@
 ---
-description: One tick of repo babysitting. Addresses an actionable owner comment on a Claude-authored PR if any remain, otherwise implements an `ai-dev`-labelled issue, otherwise reviews an unreviewed PR, otherwise exits quietly. Designed for `/loop /babysit-repo`.
+description: One tick of repo babysitting. Addresses an actionable owner comment on a Claude-authored PR if any remain, otherwise reviews an unreviewed PR, otherwise implements an `ai-dev`-labelled issue, otherwise exits quietly. Designed for `/loop /babysit-repo`.
 ---
 
 Arguments: $ARGUMENTS
@@ -37,11 +37,12 @@ gh issue list --state open --repo soderbjorn/termtastic --label <label> --json n
 **PR-review candidate filter** (same rules as `/pick-review`):
 - open and not a draft
 - `latestReviews` empty
-- no existing comment whose body contains the pick-review attribution footer (`posted by [Claude Code]` in a review context)
+- **Either** no existing comment whose body contains the pick-review attribution footer (`posted by [Claude Code]` in a review context), **or** the most recent such comment is older than the latest commit on the PR's head branch — i.e. new code has landed since Claude last reviewed (typically from a `/pick-followup` push), so the PR is eligible for a re-review. The PR query already returns `comments` and `headRefName`; the per-PR `gh pr view <N> --json commits` lookups you do for the follow-up count also surface `committedDate` for the head commit, so this check costs nothing extra. The re-review's own comment will be newer than the head commit, so the rule self-terminates.
 
-**Issue candidate filter** (same rules as `/pick-issue`):
+**Issue candidate filter** (same rules as `/pick-issue`, plus a linked-PR exclusion specific to babysit):
 - open
 - not assigned to someone other than the current user (`@me`-assigned is still eligible)
+- **no open PR already linked to the issue via a closing keyword.** Parse each open PR's `body` for GitHub's closing keywords — case-insensitive `closes #N`, `close #N`, `closed #N`, `fixes #N`, `fix #N`, `fixed #N`, `resolves #N`, `resolve #N`, `resolved #N` — and subtract those issue numbers from the candidate set. The PR-list query already returns `body`, so this is free. Rationale: if an open PR is already addressing the issue, dispatching `/pick-issue` on it would either duplicate work or be declined by `/pick-issue` and end the tick without falling through to the review/follow-up tracks that might actually have work. Re-reviews of that PR belong on the review track; owner feedback on it belongs on the follow-up track.
 
 **Follow-up candidate filter** (same rules as `/pick-followup`):
 - PR is open (draft allowed), authored by Claude Code (PR body contains the `Generated with [Claude Code]` footer, or its linked issue has the `/pick-issue` attribution comment)
@@ -51,18 +52,18 @@ Count-only is fine at this stage — the detailed per-comment analysis happens i
 
 ## 3. Dispatch
 
-Pick one action based on priority — **follow-ups first, then issues, then reviews**. The rationale:
+Pick one action based on priority — **follow-ups first, then reviews, then issues**. The rationale:
 
 1. **Follow-ups first.** If the owner has left feedback on a Claude-authored PR, closing that loop moves an existing PR toward merge. Leaving owner feedback unaddressed while Claude opens new PRs compounds the backlog.
-2. **Then issues.** When no follow-ups are pending, keep burning down implementation work. A reviewed-but-unimplemented repo is worse than a reviewed-and-implemented one.
-3. **Then reviews.** Reviews of others' PRs happen last; they queue up for the idle tail.
+2. **Then reviews.** Driving an existing PR to mergeable state — whether that's a first review or a re-review after new commits — is higher leverage than opening yet another PR. A review that catches a bug before merge is worth more than a new PR that needs its own review later.
+3. **Then issues.** Only when no PR work (follow-ups or reviews) is outstanding do we start burning down new implementation tickets. Opening a new PR while existing PRs wait for review compounds the backlog.
 
 - **At least one follow-up candidate** (and the track isn't disabled by `--no-followups` / `--issues-only` / `--reviews-only`) → invoke the `/pick-followup` skill. Pass `$ARGUMENTS` through verbatim; follow-up-specific args (explicit PR number or semantic hint) are recognised by `/pick-followup`, and the babysit-only flags are no-ops to it. Report one sentence before the handoff ("Addressing follow-up on PR #N — <title>.").
-- **No follow-ups, but ≥ 1 issue candidate** → invoke the `/pick-issue` skill. Pass `$ARGUMENTS` through verbatim; `--label` and `--any-label` flags are recognised by `/pick-issue`. Report one sentence ("Implementing issue #N — <title>.") before the handoff.
-- **No follow-ups, no issues, but ≥ 1 PR-review candidate** → invoke the `/pick-review` skill. Pass `$ARGUMENTS` through verbatim (the babysit flags above are no-ops to it, and it accepts an optional PR number or semantic hint). Report one sentence before the handoff ("Reviewing PR #N — <title>.") so the tick's intent is visible in the loop log.
-- **Nothing in any bucket** → print exactly one line of the form `Idle tick — 0 follow-ups, 0 open \`ai-dev\` issues, 0 PRs awaiting review.` (update the label name and counts to match reality). Do not open a worktree, do not comment on anything, do not post a "nothing to do" message to GitHub. Exit the turn.
+- **No follow-ups, but ≥ 1 PR-review candidate** → invoke the `/pick-review` skill. Pass `$ARGUMENTS` through verbatim (the babysit flags above are no-ops to it, and it accepts an optional PR number or semantic hint). Report one sentence before the handoff ("Reviewing PR #N — <title>.") so the tick's intent is visible in the loop log.
+- **No follow-ups, no reviews, but ≥ 1 issue candidate** → invoke the `/pick-issue` skill. Pass `$ARGUMENTS` through verbatim; `--label` and `--any-label` flags are recognised by `/pick-issue`. Report one sentence ("Implementing issue #N — <title>.") before the handoff.
+- **Nothing in any bucket** → print exactly one line of the form `Idle tick — 0 follow-ups, 0 PRs awaiting review, 0 open \`ai-dev\` issues.` (update the label name and counts to match reality). Do not open a worktree, do not comment on anything, do not post a "nothing to do" message to GitHub. Exit the turn.
 
-At most **one** action per tick — never chain a follow-up into an implementation, or an implementation into a review, even if multiple tracks have candidates. The loop will come back around. Because follow-ups and implementations can take longer than reviews, the loop interval should be chosen with that in mind; a 15- or 30-minute cadence is fine, a 5-minute cadence likely isn't.
+At most **one** action per tick — never chain a follow-up into a review, or a review into an implementation, even if multiple tracks have candidates. The loop will come back around. Because follow-ups and implementations can take longer than reviews, the loop interval should be chosen with that in mind; a 15- or 30-minute cadence is fine, a 5-minute cadence likely isn't.
 
 ## 4. Respect tick boundaries
 
@@ -79,6 +80,6 @@ The intended usage is one of:
 - `/loop /babysit-repo --reviews-only` — run a review-only watchdog, leaving implementation and follow-up work for manual invocation.
 - `/loop /babysit-repo --followups-only` — run a follow-up-only watchdog that only reacts to owner comments on Claude's PRs.
 
-Three-track recap: each tick tries **follow-ups → issues → reviews** in that order and stops at the first track with a candidate, so a busy repo with lots of owner feedback will naturally prioritise closing out existing PRs before Claude opens new ones.
+Three-track recap: each tick tries **follow-ups → reviews → issues** in that order and stops at the first track with a candidate, so a busy repo with lots of open PRs will naturally prioritise driving those to merge before Claude opens new ones.
 
 Stopping the loop is the user's call (Ctrl-C or explicit stop). This skill does not self-terminate the loop.

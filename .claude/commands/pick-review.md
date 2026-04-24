@@ -17,9 +17,9 @@ gh pr list --state open --json number,title,body,author,labels,isDraft,reviewDec
 
 A PR is a **candidate** only if all of the following hold:
 - It is open and **not a draft**.
-- **Authored by `soderbjorn`** (the repo owner) — check `author.login == "soderbjorn"`. This gate prevents Claude from autonomously reviewing PRs from outside contributors; those should be triaged by the owner first. Claude-authored PRs are handled by `/pick-followup`, not here.
+- **Authored by `soderbjorn`** (the repo owner's GitHub account) — check `author.login == "soderbjorn"`. This gate prevents Claude from autonomously reviewing PRs from outside contributors; those should be triaged by the owner first. Note that PRs Claude Code opens through the owner's `gh` token also satisfy this gate — they show up on GitHub as authored by `soderbjorn` regardless of who composed the content, and a fresh review pass on them is legitimate work (follow-ups still take priority per `/babysit-repo` when the owner has actually commented).
 - `latestReviews` is empty (no formal reviews yet). A PR is also a candidate if the only reviews are from the current user and were requested re-reviews — but in general, err toward "no reviews" = no entries.
-- No existing issue/PR comment already contains the pick-review attribution footer (`posted by [Claude Code]` acting as a review). We don't want to double-review.
+- **Either** no existing issue/PR comment contains the pick-review attribution footer (`posted by [Claude Code]` acting as a review), **or** the most recent such comment is older than the latest commit on the PR's head branch. The first case is a fresh review; the second is a re-review triggered by a follow-up push (typically from `/pick-followup` addressing earlier feedback). To check this, look at the `createdAt` of the newest pick-review comment and compare it to the `committedDate` of the head commit (`gh pr view <N> --json comments,commits`). If the head commit is newer, the PR has gained code since the last Claude review and is eligible for another pass. This naturally terminates: the re-review itself will be newer than the head commit, so it won't trigger a third review unless yet more code lands.
 
 If zero candidates remain, stop and report that to the user. Do not proceed.
 
