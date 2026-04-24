@@ -319,6 +319,19 @@ body.is-electron-mac .app-header {
     white-space: nowrap;
     user-select: none;
     flex-shrink: 0;
+    /* Always reserve space at the bottom of the window, even when the server
+       has no Claude usage data to display. The `.claude-usage-bar-empty`
+       variant renders with no content but keeps this minimum height so the
+       bottom bar is continuous across all runtime states and the app logo
+       overlay always has a consistent band to sit against. */
+    min-height: 24px;
+    box-sizing: border-box;
+}
+/* Empty state: no content, just a thin coloured band at the bottom. Kept
+   separate from the normal state so future tweaks (e.g. a subtle gradient,
+   a tagline) can target only the empty case. */
+.claude-usage-bar.claude-usage-bar-empty {
+    padding: 0 12px;
 }
 .claude-usage-bar .usage-item {
     display: flex;
@@ -4542,4 +4555,123 @@ body.appearance-light .settings-section-select {
     cursor: default;
 }
 
+/* ─── App logo overlay ──────────────────────────────────────────────
+   The "Termtastic" wordmark + status dot pinned to the lower-right
+   corner of the window. Painted on top of everything via position:
+   fixed and a high z-index so it's always visible regardless of what
+   tab, modal, or pane is active. pointer-events: none so it never
+   intercepts clicks meant for the UI below it.
+
+   Sits just above the Claude usage bar (which reserves a fixed min
+   height via .claude-usage-bar above), with enough padding that it
+   reads as a badge rather than a footer element. Size is deliberately
+   small-ish — the label should feel like a signature, not a banner —
+   so it doesn't crowd content in the main terminal area.
+
+   The dot mirrors the per-tab spinner/waiting indicators at the
+   aggregate level: blue pulse when any session is "working", red
+   pulse when any session is "waiting for input", dim when idle.
+   See AppLogo.kt / updateAppLogoState() for the state machine. */
+.app-logo {
+    position: fixed;
+    right: 14px;
+    bottom: 32px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    pointer-events: none;
+    user-select: none;
+    z-index: 100;
+    /* A soft text shadow so the wordmark stays legible against noisy
+       terminal content underneath (bright ANSI output, light themes,
+       etc.). Tuned low enough that it doesn't look like a drop shadow
+       on quiet backgrounds. */
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+.app-logo-wordmark {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    /* Use the termtastic-orange token the rest of the UI leans on for
+       brand accents (see .sidebar-divider.dragging, the tab active
+       indicator fallback, etc.) so the logo feels in-family. */
+    color: var(--termtastic-orange, #F4B869);
+    line-height: 1;
+}
+
+/* In light appearance, the orange + white-ish text-shadow combo reads
+   as washed out. Swap to a darker shadow so the wordmark still pops. */
+body.appearance-light .app-logo {
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.75), 0 0 1px rgba(0, 0, 0, 0.3);
+}
+
+/* The status dot. Base state is idle (dim grey, no pulse). The
+   .state-working and .state-waiting modifier classes are added by
+   updateAppLogoState() in AppLogo.kt when any session is in that
+   state — waiting wins over working because it's action-required.
+   Each state has its own keyframe so the colour animates smoothly
+   with the opacity pulse. */
+.app-logo-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text-secondary, #8E8E93);
+    box-shadow: 0 0 0 2px rgba(142, 142, 147, 0.18);
+    flex-shrink: 0;
+    transition: background-color 180ms ease-in-out,
+                box-shadow 180ms ease-in-out;
+}
+
+.app-logo-dot.state-working {
+    background: #4C9AFF;
+    box-shadow: 0 0 0 2px rgba(76, 154, 255, 0.25);
+    animation: app-logo-pulse-blue 1.6s ease-in-out infinite;
+}
+
+.app-logo-dot.state-waiting {
+    background: #FF6961;
+    box-shadow: 0 0 0 2px rgba(255, 105, 97, 0.3);
+    animation: app-logo-pulse-red 1.2s ease-in-out infinite;
+}
+
+/* Pulse keyframes: scale + glow breathe to draw the eye without
+   being obnoxious. Shorter period for waiting (red) than for working
+   (blue) because waiting is action-required and should feel more
+   urgent, mirroring the fade-warning on .pane-status-spinner. */
+@keyframes app-logo-pulse-blue {
+    0%, 100% {
+        box-shadow: 0 0 0 2px rgba(76, 154, 255, 0.25),
+                    0 0 0 0 rgba(76, 154, 255, 0.45);
+    }
+    50% {
+        box-shadow: 0 0 0 2px rgba(76, 154, 255, 0.25),
+                    0 0 0 6px rgba(76, 154, 255, 0);
+    }
+}
+
+@keyframes app-logo-pulse-red {
+    0%, 100% {
+        box-shadow: 0 0 0 2px rgba(255, 105, 97, 0.30),
+                    0 0 0 0 rgba(255, 105, 97, 0.55);
+        transform: scale(1);
+    }
+    50% {
+        box-shadow: 0 0 0 2px rgba(255, 105, 97, 0.30),
+                    0 0 0 8px rgba(255, 105, 97, 0);
+        transform: scale(1.08);
+    }
+}
+
+/* Respect prefers-reduced-motion: keep the colour change but drop the
+   pulse animation, matching the existing motion-reduction hygiene
+   elsewhere in this stylesheet. */
+@media (prefers-reduced-motion: reduce) {
+    .app-logo-dot.state-working,
+    .app-logo-dot.state-waiting {
+        animation: none;
+    }
+}
 

@@ -769,17 +769,23 @@ internal fun applySpinnerState(el: HTMLElement, baseClass: String, state: String
 
 /**
  * Updates all session state indicators (spinners for "working", warning
- * icons for "waiting") across the sidebar, tab bar, and pane headers.
+ * icons for "waiting") across the sidebar, tab bar, pane headers, and the
+ * lower-right app logo dot.
  *
  * Also triggers desktop notification checks and adjusts the tab bar active
  * indicator position.
  *
  * @param sessionStates the current session ID to state map from the server
  * @see checkStateNotifications
+ * @see updateAppLogoState
  */
 internal fun updateStateIndicators(sessionStates: Map<String, String?>) {
     val document = kotlinx.browser.document
     checkStateNotifications(sessionStates)
+    // Keep the lower-right app logo dot in sync with the sidebar/tab-bar
+    // spinners and warning icons — all three surfaces derive from the same
+    // per-session state map.
+    updateAppLogoState(sessionStates)
     val effective = HashMap(sessionStates)
     for ((sessionId, state) in effective) {
         val spinners = document.querySelectorAll(".pane-status-spinner[data-session='$sessionId']")

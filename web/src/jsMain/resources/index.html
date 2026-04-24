@@ -138,9 +138,20 @@
     </div>
     <!-- Horizontal drag handle above the Claude usage bar. Only visible when
          the server has pushed usage data; drag down to hide the bar, drag up
-         to reveal it. -->
+         to reveal it. The footer below always takes up space even when the
+         server has no usage data to report (it just renders empty), so there
+         is always room for the app logo overlay in the lower-right corner. -->
     <div class="usage-bar-divider" id="usage-bar-divider" style="display: none;"></div>
-    <footer id="claude-usage-bar" class="claude-usage-bar" style="display: none;"></footer>
+    <footer id="claude-usage-bar" class="claude-usage-bar claude-usage-bar-empty"></footer>
+</div>
+<!-- App logo overlay. Painted on top of everything via position:fixed in the
+     lower-right corner, so it stays visible regardless of modals, the
+     sidebar, or which tab is active. The dot to the right of the wordmark
+     pulsates blue when any tab is working and red when any tab is waiting
+     for input; see AppLogo.kt and updateStateIndicators(). -->
+<div id="app-logo" class="app-logo" aria-hidden="true">
+    <span class="app-logo-wordmark">Termtastic</span>
+    <span id="app-logo-dot" class="app-logo-dot"></span>
 </div>
 <script type="application/javascript" src="web.js"></script>
 </body>

@@ -125,8 +125,13 @@ fun updateClaudeUsageBadge(usage: dynamic) {
     val bar = usageBar ?: return
     val divider = usageBarDividerEl
     if (usage == null || usage == undefined) {
-        // No data at all — hide both the bar and the drag handle above it.
-        bar.style.display = "none"
+        // No data at all — keep the bar visible but empty so it still reserves
+        // space at the bottom of the window (required by issue #14 so the app
+        // logo overlay has a background band to sit against). Hide only the
+        // divider: there is nothing to drag-collapse when the bar is empty.
+        bar.innerHTML = ""
+        bar.className = "claude-usage-bar claude-usage-bar-empty"
+        bar.style.display = ""
         divider?.style?.display = "none"
         return
     }
