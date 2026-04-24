@@ -2,7 +2,7 @@
 
 Termtastic is a terminal replacement suitable for the modern age of agentic software development.
 
-The tool itself has been completely but carefully "vibe-coded", but the code has not been closely inspected — use at your own risk! Some parts are more well-tested and complete while others are very much work in progress.
+The code has not undergone thorough review. Some parts are more well-tested and complete while others are very much work in progress. **One important note is that if you enable remote connections from other devices, take note that these are plain HTTP, not HTTPS.**
 
 ## Features
 
