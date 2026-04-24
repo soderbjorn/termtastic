@@ -4575,14 +4575,21 @@ body.appearance-light .settings-section-select {
 .app-logo {
     position: fixed;
     right: 14px;
-    /* Cleared up from 32px — the previous value put the overlay right on top
-       of the Claude usage bar's content (see @soderbjorn screenshot on
-       #16), because the populated usage bar's effective height
-       (min-height 24 px + 3 px vertical padding + 1 px top border ≈ 28–30 px)
-       didn't leave enough breathing room before the dot's glow ring. 44 px
-       gives the wordmark and its pulse halo a comfortable band above the
-       bottom bar in both the populated and empty states. */
-    bottom: 44px;
+    /* The logo lives *inside the Claude usage bar band* at the bottom of the
+       window, NOT floating above it inside the tab content area. Earlier
+       iterations tried 32 px (collided with the bar's content — first
+       @soderbjorn screenshot on #16) and then 44 px (bumped away from the
+       collision but that pushed the overlay up into the terminal tab's
+       rounded bottom-right corner, so it started visually living inside
+       the tab content surface — second @soderbjorn screenshot on #16:
+       "it's not supposed to be inside the tab content area").
+       At 7 px the wordmark (~15 px cap-height) and 13 px dot sit vertically
+       centred within the ~30 px populated bar (24 px min-height + 6 px
+       vertical padding + 1 px top border), and within the 24 px empty-bar
+       band they still only push their pulse halo a few pixels above the
+       bar's top border — i.e. "only minimally overlaying padding" above
+       the bar rather than sitting wholly on top of the tab content. */
+    bottom: 7px;
     display: flex;
     align-items: center;
     /* Slightly wider gap to match the bumped-up dot size so the wordmark
