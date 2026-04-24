@@ -47,6 +47,7 @@ dependencies {
     implementation(libs.ktor.serverWebsockets)
     implementation(libs.ktor.serverContentNegotiation)
     implementation(libs.ktor.serializationKotlinxJson)
+    implementation(libs.ktor.networkTlsCertificates)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.pty4j)

@@ -74,6 +74,21 @@ struct HostsView: View {
                 Text(msg)
             }
         }
+        .alert("Server certificate changed", isPresented: .init(
+            get: { viewModel.pinMismatchEntry != nil },
+            set: { if !$0 { viewModel.pinMismatchEntry = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { viewModel.pinMismatchEntry = nil }
+            Button("Re-pair", role: .destructive) {
+                if let entry = viewModel.pinMismatchEntry {
+                    viewModel.acceptNewServerCertificate(entry: entry)
+                }
+            }
+        } message: {
+            if let entry = viewModel.pinMismatchEntry {
+                Text("The server at \(entry.host):\(entry.port) is presenting a different TLS certificate than the one you paired with previously. This may mean the server was reinstalled, or that someone is intercepting your connection. Re-pair only if you trust this network.")
+            }
+        }
         .onChange(of: ConnectionHolder.shared.client != nil) { _, connected in
             if connected { onConnected() }
         }

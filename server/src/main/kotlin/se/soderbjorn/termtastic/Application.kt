@@ -32,7 +32,9 @@ import com.pty4j.WinSize
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
+import io.ktor.server.engine.applicationEnvironment
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.engine.sslConnector
 import io.ktor.server.http.content.staticFiles
 import io.ktor.server.http.content.staticResources
 import io.ktor.http.HttpStatusCode
@@ -197,16 +199,32 @@ fun main() {
         ?: SERVER_PORT
     SettingsDialog.setListeningPort(port)
 
-    // Bind to all interfaces so the "allow connections from other sources
-    // than localhost" setting can be flipped at runtime without restarting
-    // Netty. The default-off policy is enforced inside DeviceAuth.authorize,
-    // which rejects non-loopback requests until the user opts in via
-    // the settings dialog.
+    // Generate-or-load the self-signed TLS keystore before binding the listener.
+    // Native clients pin the server's leaf cert by SHA-256 (TOFU on first
+    // connect, verify thereafter); browsers fall back to the standard
+    // self-signed-warning interstitial. See se.soderbjorn.termtastic.tls.CertManager.
+    val tlsBundle = se.soderbjorn.termtastic.tls.CertManager.ensureKeystore()
+
+    // Bind HTTPS only on all interfaces. The default-off remote policy is
+    // enforced inside DeviceAuth.authorize, which rejects non-loopback
+    // requests until the user opts in via the settings dialog. There is no
+    // plain-HTTP fallback — every connection is encrypted.
+    val listenPort = port
     val server = embeddedServer(
-        Netty,
-        port = port,
-        host = "0.0.0.0",
-        module = { module(repo, sessionStates, usageMonitor) }
+        factory = Netty,
+        environment = applicationEnvironment {},
+        configure = {
+            sslConnector(
+                keyStore = tlsBundle.keystore,
+                keyAlias = tlsBundle.alias,
+                keyStorePassword = { tlsBundle.password.copyOf() },
+                privateKeyPassword = { tlsBundle.password.copyOf() },
+            ) {
+                this.host = "0.0.0.0"
+                this.port = listenPort
+            }
+        },
+        module = { module(repo, sessionStates, usageMonitor) },
     )
 
     if (java.awt.GraphicsEnvironment.isHeadless()) {

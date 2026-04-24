@@ -61,6 +61,16 @@ object AppPaths {
     }
 
     /**
+     * Directory for TLS state — the self-signed keystore and its random
+     * password file. Lives under [dataDir] so a `-Dtermtastic.dbPath`
+     * override keeps the cert next to the database (matters for tests
+     * and isolated dev installs).
+     *
+     * @return the `tls/` subdirectory; created on demand by [CertManager].
+     */
+    fun tlsDir(): File = File(dataDir(), "tls")
+
+    /**
      * Determine the default application data directory based on the OS.
      *
      * - macOS: `~/Library/Application Support/Termtastic`

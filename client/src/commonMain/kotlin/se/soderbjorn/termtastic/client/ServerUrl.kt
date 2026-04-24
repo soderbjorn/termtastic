@@ -15,14 +15,23 @@ package se.soderbjorn.termtastic.client
  * the scheme/host/port split so the various websocket and REST endpoints
  * (`/window`, `/pty/{id}`, `/api/ui-settings`) can be derived consistently.
  *
- * @property host   hostname or IP address of the Termtastic server.
- * @property port   TCP port the server listens on (no default).
- * @property useTls if `true`, use `https`/`wss`; otherwise `http`/`ws`.
+ * @property host                 hostname or IP address of the Termtastic server.
+ * @property port                 TCP port the server listens on (no default).
+ * @property useTls               if `true`, use `https`/`wss`; otherwise `http`/`ws`.
+ *   Defaults to `true` — every Termtastic server now serves TLS only. Set to
+ *   `false` only when targeting an explicitly insecure dev setup.
+ * @property pinnedFingerprintHex lowercase hex SHA-256 of the server's leaf
+ *   certificate. When `null`, the underlying client runs in TOFU capture mode
+ *   on first connect and surfaces the observed fingerprint via
+ *   [TermtasticClient.observedFingerprint] so the caller can persist it.
+ *   When set, the platform `createPlatformHttpClient` verifies the leaf cert
+ *   matches and refuses the connection on mismatch.
  */
 data class ServerUrl(
     val host: String,
     val port: Int,
-    val useTls: Boolean = false,
+    val useTls: Boolean = true,
+    val pinnedFingerprintHex: String? = null,
 ) {
     /** `"https"` or `"http"` depending on [useTls]. */
     val httpScheme: String get() = if (useTls) "https" else "http"

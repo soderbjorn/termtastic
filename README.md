@@ -2,7 +2,9 @@
 
 Termtastic is a terminal replacement suitable for the modern age of agentic software development.
 
-The code has not undergone thorough review. Some parts are more well-tested and complete while others are very much work in progress. **One important note is that if you enable remote connections from other devices, take note that these are plain HTTP, not HTTPS.**
+The code has not undergone thorough review. Some parts are more well-tested and complete while others are very much work in progress.
+
+The server speaks **HTTPS only**, using a self-signed certificate that's generated on first boot. Native clients (Android, iOS) trust the certificate via SSH-style fingerprint pinning: the first successful connect captures the leaf cert's SHA-256, and every subsequent connect verifies against that pin. Web browsers will show a one-time "self-signed certificate" warning the first time you visit the server's URL — accept it once and the browser remembers. The packaged Electron app accepts the loopback certificate silently; loopback traffic can't be MITM'd, so pinning it would only complicate the dev cycle. To rotate the certificate, delete `~/Library/Application Support/Termtastic/tls/` and restart — pinned mobile clients will then surface a "cert changed, re-pair?" prompt on next connect.
 
 ## Features
 

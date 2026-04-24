@@ -2,11 +2,18 @@ import Foundation
 import Observation
 
 /// Codable mirror of the shared KMP `HostEntry` for JSON file persistence.
+///
+/// `pinnedFingerprintHex` is the SHA-256 of the server's leaf TLS certificate,
+/// captured TOFU-style on the first successful connect. `nil` puts the next
+/// connect in capture mode; non-nil pins the value and refuses connections
+/// presenting any other certificate (UI then surfaces a "cert changed,
+/// re-pair?" prompt).
 struct HostEntryLocal: Codable, Identifiable, Equatable {
     let id: String
     var label: String
     var host: String
     var port: Int32
+    var pinnedFingerprintHex: String?
 }
 
 /// File-based JSON persistence for the saved hosts list, following the
@@ -33,7 +40,8 @@ final class HostsStore {
             id: UUID().uuidString,
             label: label,
             host: host,
-            port: port
+            port: port,
+            pinnedFingerprintHex: nil
         )
         hosts.append(entry)
         save()

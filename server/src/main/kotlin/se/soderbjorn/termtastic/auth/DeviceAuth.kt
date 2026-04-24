@@ -518,6 +518,37 @@ object DeviceAuth {
             }
         }
 
+        // Self-healing bootstrap: if no devices have been trusted yet AND this
+        // is a loopback connection, auto-trust it. This handles the canonical
+        // case of a freshly installed Electron app whose renderer is the very
+        // first client to talk to its embedded server — the user shouldn't be
+        // asked to approve a dialog for their own app spawned ~200ms ago.
+        //
+        // Once any device is trusted, this branch never fires again. Every
+        // later loopback connection (including from a different process on the
+        // same machine) goes through the normal approval flow. If the user
+        // later wipes all trusted entries, the next loopback connect bootstraps
+        // again — that's the "self-healing" property the project owner asked for.
+        if (
+            hash != null &&
+            isLoopback(remoteAddress) &&
+            loadDevices(repo).devices.isEmpty()
+        ) {
+            log.info(
+                "DeviceAuth: auto-trusting bootstrap loopback connection from {} hashPrefix={}",
+                remoteAddress,
+                hash.take(10),
+            )
+            return@withLock persistTrusted(repo, hash, client, now).also {
+                val roundTrip = loadDevices(repo)
+                log.info(
+                    "DeviceAuth: bootstrap auto-trust persisted; readback count={} prefixes={}",
+                    roundTrip.devices.size,
+                    roundTrip.devices.joinToString(",") { it.tokenHash.take(10) },
+                )
+            }
+        }
+
         if (GraphicsEnvironment.isHeadless()) {
             log.warn(
                 "Rejecting connection from {}: no token or unknown token, and JVM is headless so no approval dialog can be shown",
@@ -565,28 +596,7 @@ object DeviceAuth {
             log.info("User approved cookie-less connection from {} (not persisted)", remoteAddress)
             return@withLock Decision.APPROVED
         }
-        val devices = loadDevices(repo)
-        val initialConnection = ClientConnection(
-            type = client.type,
-            hostname = client.hostname,
-            selfReportedIp = client.selfReportedIp,
-            remoteAddress = remoteAddress,
-            firstSeenEpochMs = now,
-            lastSeenEpochMs = now,
-        )
-        val added = TrustedDevice(
-            tokenHash = hash,
-            label = null,
-            firstSeenEpochMs = now,
-            lastSeenEpochMs = now,
-            lastIp = remoteAddress,
-            connections = listOf(initialConnection),
-        )
-        saveDevices(repo, TrustedDevices(devices.devices + added))
-        recentDecisions[hash] = CachedDecision(
-            Decision.APPROVED,
-            now + RECENT_DECISION_TTL_MS,
-        )
+        persistTrusted(repo, hash, client, now)
         // Read back immediately and log what we just persisted so we can
         // tell mid-debug if the write/read round-trip is broken.
         val roundTrip = loadDevices(repo)
@@ -598,6 +608,46 @@ object DeviceAuth {
             roundTrip.devices.joinToString(",") { it.tokenHash.take(10) },
         )
         Decision.APPROVED
+    }
+
+    /**
+     * Append a new trusted device entry for [hash] observed from [client] at
+     * [now], and prime the recent-decisions cache so concurrent in-flight
+     * requests from the same token short-circuit without re-prompting.
+     *
+     * Called by both the manual-approve tail of [promptOrReject] and the
+     * auto-accept-bootstrap branch above it. Returns [Decision.APPROVED] for
+     * convenience so callers can `return persistTrusted(...)` directly.
+     */
+    private fun persistTrusted(
+        repo: SettingsRepository,
+        hash: String,
+        client: ClientInfo,
+        now: Long,
+    ): Decision {
+        val devices = loadDevices(repo)
+        val initialConnection = ClientConnection(
+            type = client.type,
+            hostname = client.hostname,
+            selfReportedIp = client.selfReportedIp,
+            remoteAddress = client.remoteAddress,
+            firstSeenEpochMs = now,
+            lastSeenEpochMs = now,
+        )
+        val added = TrustedDevice(
+            tokenHash = hash,
+            label = null,
+            firstSeenEpochMs = now,
+            lastSeenEpochMs = now,
+            lastIp = client.remoteAddress,
+            connections = listOf(initialConnection),
+        )
+        saveDevices(repo, TrustedDevices(devices.devices + added))
+        recentDecisions[hash] = CachedDecision(
+            Decision.APPROVED,
+            now + RECENT_DECISION_TTL_MS,
+        )
+        return Decision.APPROVED
     }
 
     /**

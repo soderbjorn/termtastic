@@ -7,7 +7,7 @@
 // server/build.gradle.kts). The packaged build still talks to SERVER_PORT
 // (8082) — that path is handled inside main.js, not here.
 val devServerPort = 8083
-val targetUrl = "http://localhost:$devServerPort"
+val targetUrl = "https://127.0.0.1:$devServerPort"
 
 val nodeModulesDir = layout.projectDirectory.dir("node_modules")
 val distDir = layout.projectDirectory.dir("dist")
