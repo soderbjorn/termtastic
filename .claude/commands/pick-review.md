@@ -8,7 +8,7 @@ Pick one open PR on `soderbjorn/termtastic` that has not yet received a review, 
 
 ## 1. Resolve the target PR
 
-- If `$ARGUMENTS` contains an explicit PR number (e.g. `42`, `#42`, `PR 42`, `pr/42`), target that PR directly. Skip to step 3. If the PR is closed/merged or does not exist, stop and report.
+- If `$ARGUMENTS` contains an explicit PR number (e.g. `42`, `#42`, `PR 42`, `pr/42`), target that PR directly. Skip to step 3. If the PR is closed/merged or does not exist, stop and report. **The author gate below still applies** — if the targeted PR is not authored by `soderbjorn`, stop and report rather than reviewing.
 - Otherwise fetch candidates:
 
 ```
@@ -17,6 +17,7 @@ gh pr list --state open --json number,title,body,author,labels,isDraft,reviewDec
 
 A PR is a **candidate** only if all of the following hold:
 - It is open and **not a draft**.
+- **Authored by `soderbjorn`** (the repo owner) — check `author.login == "soderbjorn"`. This gate prevents Claude from autonomously reviewing PRs from outside contributors; those should be triaged by the owner first. Claude-authored PRs are handled by `/pick-followup`, not here.
 - `latestReviews` is empty (no formal reviews yet). A PR is also a candidate if the only reviews are from the current user and were requested re-reviews — but in general, err toward "no reviews" = no entries.
 - No existing issue/PR comment already contains the pick-review attribution footer (`posted by [Claude Code]` acting as a review). We don't want to double-review.
 

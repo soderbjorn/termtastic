@@ -11,10 +11,12 @@ Pick one open GitHub issue from `soderbjorn/termtastic`, implement it, push a br
 Default filter is `--label ai-dev`. Only override if `$ARGUMENTS` explicitly says so (e.g. "any label", "label: bug", "no label filter"). A plain semantic description like "the issue about renaming color schemes" is **not** a label override — keep the `ai-dev` filter.
 
 ```
-gh issue list --state open --label ai-dev --json number,title,body,labels,assignees,createdAt --limit 200
+gh issue list --state open --label ai-dev --json number,title,body,labels,assignees,author,createdAt --limit 200
 ```
 
 Exclude issues already assigned to someone else. Issues assigned to the current user (`@me`) are still eligible (likely a prior run).
+
+**Exclude issues not authored by `soderbjorn`** (the repo owner). This gate prevents Claude from autonomously implementing issues filed by outside contributors — the owner must have opened (or re-opened) the ticket. Check `author.login == "soderbjorn"` on each candidate.
 
 If zero candidates remain, stop and report that to the user. Do not proceed.
 
