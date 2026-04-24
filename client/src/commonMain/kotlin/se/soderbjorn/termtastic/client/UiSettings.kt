@@ -98,16 +98,21 @@ fun ColorScheme.effectiveColors(
 }
 
 /**
- * Fetch `/api/ui-settings` and map it to a [UiSettings]. Returns `null` if the
- * server rejects auth or the request fails; callers should keep using their
- * current/default colors in that case.
+ * Fetch `/api/ui-settings` for the given [windowId] and map it to a
+ * [UiSettings]. Returns `null` if the server rejects auth or the request
+ * fails; callers should keep using their current/default colors in that
+ * case.
  *
  * Unknown theme names and unknown appearance values fall back to
  * [DEFAULT_THEME_NAME] / [Appearance.Auto] so a typo in the server blob never
  * crashes a client.
+ *
+ * @param windowId the client-assigned window id. The plain-browser client
+ *   and Android both use `"primary"`. Electron renderers pass the id
+ *   assigned by `electron/main.js` via their URL's `?window=<id>`.
  */
-suspend fun TermtasticClient.fetchUiSettings(): UiSettings? {
-    val url = serverUrl.httpUrl("/api/ui-settings")
+suspend fun TermtasticClient.fetchUiSettings(windowId: String = "primary"): UiSettings? {
+    val url = serverUrl.httpUrl("/api/ui-settings?window=") + urlEncodeForQuery(windowId)
     val response = runCatching {
         httpClient.get(url) {
             header("X-Termtastic-Auth", authToken)
@@ -163,3 +168,30 @@ private fun defaultUiSettings(): UiSettings =
 
 private fun kotlinx.serialization.json.JsonPrimitive.contentOrNullSafe(): String? =
     if (isString) content else null
+
+/**
+ * Minimal URL query-component encoder. Used to encode the windowId passed
+ * as a query parameter to `/api/ui-settings`. Scoped narrowly so callers
+ * don't have to pull in a platform-specific URL util into `commonMain`
+ * just for this; the mirror [TermtasticClient] helper handles the WS path.
+ *
+ * @param value the raw string to encode
+ * @return the URL-safe representation
+ */
+private fun urlEncodeForQuery(value: String): String {
+    val sb = StringBuilder(value.length)
+    for (c in value) {
+        when {
+            c.isLetterOrDigit() || c == '-' || c == '_' || c == '.' || c == '~' -> sb.append(c)
+            else -> {
+                val bytes = c.toString().encodeToByteArray()
+                for (b in bytes) {
+                    sb.append('%')
+                    sb.append("0123456789ABCDEF"[(b.toInt() ushr 4) and 0x0f])
+                    sb.append("0123456789ABCDEF"[b.toInt() and 0x0f])
+                }
+            }
+        }
+    }
+    return sb.toString()
+}

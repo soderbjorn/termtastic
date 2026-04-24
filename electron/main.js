@@ -12,7 +12,7 @@
  *   recreate window on dock click).
  */
 
-const { app, BrowserWindow, Menu, globalShortcut, ipcMain, session } = require("electron");
+const { app, BrowserWindow, Menu, globalShortcut, ipcMain, screen, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
@@ -48,6 +48,34 @@ if (!app.requestSingleInstanceLock()) {
 app.on("second-instance", () => showAndFocus());
 
 let mainWindow = null;
+
+// --- Multi-window tracking --------------------------------------------------
+//
+// Every main BrowserWindow we create is recorded here, keyed by its
+// client-assigned window id (UUID). Each renderer also receives its id via
+// the URL query string (?window=<id>) so the Kotlin/JS side can namespace
+// future per-window state to that id. The server owns the persistent list
+// — see server/.../WindowRegistry.kt and the /api/windows REST surface.
+//
+// `mainWindow` (above) is kept in sync with the most recently focused window
+// so existing single-window code paths (showAndFocus, setWindowBackgroundColor
+// without a sender resolution, etc.) still do something sensible.
+const mainWindows = new Map();
+
+/**
+ * Generate a fresh, opaque window id for a newly opened main window.
+ *
+ * @returns {string} a random identifier with no semantic meaning
+ */
+function makeWindowId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // Node's `crypto` module is the fallback for Electron main contexts without
+  // the global Web Crypto (very old builds). We only import it here because
+  // it isn't needed on current Electron versions.
+  return require("crypto").randomUUID();
+}
 
 // --- Window chrome preference (custom title bar toggle) ---------------------
 //
@@ -99,6 +127,326 @@ function saveChromePrefs(prefs) {
 }
 
 let chromePrefs = loadChromePrefs();
+
+// --- Window-registry mirror (for cold-start restore) -----------------------
+//
+// The server is the source of truth for the window registry (see
+// server/.../WindowRegistry.kt), but at cold-start the Electron main
+// process needs to know how many BrowserWindows to spawn *before* any
+// renderer has loaded to hit the authed REST surface. We maintain two
+// JSON files under `userData`:
+//
+// 1. `electron-windows.json` — the **live** mirror. Updated on every
+//    create/move/resize event, and on `closed` events *except* when
+//    closing the last window (which would erase the restore state
+//    just when we need it most). This file covers the crash-recovery
+//    case — if the process dies mid-session, cold start still finds
+//    a recent snapshot here.
+//
+// 2. `electron-session.json` — the **last-known-good session** snapshot.
+//    Written exactly once per process lifetime, at `before-quit`, from
+//    the currently-live `mainWindows` set. This file is never overwritten
+//    by a `closed` event, so a regular `File > Quit` (or `Cmd+Q` / `Alt+F4`)
+//    records the user's final window layout for the next cold start.
+//    Cold-start restore prefers this file over the live mirror when
+//    present and non-empty.
+//
+// The split fixes the bug where closing every window before relaunching
+// (or quitting the app on non-macOS platforms) erased the restore data,
+// so the next launch would always open one fresh window instead of the
+// user's previous session.
+
+/**
+ * Absolute path to the live mirror file, updated continuously as the
+ * user moves, resizes, and closes windows. Used as a crash-recovery
+ * fallback when the session snapshot is absent.
+ *
+ * @returns {string} Path under Electron's `userData`.
+ */
+function windowsMirrorPath() {
+  return path.join(app.getPath("userData"), "electron-windows.json");
+}
+
+/**
+ * Absolute path to the session snapshot file, written on `before-quit`
+ * and used by cold-start restore as the primary source of truth for
+ * "which windows should open now?". Never overwritten by in-session
+ * window lifecycle events.
+ *
+ * @returns {string} Path under Electron's `userData`.
+ */
+function sessionSnapshotPath() {
+  return path.join(app.getPath("userData"), "electron-session.json");
+}
+
+/**
+ * Load the mirrored registry from disk.
+ *
+ * @returns {Array<{id:string,x:number,y:number,width:number,height:number,displayId?:string}>}
+ *   list of previously-open windows, or empty on first launch / malformed file
+ */
+function loadWindowsMirror() {
+  return readWindowEntriesFile(windowsMirrorPath());
+}
+
+/**
+ * Load the session snapshot from disk.
+ *
+ * Called by {@link restoreOrCreateWindows} before consulting the live
+ * mirror, so a clean quit-and-relaunch restores exactly the windows the
+ * user had open at quit time rather than the (possibly empty) live
+ * mirror left behind by the close cascade.
+ *
+ * @returns {Array<{id:string,x:number,y:number,width:number,height:number,displayId?:string}>}
+ *   list of windows that were live at the last `before-quit`, or empty
+ *   when the file is missing / malformed / never written.
+ */
+function loadSessionSnapshot() {
+  return readWindowEntriesFile(sessionSnapshotPath());
+}
+
+/**
+ * Shared JSON-array loader for the two mirror files.
+ *
+ * Extracted because both the live mirror and the session snapshot use
+ * the same on-disk schema; treating them as interchangeable on read
+ * means {@link restoreOrCreateWindows} can fall back from one to the
+ * other without branching.
+ *
+ * @param {string} filePath absolute path to a JSON file produced by
+ *   {@link saveWindowsMirror} or {@link saveSessionSnapshot}
+ * @returns {Array<{id:string,x:number,y:number,width:number,height:number,displayId?:string}>}
+ *   parsed entries, or `[]` on any failure (missing file, bad JSON,
+ *   unexpected shape). Entries without a string `id` are dropped.
+ */
+function readWindowEntriesFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((e) => e && typeof e.id === "string");
+  } catch (_) {
+    return [];
+  }
+}
+
+/**
+ * Clamp a persisted window rect onto a still-attached Electron display.
+ *
+ * If the user last left the window on a monitor that has since been
+ * disconnected, restoring with the original `x`/`y` would place the
+ * BrowserWindow offscreen and the user would never see it. This helper
+ * first tries to find a display matching the persisted `displayId`; if
+ * that display is gone, it re-centres the rectangle on the primary
+ * display while preserving the window's size.
+ *
+ * `screen` requires `app.whenReady()` to have resolved, so this helper
+ * is only safe to call from the restore path (which always runs after
+ * the ready event).
+ *
+ * @param {{id:string,x:number,y:number,width:number,height:number,displayId?:string}} entry
+ * @returns {{x:number,y:number,width:number,height:number}} bounds safe to pass to BrowserWindow
+ */
+function clampEntryToAttachedDisplay(entry) {
+  const width = Math.max(320, Number.isFinite(entry.width) ? entry.width : 1280);
+  const height = Math.max(240, Number.isFinite(entry.height) ? entry.height : 800);
+  const x = Number.isFinite(entry.x) ? entry.x : null;
+  const y = Number.isFinite(entry.y) ? entry.y : null;
+  try {
+    const displays = screen.getAllDisplays();
+    // If we have a displayId hint, honour it first — it's the cheapest way
+    // to land the window back on the intended monitor, and it survives
+    // changing external-display arrangements that shift the global
+    // coordinate system.
+    if (entry.displayId) {
+      const match = displays.find((d) => String(d.id) === String(entry.displayId));
+      if (match) {
+        // Keep the original (x, y) if they still land on that display;
+        // otherwise re-centre the window within the display's workArea.
+        const wa = match.workArea;
+        const xOnDisplay = x !== null && x >= wa.x && x + width <= wa.x + wa.width;
+        const yOnDisplay = y !== null && y >= wa.y && y + height <= wa.y + wa.height;
+        if (xOnDisplay && yOnDisplay) return { x, y, width, height };
+        return {
+          x: Math.round(wa.x + (wa.width - width) / 2),
+          y: Math.round(wa.y + (wa.height - height) / 2),
+          width,
+          height,
+        };
+      }
+      // Fall through: persisted display is no longer attached.
+    }
+    // No hint, or hint stale. If (x,y) still live inside some attached
+    // display, trust them. Otherwise re-centre on the primary display.
+    if (x !== null && y !== null) {
+      const covering = displays.find((d) =>
+        x >= d.workArea.x &&
+        y >= d.workArea.y &&
+        x + width <= d.workArea.x + d.workArea.width &&
+        y + height <= d.workArea.y + d.workArea.height
+      );
+      if (covering) return { x, y, width, height };
+    }
+    const primary = screen.getPrimaryDisplay();
+    return {
+      x: Math.round(primary.workArea.x + (primary.workArea.width - width) / 2),
+      y: Math.round(primary.workArea.y + (primary.workArea.height - height) / 2),
+      width,
+      height,
+    };
+  } catch (_) {
+    // `screen` unavailable — fall back to the persisted bounds verbatim
+    // and let Electron clamp them if it must. This is the pre-monitor-
+    // tracking behaviour.
+    return {
+      x: x !== null ? x : undefined,
+      y: y !== null ? y : undefined,
+      width,
+      height,
+    };
+  }
+}
+
+/**
+ * Persist the mirrored registry to disk. Called whenever a window is
+ * created, moved, resized, or closed. The server-side registry receives
+ * the same information via REST, but this local mirror is what cold-start
+ * reads before any renderer has a chance to hit the authed endpoint.
+ *
+ * @param {Array<object>} entries
+ */
+function saveWindowsMirror(entries) {
+  try {
+    fs.mkdirSync(path.dirname(windowsMirrorPath()), { recursive: true });
+    fs.writeFileSync(windowsMirrorPath(), JSON.stringify(entries));
+  } catch (_) {
+    // Cosmetic — worst case the next cold start forgets the extra windows
+    // and opens exactly one.
+  }
+}
+
+/**
+ * Persist the session snapshot to disk. Called from {@link persistSessionSnapshot}
+ * at `before-quit` time. Kept as a standalone helper so the write-path
+ * layout mirrors {@link saveWindowsMirror} for readability and so tests
+ * (when added) can stub the file write independently of the live mirror.
+ *
+ * @param {Array<object>} entries the window geometry snapshot produced by
+ *   {@link snapshotLiveWindows}.
+ */
+function saveSessionSnapshot(entries) {
+  try {
+    fs.mkdirSync(path.dirname(sessionSnapshotPath()), { recursive: true });
+    fs.writeFileSync(sessionSnapshotPath(), JSON.stringify(entries));
+  } catch (_) {
+    // Cosmetic — worst case the next cold start falls back to the live
+    // mirror (or one fresh window if that's also empty).
+  }
+}
+
+/**
+ * Resolve the Electron display id a given bounds rectangle is anchored to.
+ *
+ * `screen.getDisplayMatching()` returns the Display whose bounds contain
+ * most of the rectangle — the correct answer for restore-on-next-launch
+ * because it snaps a window that the user last left on a secondary
+ * monitor back to that same monitor, even if it's been disconnected and
+ * reconnected. `screen` is only available after `app.whenReady()`, so
+ * callers that run earlier than that should guard against it being
+ * uninitialised (the helper returns `null` when `screen` throws).
+ *
+ * Falls back to `null` on any failure so a transient Electron error
+ * doesn't wedge the lifecycle persist path.
+ *
+ * @param {{x:number,y:number,width:number,height:number}} bounds
+ * @returns {string|null} the display id as a string, or null on failure
+ */
+function displayIdForBounds(bounds) {
+  try {
+    if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return null;
+    const d = screen.getDisplayMatching({
+      x: bounds.x,
+      y: bounds.y,
+      width: Math.max(1, bounds.width || 1),
+      height: Math.max(1, bounds.height || 1),
+    });
+    return d && typeof d.id !== "undefined" ? String(d.id) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Build a snapshot of every currently-live BrowserWindow's geometry.
+ *
+ * Factored out of {@link persistWindowsMirror} so {@link persistSessionSnapshot}
+ * can reuse the same serialisation without duplicating the `mainWindows`
+ * iteration. The persisted entry includes the Electron display id so
+ * cold-start restore can clamp the window back onto the same physical
+ * monitor (at least when that monitor is still attached).
+ *
+ * @returns {Array<{id:string,x:number,y:number,width:number,height:number,displayId:string|null}>}
+ *   one entry per non-destroyed window in creation order.
+ */
+function snapshotLiveWindows() {
+  const out = [];
+  for (const [id, win] of mainWindows) {
+    if (win.isDestroyed()) continue;
+    const b = win.getBounds();
+    out.push({
+      id,
+      x: b.x,
+      y: b.y,
+      width: b.width,
+      height: b.height,
+      displayId: displayIdForBounds(b),
+    });
+  }
+  return out;
+}
+
+/**
+ * Serialise every currently-live BrowserWindow into the live mirror file.
+ *
+ * Called on every create/move/resize event, and on `closed` events *except*
+ * when the close would leave the live set empty — in that case the live
+ * mirror would be wiped just as cold-start restore needs it, so we
+ * deliberately preserve the last non-empty snapshot instead. This covers
+ * the "close all windows on macOS, dock-click to reactivate" flow, where
+ * `before-quit` never fires and the session snapshot stays stale from
+ * a previous run (or absent on a fresh install).
+ *
+ * The final-close case is handled by the `closed` handler in
+ * {@link createWindow}, which calls this helper only when at least one
+ * live window remains.
+ */
+function persistWindowsMirror() {
+  saveWindowsMirror(snapshotLiveWindows());
+}
+
+/**
+ * Persist the current live window set to the session snapshot file.
+ *
+ * Called exactly once per process lifetime, from the `before-quit`
+ * handler. Writing at quit time (rather than on every close) guarantees
+ * that the next cold start sees the user's actual last session rather
+ * than the trailing "one window closing after another" state the live
+ * mirror records as windows are being torn down.
+ *
+ * If every window has already been destroyed by the time this runs
+ * (e.g. a plugin closed them synchronously during `before-quit`), we
+ * deliberately leave the previous session snapshot in place rather than
+ * overwriting it with an empty array. That preserves the last-known-good
+ * session across odd shutdown paths.
+ */
+function persistSessionSnapshot() {
+  const live = snapshotLiveWindows();
+  if (live.length === 0) {
+    // Don't erase a valid previous snapshot with an empty one.
+    return;
+  }
+  saveSessionSnapshot(live);
+}
 
 // --- Embedded server bootstrap ----------------------------------------------
 //
@@ -409,6 +757,49 @@ function buildAppMenu() {
         ]
       : []),
     {
+      // The File menu is Electron-only — the web build has no equivalent
+      // affordance and issue #18 deliberately scopes the "additional main
+      // window" feature to the packaged app. Windows/Linux get the same
+      // submenu as macOS; the accelerators follow platform conventions
+      // (Cmd+N on macOS, Ctrl+N elsewhere).
+      label: "File",
+      submenu: [
+        {
+          label: "New Window",
+          accelerator: "CmdOrCtrl+N",
+          click: () => {
+            // Open an additional main window with a fresh window id. The
+            // renderer reads `?window=<id>` from the URL and routes every
+            // piece of per-window state — tabs, theme, sidebar widths —
+            // through the server under that id, so a new window comes up
+            // with its own clean slate (tabs default to "Tab 1", theme
+            // to the project default) until the user customises it.
+            const win = createWindow();
+            win.focus();
+          },
+        },
+        { type: "separator" },
+        {
+          // "Close Window" on both platforms — maps to `close` (not
+          // `quit`) so Cmd/Ctrl+W closes just the focused window, and
+          // the remaining windows keep running. On macOS this mirrors
+          // the Safari/Finder convention; on Windows/Linux it matches
+          // the typical browser File-menu shape.
+          label: "Close Window",
+          accelerator: "CmdOrCtrl+W",
+          role: "close",
+        },
+        ...(isMac
+          ? []
+          : [
+              { type: "separator" },
+              // Non-Mac platforms keep Quit in the File menu per
+              // convention (Mac puts it in the app menu).
+              { role: "quit" },
+            ]),
+      ],
+    },
+    {
       label: "Edit",
       submenu: [
         { role: "undo" },
@@ -477,6 +868,26 @@ ipcMain.handle("set-window-background-color", (event, color) => {
 });
 
 /**
+ * IPC handler: reply with the Electron display id the sender's
+ * BrowserWindow currently lives on. Consumed by the Kotlin/JS
+ * `WindowRegistryClient` so server-persisted registry entries record the
+ * monitor a window was last seen on; the next cold start uses that hint
+ * to place the window back on the same physical display.
+ *
+ * @param {Electron.IpcMainEvent} event  IPC event (sender identifies window).
+ * @returns {string|null}               display id, or null on failure.
+ */
+ipcMain.handle("get-current-window-display-id", (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return null;
+    return displayIdForBounds(win.getBounds());
+  } catch (_) {
+    return null;
+  }
+});
+
+/**
  * IPC handler: toggles whether the main BrowserWindow renders the themed
  * (custom) title bar in place of the native OS one. Because `titleBarStyle`
  * is immutable after window creation, we destroy the current main window and
@@ -491,34 +902,102 @@ ipcMain.handle("set-window-background-color", (event, color) => {
  * @param {Electron.IpcMainEvent} _event
  * @param {boolean} enabled  `true` → themed chrome, `false` → native title bar.
  */
-ipcMain.handle("set-custom-title-bar", (_event, enabled) => {
+ipcMain.handle("set-custom-title-bar", (event, enabled) => {
   const next = enabled === true;
   if (next === chromePrefs.customTitleBar) return;
   chromePrefs = { ...chromePrefs, customTitleBar: next };
   saveChromePrefs(chromePrefs);
-  const old = mainWindow;
-  createWindow();
-  if (old && !old.isDestroyed()) old.destroy();
+  // Recreate every open BrowserWindow with the new titleBarStyle. The server
+  // owns every piece of user-facing state (PTY sessions, layout, settings)
+  // so destroying and respawning the windows is purely visual. Each new
+  // window keeps the same window id so the renderer's per-window state
+  // namespacing survives the reload.
+  const snapshot = Array.from(mainWindows.entries()).map(([id, win]) => ({
+    id,
+    bounds: !win.isDestroyed() ? win.getBounds() : null,
+  }));
+  // Identify the sender so we can raise its replacement at the end.
+  const senderWin = BrowserWindow.fromWebContents(event.sender);
+  const senderId = senderWin && senderWin.__termtasticWindowId;
+  // Destroy first, recreate second — `titleBarStyle` is an immutable
+  // construction option so we can't mutate in place.
+  for (const [, win] of mainWindows) {
+    if (!win.isDestroyed()) win.destroy();
+  }
+  mainWindows.clear();
+  mainWindow = null;
+  let reborn = null;
+  for (const entry of snapshot) {
+    const w = createWindow({ windowId: entry.id, bounds: entry.bounds || undefined });
+    if (entry.id === senderId) reborn = w;
+  }
+  if (reborn) reborn.focus();
 });
 
 // ----------------------------------------------------------------------------
 
 /**
- * Creates the main application BrowserWindow and loads the web app.
+ * Append or replace the `window` query parameter on a URL.
+ *
+ * The Kotlin/JS renderer reads this parameter on boot to know which window
+ * id it is running inside. Passing it via the URL (rather than, say, via
+ * an IPC round-trip) means the id is present on the very first paint.
+ *
+ * @param {string} baseUrl - the URL to augment
+ * @param {string} windowId - the window id to attach
+ * @returns {string} the URL with `window=<id>` set in the query string
+ */
+function urlWithWindowId(baseUrl, windowId) {
+  try {
+    const u = new URL(baseUrl);
+    u.searchParams.set("window", windowId);
+    return u.toString();
+  } catch (_) {
+    // Fallback for non-standard URLs (the dev-mode `data:` unreachable page
+    // already lives elsewhere; this path is only hit for regular http URLs).
+    const sep = baseUrl.includes("?") ? "&" : "?";
+    return `${baseUrl}${sep}window=${encodeURIComponent(windowId)}`;
+  }
+}
+
+/**
+ * Creates a main application BrowserWindow and loads the web app.
  *
  * The window is configured with context isolation and no Node integration
  * for security; renderer-side Electron APIs are exposed exclusively through
  * the preload script. A `did-fail-load` listener is attached to show a
  * user-friendly "server unreachable" page if the backend cannot be reached.
  *
+ * Each window carries a unique [windowId] (auto-generated if the caller
+ * doesn't supply one) that is appended to the URL as `?window=<id>` so the
+ * renderer can namespace future per-window state to that id. The window is
+ * registered in {@link mainWindows}, and {@link mainWindow} is updated to
+ * point at the newly created one — so legacy single-window code paths (the
+ * global-hotkey showAndFocus, the "server unreachable" error page, etc.)
+ * continue to target the most recently created window.
+ *
  * Called by {@link ensureServerThenCreateWindow} once the server is confirmed
- * reachable (or on error, to display a diagnostic page), and by
- * {@link showAndFocus} when the window was previously closed on macOS.
+ * reachable (or on error, to display a diagnostic page), by
+ * {@link showAndFocus} when every window was previously closed on macOS,
+ * and by the `File > New Window` menu entry which spawns an additional
+ * top-level BrowserWindow.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.windowId] - explicit id for this window (auto-
+ *   generated when omitted)
+ * @param {{x:number,y:number,width:number,height:number}} [opts.bounds] -
+ *   screen geometry to restore; omitted for the default 1280x800 centre
+ * @returns {Electron.BrowserWindow}
  */
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+function createWindow(opts = {}) {
+  const windowId = opts.windowId || makeWindowId();
+  const bounds = opts.bounds && Number.isFinite(opts.bounds.width) && Number.isFinite(opts.bounds.height)
+    ? opts.bounds
+    : null;
+
+  const browserOptions = {
+    width: bounds?.width ?? 1280,
+    height: bounds?.height ?? 800,
     minWidth: 720,
     minHeight: 480,
     title: "Termtastic",
@@ -533,25 +1012,86 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
+  };
+  if (bounds && Number.isFinite(bounds.x) && Number.isFinite(bounds.y)) {
+    browserOptions.x = bounds.x;
+    browserOptions.y = bounds.y;
+  }
 
-  loadApp();
+  const win = new BrowserWindow(browserOptions);
+  mainWindow = win;
+  mainWindows.set(windowId, win);
 
-  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
+  // Stash the window id on the BrowserWindow itself (non-enumerable-ish
+  // via a plain property) so IPC handlers that receive an event.sender
+  // can map back to the id without consulting mainWindows.
+  win.__termtasticWindowId = windowId;
+
+  loadApp(win, windowId);
+
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     // -3 is ABORTED (e.g. an in-flight load was replaced) — ignore.
     if (errorCode === -3) return;
-    showUnreachable(errorDescription);
+    showUnreachableOn(win, errorDescription);
   });
+
+  // Track focus so `mainWindow` keeps pointing at whatever the user just
+  // interacted with. Matters for the global hotkey and the "raise the app"
+  // paths that predate multi-window and operate on the primary reference.
+  win.on("focus", () => {
+    mainWindow = win;
+  });
+
+  // Drop the window from our map when it's closed. The registry-side
+  // cleanup (DELETE /api/windows/<id>) is done from the renderer on
+  // `beforeunload` where it still has the auth token in scope; here we
+  // just keep the local mirror (used for cold-start restore) in sync.
+  //
+  // Important: if this close would leave the live set empty, we skip
+  // the persist step. Otherwise the live mirror would be overwritten
+  // with `[]` exactly when we need it to remember the user's session
+  // — e.g. macOS `Cmd+W`-ing every window before dock-clicking to
+  // reactivate, where `before-quit` never fires and the session
+  // snapshot would stay stale. Preserving the last non-empty mirror
+  // here lets {@link restoreOrCreateWindows} put those windows back.
+  win.on("closed", () => {
+    mainWindows.delete(windowId);
+    if (mainWindow === win) {
+      mainWindow = mainWindows.values().next().value || null;
+    }
+    if (mainWindows.size > 0) {
+      persistWindowsMirror();
+    }
+  });
+
+  // Keep the mirror up to date as the user moves/resizes windows. The
+  // server-side registry is updated independently from the renderer (it
+  // owns the auth token); the mirror is what the main process reads on
+  // the *next* cold start to know how many BrowserWindows to spawn.
+  win.on("move", persistWindowsMirror);
+  win.on("resize", persistWindowsMirror);
+  persistWindowsMirror();
+
+  return win;
 }
 
 /**
- * Navigates the main window to the Termtastic web app URL.
+ * Navigates a main BrowserWindow to the Termtastic web app URL, tagged with
+ * its window id so the renderer knows which window it is running inside.
  *
  * Separated from {@link createWindow} so the load can be retried independently
  * (e.g. after a server-unreachable error is resolved by the user).
+ *
+ * @param {Electron.BrowserWindow} [win] - target window; defaults to the
+ *   most recently created window ({@link mainWindow})
+ * @param {string} [windowId] - explicit window id; defaults to the id stored
+ *   on `win` by {@link createWindow}
  */
-function loadApp() {
-  mainWindow.loadURL(TARGET_URL);
+function loadApp(win, windowId) {
+  const target = win || mainWindow;
+  if (!target) return;
+  const id = windowId || target.__termtasticWindowId;
+  target.loadURL(id ? urlWithWindowId(TARGET_URL, id) : TARGET_URL);
 }
 
 /**
@@ -565,13 +1105,24 @@ function loadApp() {
  * the user relaunches the app), and the macOS `activate` event (dock click).
  */
 function showAndFocus() {
-  if (!mainWindow || mainWindow.isDestroyed()) {
+  // With multi-window support the "summon the app" gesture has to raise
+  // every main window (so the user gets back whatever they had open), not
+  // just `mainWindow`. The last-focused one gets focused last so it wins
+  // the Space-level activation.
+  const candidates = Array.from(mainWindows.values()).filter((w) => w && !w.isDestroyed());
+  if (candidates.length === 0) {
     createWindow();
     return;
   }
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  const last = mainWindow && !mainWindow.isDestroyed() ? mainWindow : candidates[candidates.length - 1];
+  for (const w of candidates) {
+    if (w === last) continue;
+    if (w.isMinimized()) w.restore();
+    w.show();
+  }
+  if (last.isMinimized()) last.restore();
+  last.show();
+  last.focus();
   // On macOS, focusing a BrowserWindow isn't enough to pull the app to the
   // front from another Space / another active app. `app.focus({ steal: true })`
   // is the macOS-only escape hatch that does.
@@ -596,6 +1147,22 @@ function showAndFocus() {
  *   Defaults to a "Start the server with `./gradlew :server:run`" message.
  */
 function showUnreachable(errorDescription, hint) {
+  showUnreachableOn(mainWindow, errorDescription, hint);
+}
+
+/**
+ * Variant of {@link showUnreachable} that targets an explicit window.
+ *
+ * Needed now that multiple BrowserWindows can be alive — each window's own
+ * `did-fail-load` listener wants to render the error page into itself,
+ * not into whichever window happens to be {@link mainWindow} right now.
+ *
+ * @param {Electron.BrowserWindow} win
+ * @param {string} [errorDescription]
+ * @param {string} [hint]
+ */
+function showUnreachableOn(win, errorDescription, hint) {
+  if (!win || win.isDestroyed()) return;
   const hintHtml = hint
     ? `<p>${hint}</p>`
     : `<p>Start the server with:</p><p><code>./gradlew :server:run</code></p>`;
@@ -655,7 +1222,7 @@ function showUnreachable(errorDescription, hint) {
       </body>
     </html>
   `;
-  mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+  win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
 }
 
 /**
@@ -675,20 +1242,60 @@ function showUnreachable(errorDescription, hint) {
  *
  * @returns {Promise<void>}
  */
+/**
+ * Open every window listed in the local mirror, or a single fresh window
+ * when the mirror is empty (first launch, corrupt file, etc.).
+ *
+ * Called by {@link ensureServerThenCreateWindow} for each branch (dev URL,
+ * reused server, freshly spawned server, missing jar). Always returns at
+ * least one window so downstream callers can unconditionally talk to
+ * `mainWindow` for error-page rendering.
+ *
+ * @returns {Electron.BrowserWindow} the last-created window (the one the
+ *   rest of the startup path treats as the "primary" for error UI)
+ */
+function restoreOrCreateWindows() {
+  // Prefer the session snapshot written at `before-quit`. It captures
+  // the user's final window layout at the last clean exit and is
+  // immune to the close-cascade erasure that can hollow out the live
+  // mirror. Fall back to the live mirror (useful after a crash, or
+  // for the macOS close-all-then-reactivate flow where before-quit
+  // never ran), and finally to a single fresh window.
+  let mirror = loadSessionSnapshot();
+  if (mirror.length === 0) {
+    mirror = loadWindowsMirror();
+  }
+  if (mirror.length === 0) {
+    return createWindow();
+  }
+  let last = null;
+  for (const entry of mirror) {
+    // Clamp to a still-attached display. Without this, a window last
+    // seen on a second monitor that has since been unplugged would open
+    // offscreen and be invisible to the user.
+    const bounds = clampEntryToAttachedDisplay(entry);
+    last = createWindow({
+      windowId: entry.id,
+      bounds,
+    });
+  }
+  return last;
+}
+
 async function ensureServerThenCreateWindow() {
   buildAppMenu();
 
   // Dev escape hatch: TERMTASTIC_URL bypasses all bootstrap and just loads the
   // user-provided URL. Used by `:electron:run` to talk to the dev server.
   if (URL_OVERRIDE) {
-    createWindow();
+    restoreOrCreateWindows();
     return;
   }
 
   // Already running? Reuse it. This is also what makes "relaunch the app
   // without losing PTY state" work after the first launch.
   if (await isPortListening(PROD_PORT)) {
-    createWindow();
+    restoreOrCreateWindows();
     return;
   }
 
@@ -697,7 +1304,7 @@ async function ensureServerThenCreateWindow() {
   if (!jarPath) {
     // Dev electron with no jar staged — fall through and let the existing
     // did-fail-load handler render the "server unreachable" page.
-    createWindow();
+    restoreOrCreateWindows();
     return;
   }
 
@@ -705,7 +1312,7 @@ async function ensureServerThenCreateWindow() {
   try {
     spawned = spawnEmbeddedServer(jarPath);
   } catch (err) {
-    createWindow();
+    restoreOrCreateWindows();
     showUnreachable(
       String(err && err.message ? err.message : err),
       `Couldn't launch the embedded server. Make sure Java 17+ is installed (Homebrew: <code>brew install openjdk</code>) and discoverable via <code>JAVA_HOME</code> or <code>/usr/libexec/java_home</code>.`
@@ -720,7 +1327,7 @@ async function ensureServerThenCreateWindow() {
     spawned.spawnError.then((err) => ({ kind: "error", err })),
   ]);
 
-  createWindow();
+  restoreOrCreateWindows();
 
   if (result.kind === "error") {
     showUnreachable(
@@ -788,6 +1395,16 @@ app.whenReady().then(async () => {
   registerGlobalShortcut();
 });
 
+// Write the session snapshot *before* windows start tearing down. Fires
+// on `Cmd+Q` / `Alt+F4` / `File > Quit` / `app.quit()` / OS logout —
+// any path that leads to a clean process exit. By the time `will-quit`
+// runs, BrowserWindows are already being destroyed, so we have to grab
+// the snapshot in `before-quit` to record the user's actual final
+// layout for the next cold-start restore.
+app.on("before-quit", () => {
+  persistSessionSnapshot();
+});
+
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
 });
@@ -797,5 +1414,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  // Dock-click on macOS after all windows were closed. Restore the last
+  // known set so the user gets back whatever they had open, not just a
+  // single fresh window.
+  if (BrowserWindow.getAllWindows().length === 0) restoreOrCreateWindows();
 });
