@@ -320,6 +320,26 @@ sealed class WindowCommand {
     data class SetTabHidden(val tabId: String, val hidden: Boolean) : WindowCommand()
 
     /**
+     * Mark a tab as hidden or visible in the left sidebar's tab tree. Hidden-
+     * from-sidebar tabs keep all their panes and PTY sessions alive and stay
+     * reachable through the tab strip; the web client simply skips them when
+     * rendering the sidebar so the user can declutter it independently of the
+     * tab bar. Unlike [SetTabHidden] there is no overflow-menu surfacing on
+     * the sidebar itself — the tab bar remains the way to reach a sidebar-
+     * hidden tab.
+     *
+     * Dispatched from the same far-right "⋯" tab-bar overflow menu as
+     * [SetTabHidden], via the "Show in side bar" / "Hide in side bar" entry.
+     *
+     * @param tabId the id of the tab to hide or unhide in the sidebar
+     * @param hidden `true` to hide the tab from the sidebar, `false` to show it
+     * @see TabConfig.isHiddenFromSidebar
+     */
+    @Serializable
+    @SerialName("setTabHiddenFromSidebar")
+    data class SetTabHiddenFromSidebar(val tabId: String, val hidden: Boolean) : WindowCommand()
+
+    /**
      * Add a new terminal pane to an existing tab (creates a new PTY session).
      *
      * @param tabId the id of the tab to add the pane to

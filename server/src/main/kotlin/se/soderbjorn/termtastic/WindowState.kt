@@ -431,6 +431,37 @@ object WindowState {
     }
 
     /**
+     * Mark [tabId] as hidden or visible in the left sidebar's tab tree.
+     * Sidebar-hidden tabs keep every pane and PTY session intact and still
+     * participate in the tab bar; the web client simply omits them from the
+     * sidebar render. No-op if the id is unknown or the flag already matches
+     * the requested value.
+     *
+     * Orthogonal to [setTabHidden]: a tab can be shown in the strip but
+     * hidden from the sidebar, and vice versa. The active tab and focus
+     * state are left unchanged — sidebar-hiding is a pure UI affordance.
+     *
+     * Called from `handleWindowCommand` on
+     * [WindowCommand.SetTabHiddenFromSidebar], dispatched by the tab-bar
+     * overflow menu's "Show in side bar" / "Hide in side bar" entry.
+     *
+     * @param tabId the id of the tab to hide or unhide in the sidebar
+     * @param hidden `true` to hide from the sidebar, `false` to show it
+     * @see TabConfig.isHiddenFromSidebar
+     * @see WindowCommand.SetTabHiddenFromSidebar
+     */
+    fun setTabHiddenFromSidebar(tabId: String, hidden: Boolean) = synchronized(this) {
+        val cfg = _config.value
+        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        if (idx < 0) return@synchronized
+        val tab = cfg.tabs[idx]
+        if (tab.isHiddenFromSidebar == hidden) return@synchronized
+        val newTabs = cfg.tabs.toMutableList()
+        newTabs[idx] = tab.copy(isHiddenFromSidebar = hidden)
+        _config.value = cfg.copy(tabs = newTabs)
+    }
+
+    /**
      * Set the display title of [tabId] to [title] (trimmed, max 80 chars).
      * No-op if the title is empty or unchanged.
      *

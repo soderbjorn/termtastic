@@ -874,6 +874,7 @@ private suspend fun handleWindowCommand(text: String, ctx: WindowConnectionConte
         is WindowCommand.RenameTab -> WindowState.renameTab(cmd.tabId, cmd.title)
         is WindowCommand.MoveTab -> WindowState.moveTab(cmd.tabId, cmd.targetTabId, cmd.before)
         is WindowCommand.SetTabHidden -> WindowState.setTabHidden(cmd.tabId, cmd.hidden)
+        is WindowCommand.SetTabHiddenFromSidebar -> WindowState.setTabHiddenFromSidebar(cmd.tabId, cmd.hidden)
         is WindowCommand.AddPaneToTab -> {
             // Inherit cwd from the anchor pane so a new terminal split off
             // from an existing pane starts in the same directory instead of

@@ -73,6 +73,24 @@ data class TabConfig(
      * @see WindowCommand.SetTabHidden
      */
     val isHidden: Boolean = false,
+    /**
+     * Whether this tab is hidden from the left sidebar's tab tree. Hidden-
+     * from-sidebar tabs still exist with all their panes and PTY sessions
+     * intact and still participate in the tab bar — the web client merely
+     * skips them when rendering the sidebar tree so the user can declutter
+     * the sidebar independently of the tab strip. Toggled from the tab-bar
+     * overflow menu's "Show in side bar" / "Hide in side bar" entry via
+     * [WindowCommand.SetTabHiddenFromSidebar]. Defaults to `false` so
+     * legacy persisted configs round-trip as fully visible.
+     *
+     * This is orthogonal to [isHidden]: a tab can be shown in the strip but
+     * hidden from the sidebar, and vice versa. Unlike [isHidden] there is
+     * no "overflow menu" surfacing for sidebar-hidden tabs — the tab bar
+     * remains the authoritative place to reach them.
+     *
+     * @see WindowCommand.SetTabHiddenFromSidebar
+     */
+    val isHiddenFromSidebar: Boolean = false,
 )
 
 /**
