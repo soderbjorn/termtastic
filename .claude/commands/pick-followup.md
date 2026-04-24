@@ -1,12 +1,12 @@
 ---
-description: Find an actionable repo-owner comment on a Claude-authored PR, implement the requested change, push to the PR branch, and report back.
+description: Find an actionable repo-owner comment on any open PR, implement the requested change, push to the PR branch, and report back.
 ---
 
 Arguments: $ARGUMENTS
 
-Pick one open PR on `soderbjorn/termtastic` whose author is Claude Code and which has an **actionable, unaddressed** comment from the repo owner (`soderbjorn`). Implement the requested change, push it to the same PR branch, reply on the PR, and comment on the linked issue. Work autonomously — do not ask for confirmation at any step.
+Pick one open PR on `soderbjorn/termtastic` which has an **actionable, unaddressed** comment from the repo owner (`soderbjorn`). Implement the requested change, push it to the same PR branch, reply on the PR, and comment on the linked issue if one exists. Work autonomously — do not ask for confirmation at any step.
 
-This skill is the "close the loop" counterpart to `/pick-issue` and `/pick-review`: when Claude has already opened a PR and the owner has left feedback, this is how Claude acts on that feedback instead of leaving the PR to rot.
+PR authorship does not matter — any open PR is in scope, whether Claude opened it or soderbjorn did. Review status also does not matter: the presence of an actionable owner comment is the only trigger. This skill is the "close the loop" counterpart to `/pick-issue` and `/pick-review`: when the owner has left feedback on any PR, this is how Claude acts on that feedback instead of leaving the PR to rot.
 
 ## 1. Fetch candidate PRs
 
@@ -15,13 +15,7 @@ gh pr list --state open --repo soderbjorn/termtastic \
   --json number,title,body,author,createdAt,headRefName,baseRefName,isDraft --limit 200
 ```
 
-A PR is **in scope** for follow-up if all of the following hold:
-- It is open. Draft state is allowed — follow-ups on drafts are still useful.
-- It was authored by Claude Code. Detect this by either:
-  - The PR body contains the `Generated with [Claude Code]` footer, or
-  - The PR body has a `Closes #N` reference whose linked issue contains a comment with the `/pick-issue` attribution footer (`posted by [Claude Code]` … `picked up this issue via the \`/pick-issue\` skill`).
-
-Skip PRs that fail this test — follow-ups only apply to PRs Claude opened.
+A PR is **in scope** for follow-up if it is open. Draft state is allowed — follow-ups on drafts are still useful. PR authorship is not a gate: any open PR counts, whether Claude opened it or soderbjorn did. The real filter is applied at the comment level in step 2 (actionable owner comment, newer than head, not yet addressed).
 
 ## 2. Scan each in-scope PR for actionable, unaddressed owner comments
 
@@ -72,22 +66,9 @@ If the PR branch is out of date with `main` in a way that blocks the requested c
 
 ## 5. Implement
 
-Implement the change requested in the owner's comment. All the documentation rules from `CLAUDE.md` and `/pick-issue` apply verbatim — they are repeated here as hard requirements because they matter:
+Implement the change requested in the owner's comment. Follow `CLAUDE.md`'s documentation standards (file-level block comment on new files; KDoc/JSDoc on new public classes, functions, and significant properties with purpose, caller context, `@param`, `@return`, `@see`; update existing doc blocks when behaviour or signatures change; preserve inline comments, add new ones only where the *why* is non-obvious) — hard requirements, not suggestions.
 
-**New files** — add a file-level block comment at the very top (before `package` in Kotlin, line 1 in JS) explaining the file's purpose and the classes it contains.
-
-**New classes, functions, and significant properties** — KDoc (Kotlin) or JSDoc (JS) covering:
-- **Purpose** — what it does in plain terms.
-- **Flow / caller context** — who calls it and why, by name.
-- **Parameters** — every parameter with `@param`.
-- **Return value** — `@return` for anything non-Unit/non-void.
-- **Related symbols** — `@see` references where they help a reader navigate.
-
-**Modifying existing symbols** — if you materially change behaviour, signature, or call sites, update the existing doc block. Augment, don't overwrite.
-
-**Inline comments** — preserve existing ones; add new ones only where the *why* is non-obvious.
-
-For UI changes, build and verify in a browser/app session per the project's standard workflow. If you can't verify something, state that explicitly in the follow-up comment rather than claiming success.
+For UI changes, build and verify in a browser/app session. If you can't exercise a code path at runtime, call it out in the follow-up comment as a gap rather than claiming success.
 
 Edge-case handling:
 - **Ambiguous comment.** If the owner's comment can be read two ways, state the interpretation in your reply and proceed with the most conservative reading. Do not ask the user.

@@ -6,11 +6,13 @@
  * dot pulsates in three states derived from the aggregate of all per-session
  * states:
  *
- *   - red  — at least one session is "waiting" (e.g. an agent is asking for
- *            input/approval). Waiting dominates because it needs action.
- *   - blue — at least one session is "working" (agent is actively running)
- *            and none are waiting.
- *   - neutral — no session is working or waiting (idle).
+ *   - red   — at least one session is "waiting" (e.g. an agent is asking for
+ *             input/approval). Waiting dominates because it needs action.
+ *   - blue  — at least one session is "working" (agent is actively running)
+ *             and none are waiting.
+ *   - green — no session is working or waiting (idle). Green is used instead
+ *             of a theme-neutral grey so the three states stay distinguishable
+ *             in both dark and light appearance modes.
  *
  * The logo brings back an older design element (see issue #14): a "Termtastic"
  * wordmark alongside a coloured dot. In the previous incarnation the dot was
@@ -43,7 +45,7 @@ import org.w3c.dom.HTMLElement
  * Aggregation rule:
  *   1. If any session value is `"waiting"` → mark as waiting (red pulse).
  *   2. Else if any session value is `"working"` → mark as working (blue pulse).
- *   3. Else mark as idle (dim, no pulse).
+ *   3. Else mark as idle (solid green, no pulse).
  *
  * @param sessionStates the current session-id to state map from the server.
  *                      States other than `"working"` / `"waiting"` (including
@@ -67,6 +69,6 @@ internal fun updateAppLogoState(sessionStates: Map<String, String?>) {
     when {
         anyWaiting -> dot.classList.add("state-waiting")
         anyWorking -> dot.classList.add("state-working")
-        // Idle → no modifier class; the base .app-logo-dot rule paints it dim.
+        // Idle → no modifier class; the base .app-logo-dot rule paints it green.
     }
 }

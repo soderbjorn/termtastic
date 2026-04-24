@@ -620,6 +620,7 @@ private fun start() {
                 startHeight = bar.getBoundingClientRect().height
             }
             bar.style.height = "${startHeight}px"
+            bar.style.setProperty("min-height", "0px")
             bar.style.setProperty("overflow", "hidden")
             bar.style.transition = "none"
             divider.classList.add("dragging")
@@ -642,6 +643,7 @@ private fun start() {
             document.body?.style?.removeProperty("user-select")
             val finalHeight = bar.getBoundingClientRect().height.toInt()
             bar.style.removeProperty("height")
+            bar.style.removeProperty("min-height")
             bar.style.removeProperty("overflow")
             bar.style.removeProperty("transition")
             if (finalHeight <= 10) {

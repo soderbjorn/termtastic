@@ -1,37 +1,12 @@
 ---
-description: One tick of repo babysitting, run in an isolated subagent context so `/loop /babysit-repo` doesn't accumulate per-tick transcripts. Processes every actionable owner comment on Claude-authored PRs, every unreviewed PR, and every `ai-dev`-labelled issue found at the start of the tick — each one in its own isolated sub-subagent.
+description: One tick of repo babysitting, run in an isolated subagent context so `/loop /babysit-repo` doesn't accumulate per-tick transcripts. Processes every actionable owner comment on any open PR, every unreviewed PR, and every `ai-dev`-labelled issue found at the start of the tick — each one in its own isolated sub-subagent.
 ---
 
 Arguments: $ARGUMENTS
 
 ## Wrapper behaviour
 
-This skill exists as a **thin delegator**: every invocation spawns a single
-general-purpose subagent via the Agent tool and passes it the operational
-instructions below. That outer subagent — the *orchestrator* — does
-discovery once, then spawns one nested general-purpose subagent per
-actionable candidate via the Agent tool, so each action runs in its own
-isolated context. The parent session only ever sees the orchestrator's
-final aggregated summary.
-
-**Why isolate each tick.** When driven by `/loop /babysit-repo`, context
-would otherwise pile up across ticks — each discovery pass, each
-`/pick-*` invocation, all the `gh` output, all the diff reads. By
-isolating each tick in a subagent (and each action in a sub-subagent),
-the parent's transcript stays flat regardless of how long the loop runs,
-the prompt cache stays warm around the loop's own overhead, and no
-stale context from a prior tick or a prior action can leak into the
-next decision.
-
-**Why do everything per tick.** The earlier "one action per tick" model
-forced backlog burndown to be paced by the loop interval — 10 open
-items at a 30-minute cadence meant 5 hours to work through. With
-per-action isolation, doing every candidate in a single tick is safe
-(each action still has a fresh context) and drains the queue as fast
-as the sub-skills can run. Priority order across categories is
-preserved: follow-ups are handled before reviews, reviews before new
-issue implementation, so owner feedback and mergeable PRs stay ahead
-of new-PR creation even when the tick is multitasking.
+Thin delegator: each invocation spawns one general-purpose orchestrator subagent (operational brief below). The orchestrator does discovery once and spawns one nested general-purpose subagent per actionable candidate. The parent session only ever sees the orchestrator's aggregated summary, so loop transcripts stay flat and no context bleeds between ticks or between actions. Each tick drains *every* candidate in priority order (all follow-ups → all reviews → all issues) rather than one per tick, so backlog burndown isn't paced by the loop interval.
 
 ## How to invoke the orchestrator
 
@@ -148,14 +123,18 @@ exclusion specific to babysit):
   and subtract those issue numbers from the candidate set.
 
 **Follow-up candidates** (same rules as `/pick-followup`):
-- PR is open (draft allowed), authored by Claude Code (PR body
-  contains the `Generated with [Claude Code]` footer, or its linked
-  issue has the `/pick-issue` attribution comment)
+- PR is open (draft allowed). PR authorship does **not** matter —
+  an actionable owner comment on any open PR is a follow-up trigger,
+  whether Claude opened the PR or soderbjorn did.
 - has at least one comment from `soderbjorn` that is newer than the
   last commit on the PR's head branch, is actionable
   (imperative/request phrasing — use judgement), and has not already
   been answered by a Claude reply containing the canonical marker
-  `addressed in commit <sha>`
+  `addressed in commit <sha>`.
+
+The review status of the PR is irrelevant to the follow-up track —
+if an actionable comment is present, the follow-up fires regardless
+of whether the PR has been reviewed (by Claude or anyone else).
 
 Count-only heuristics are fine at discovery — the delegated sub-skill
 will confirm actionability when it runs. A cheap follow-up
@@ -171,58 +150,21 @@ follow-up commit lands and waste work.
 
 ### 3. Dispatch every candidate, prioritised
 
-Process the lists in this order — **all follow-ups first, then all
-reviews, then all issues** — and within each list in the order
-discovery returned them (which `gh ... list` gives oldest-first
-already, so oldest candidates go first). The priority order matters
-even when the tick is exhaustive: owner feedback on existing PRs
-beats fresh reviews, and fresh reviews beat opening new PRs from
-issues. Burning down the queue in that order keeps the mergeable
-front of the backlog healthy before Claude adds new work to it.
+Process in this order: **all follow-ups, then all reviews, then all issues**, each list oldest-first (which `gh ... list` gives). Owner feedback beats fresh reviews; reviews beat opening new PRs.
 
-For each candidate, spawn a **nested general-purpose subagent** via
-the Agent tool. Each nested subagent:
+For each candidate, spawn a nested `general-purpose` subagent via the Agent tool, with `description` naming the track and target (e.g. `"Follow-up on PR #13"`) and this `prompt`:
 
-- has `subagent_type` = `"general-purpose"`
-- has a short description naming the track and target (e.g.
-  `"Follow-up on PR #13"`, `"Review PR #42"`, `"Implement issue #27"`)
-- has a `prompt` that instructs the nested subagent to invoke one
-  specific sub-skill on one specific target via the Skill tool, then
-  return a one-sentence summary
+```
+You are a nested subagent. Invoke the `<skill>` skill via the Skill tool with arguments `<target> <passthrough>`. Return a single sentence summarising what happened (include the PR URL if produced; note success or failure). Do not run additional tools after the skill returns.
+```
 
-The nested subagent's prompt should look roughly like one of these:
+- Follow-up: `<skill>` = `pick-followup`, `<target>` = PR number.
+- Review: `<skill>` = `pick-review`, `<target>` = PR number.
+- Issue: `<skill>` = `pick-issue`, `<target>` = issue number.
 
-- Follow-up: `You are a nested subagent. Invoke the "pick-followup"
-  skill via the Skill tool with arguments "<PR number>
-  $ARGUMENTS-rest" (where $ARGUMENTS-rest is the user's original
-  arguments with any --*-only / --no-followups flags stripped, since
-  this sub-skill has already been selected). When the skill finishes,
-  return a single sentence summarising what happened — include the PR
-  URL if one was produced, and note success or failure. Do not expand
-  on it. Do not run additional tools after the skill returns.`
-- Review: same shape, invoking `pick-review` with `"<PR number>
-  $ARGUMENTS-rest"`.
-- Issue: same shape, invoking `pick-issue` with `"<issue number>
-  $ARGUMENTS-rest"`. `$ARGUMENTS-rest` for the issue track should
-  preserve `--label` / `--any-label` if present.
+`<passthrough>` is `$ARGUMENTS` with any `--*-only` / `--no-followups` flags stripped (the track is already chosen). For the issue track, preserve `--label` / `--any-label`. Passing an explicit target avoids re-discovery.
 
-Pass the sub-skill an explicit target number (the candidate's PR or
-issue number) so it doesn't need to re-discover. The nested subagent's
-CWD is inherited from you, which is inherited from the parent, so
-project-level slash commands in `.claude/commands/` resolve.
-
-Spawn the nested subagents **sequentially**, not in parallel — each
-sub-skill mutates the repo (pushes commits, posts comments, opens PRs)
-and parallel execution would race on the working tree, the GitHub API,
-and on duplicate decisions. Wait for each nested subagent to return
-before spawning the next.
-
-After each nested subagent returns, record its one-sentence summary,
-indexed by track and target, so you can assemble the aggregated
-summary at the end. **Do not stop on failure.** If a sub-skill fails
-(build break, merge conflict, network error, declined pick, etc.),
-record the failure and move on to the next candidate. The loop's
-next tick will retry the failed one if it's still a candidate then.
+Spawn nested subagents **sequentially** — sub-skills mutate the repo and parallel runs would race on the working tree and GitHub API. Record each one's one-sentence summary for the final aggregate. **Do not stop on failure**: record and continue; the next tick retries if still a candidate.
 
 ### 4. Respect tick boundaries
 
@@ -275,31 +217,10 @@ Conflicting flags in arguments: <detail>; no action taken.
 ```
 ```
 
-## Notes on the loop wrapper
+## Usage
 
-The intended usage is one of:
+- `/loop 15m /babysit-repo` (or 30–60m on a busy repo) — fixed cadence.
+- `/loop /babysit-repo` — self-paced; model picks 10–15m when busy, 45–60m when idle.
+- `/loop /babysit-repo --reviews-only` / `--followups-only` — narrow watchdogs.
 
-- `/loop 15m /babysit-repo` or `/loop 30m /babysit-repo` — fixed cadence.
-  With the exhaustive-per-tick behaviour, a longer cadence (30–60m) is
-  sensible for a busy repo: each tick may now run for a while as it
-  drains the backlog, and over-frequent ticks would just no-op more
-  often. `/watch-repo` uses 15m by default, which is still fine for a
-  quiet repo.
-- `/loop /babysit-repo` — self-paced. The model picks the next wake-up
-  time based on how busy the repo looks. If this tick processed work,
-  a shorter delay (e.g. 10–15 min) is reasonable; if idle, go longer
-  (45–60 min). Stay under the 5-minute cache-warm boundary only for
-  active-work probes — for polling a human-authored repo, longer waits
-  are correct.
-- `/loop /babysit-repo --reviews-only` — run a review-only watchdog,
-  leaving implementation and follow-up work for manual invocation.
-- `/loop /babysit-repo --followups-only` — run a follow-up-only
-  watchdog that only reacts to owner comments on Claude's PRs.
-
-Three-track recap: each tick drains **all follow-ups, then all reviews,
-then all issues** in that order, so a busy repo with lots of open PRs
-will naturally prioritise driving those to merge before Claude opens
-new ones.
-
-Stopping the loop is the user's call (Ctrl-C or explicit stop). This
-skill does not self-terminate the loop.
+Stopping is the user's responsibility (Ctrl-C or explicit stop); this skill does not self-terminate.

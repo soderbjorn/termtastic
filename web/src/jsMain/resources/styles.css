@@ -4623,12 +4623,17 @@ body.appearance-light .app-logo {
     text-shadow: 0 1px 2px rgba(255, 255, 255, 0.75), 0 0 1px rgba(0, 0, 0, 0.3);
 }
 
-/* The status dot. Base state is idle (dim grey, no pulse). The
+/* The status dot. Base state is idle (solid green, no pulse). The
    .state-working and .state-waiting modifier classes are added by
    updateAppLogoState() in AppLogo.kt when any session is in that
    state — waiting wins over working because it's action-required.
    Each state has its own keyframe so the colour animates smoothly
-   with the opacity pulse. */
+   with the opacity pulse.
+
+   The idle colour is a fixed green (not a theme token) on purpose: the
+   three states — green / blue / red — must be distinguishable regardless
+   of appearance mode, and a theme-derived grey washed out in light mode
+   (see issue/feedback following #16 reintroduction of the logo). */
 .app-logo-dot {
     display: inline-block;
     /* Bumped from 10 px → 13 px per @soderbjorn feedback on #16:
@@ -4640,8 +4645,8 @@ body.appearance-light .app-logo {
     width: 13px;
     height: 13px;
     border-radius: 50%;
-    background: var(--text-secondary, #8E8E93);
-    box-shadow: 0 0 0 2px rgba(142, 142, 147, 0.18);
+    background: #34C759;
+    box-shadow: 0 0 0 2px rgba(52, 199, 89, 0.22);
     flex-shrink: 0;
     transition: background-color 180ms ease-in-out,
                 box-shadow 180ms ease-in-out;

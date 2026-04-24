@@ -46,38 +46,42 @@ cd ../issue-<N>-<slug>
 - If that path or branch name already exists from a prior run, append `-2`, `-3`, etc. until unique.
 - All remaining steps run from inside the new worktree.
 
-## 4. Implement
+## 4. Scope — implement the whole issue, or stop
 
-Implement the change. Documentation is **mandatory**, not optional — follow `CLAUDE.md` and treat the rules below as hard requirements for every non-third-party source file you touch.
+Implement everything the issue asks for. Do not unilaterally split an issue into "part 1 / part 2", invent a follow-up series, or descope because the refactor feels large — "large refactor" is the work, not an excuse to ship a slice. If the full scope genuinely doesn't fit in one reviewable PR, that's a blocker (see below) — ask the owner before splitting, don't decide yourself.
 
-**New files** — add a file-level block comment at the very top (before `package` in Kotlin, line 1 in JS) explaining the file's purpose and the classes it contains. No exceptions.
+**Stop before opening a PR** if you hit a true blocker:
 
-**New classes, functions, and significant properties** — add a KDoc (`/** ... */`) block for Kotlin or JSDoc for JS. Every block must cover:
+- The issue is ambiguous or internally contradictory in a way the code can't resolve.
+- The work needs a design decision the owner hasn't made (naming, API surface, UX trade-off) and your best guess is not safe.
+- The full scope is larger than one reviewable PR and you need the owner to sanction a split (and dictate how to split it).
 
-- **Purpose** — what the class/function does, in plain terms.
-- **Flow / caller context** — who calls it and why. Name the calling sites (e.g. "Called from `ThemeEditor.onSave()` when the user commits a color scheme edit"). If it's a new entry point, say so.
-- **Parameters** — every parameter with `@param name description`.
-- **Return value** — `@return description` for anything non-Unit / non-void.
-- **Related symbols** — `@see` references to the classes/functions that interact with this one (callers, collaborators, the data types it operates on) when it helps a reader navigate.
+When blocked, post a question on the issue instead of opening a PR:
 
-**Modifying existing symbols** — if you materially change behavior, signature, or call sites, update the existing doc block to match. Augment good docs; don't overwrite them with something shallower.
+```
+gh issue comment <N> --body "$(cat <<'EOF'
+**Claude Code** (an AI coding agent) picked up this issue via the `/pick-issue` skill but stopped before opening a PR because of a blocker.
 
-**Inline comments** — preserve existing ones. Add new inline comments only where the *why* is non-obvious (hidden constraint, workaround, surprising behavior). Do not narrate the *what*.
+<be concrete: quote the ambiguous phrase, cite the contradiction, or list the design options the owner should pick between. "The API is unclear" is not enough.>
 
-For UI changes, build and verify in a browser/app session per the project's standard workflow. If you can't verify something, state that explicitly in the PR body rather than claiming success.
+🤖 This comment was posted by [Claude Code](https://claude.com/claude-code) acting autonomously. No PR was opened; I'll pick this up again once the blocker is resolved.
+EOF
+)"
+```
 
-## 5. Build before PR (mandatory)
+Then stop — do not push a branch, do not open a draft PR, do not ship a "part 1". Leave the worktree in place if you created one. Report the blocker-comment URL back to the user.
 
-You **must** attempt a build before opening the PR. Never push code and open a PR without first trying to build. This catches compile errors, missing imports, and broken references that would otherwise land in the reviewer's lap.
+## 5. Implement
 
-- Run the project's standard build command (e.g. `./gradlew build`, `npm run build`, or whatever the project uses) from inside the worktree.
-- If the build succeeds, note it in the PR's **Verification** section (e.g. "`./gradlew build` passes locally").
-- If the build **fails**, fix the failures and re-run until it passes. Do not open the PR on a broken build.
-- If the build cannot be run at all in this environment (missing toolchain, sandboxed, etc.), state that explicitly in the PR's **Verification** section as a gap — do not silently skip it and do not claim success.
+Follow `CLAUDE.md` — its documentation standards (file-level block comment for new files; KDoc/JSDoc on new public classes, functions, and significant properties with purpose, caller context, `@param`, `@return`, `@see`; update existing doc blocks when behaviour or signatures change; preserve inline comments and only add new ones where the *why* is non-obvious) are hard requirements, not suggestions.
 
-Only proceed to commit/push/PR once the build has been attempted (and ideally passed).
+For UI changes, build and verify in a browser/app session. If you can't exercise a code path at runtime, call that out in the PR's **Verification** section as an explicit gap — do not dress a compile-only check up as success.
 
-## 6. Commit, push, PR
+## 6. Build before PR (mandatory)
+
+Run the project's standard build (`./gradlew build` or equivalent) from the worktree before opening a PR. If it fails, fix it and retry — do not open the PR on a broken build. If the toolchain is unavailable in this environment, state that as a Verification gap rather than silently skipping it. A passing build is not a proof of correctness; it only rules out compile errors.
+
+## 7. Commit, push, PR
 
 Commit in logical chunks. Then:
 
@@ -156,6 +160,8 @@ Anything intentionally out of scope, known limitations, or suggested next steps.
 
 Rules for the PR body:
 
+- Use `Closes #<N>` **only if this PR fully resolves the issue**. If the owner has explicitly sanctioned a phased approach (in the issue or a comment), use `Refs #<N>` or `Part of #<N>` instead so the issue stays open. Never auto-close an issue your PR only partially addresses.
+- Do not invent "part 1 of N" framing in the title or body. If a split wasn't sanctioned by the owner, you shouldn't be here (see §4) — if it was, cite the comment that authorised it.
 - Write as if the reviewer has not read the issue. Don't say "see the issue" — summarize the relevant parts.
 - The "Decisions & reasoning" section is the whole point — if you find yourself with nothing to write there, you either glossed over real choices or the task was trivial. Err toward surfacing decisions, not hiding them.
 - Do not invent decisions that didn't happen. If a section would be dishonest, say "None" and move on.
