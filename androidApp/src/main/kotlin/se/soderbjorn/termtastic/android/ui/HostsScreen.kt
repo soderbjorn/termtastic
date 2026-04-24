@@ -79,6 +79,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import se.soderbjorn.termtastic.android.data.ConnectionRepository
 import se.soderbjorn.termtastic.client.HostEntry
@@ -132,6 +134,12 @@ fun HostsScreen(
     var editTarget by remember { mutableStateOf<EditTarget?>(null) }
     var deleteTarget by remember { mutableStateOf<HostEntry?>(null) }
     var connectingId by remember { mutableStateOf<String?>(null) }
+    // When non-null, the user just attempted to connect to this host and the
+    // server presented a TLS certificate that doesn't match the pinned
+    // fingerprint we captured on a previous connect. The dialog gives them
+    // the choice to re-pair (clearing the pin so the next connect captures
+    // anew) or cancel.
+    var pinMismatchTarget by remember { mutableStateOf<HostEntry?>(null) }
     val pendingApproval by (ConnectionHolder.pendingApproval
         ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -192,20 +200,46 @@ fun HostsScreen(
                                     runCatching {
                                         val token = getOrCreateToken(connectionRepo.authTokenStore())
                                         ConnectionHolder.connect(
-                                            serverUrl = ServerUrl(host = entry.host, port = entry.port),
+                                            serverUrl = ServerUrl(
+                                                host = entry.host,
+                                                port = entry.port,
+                                                pinnedFingerprintHex = entry.pinnedFingerprintHex,
+                                            ),
                                             authToken = token,
                                         )
                                     }.onSuccess {
+                                        // TOFU capture: if this host had no pin, the trust
+                                        // manager has just observed and emitted the leaf cert's
+                                        // SHA-256. Persist it back so the next connect runs in
+                                        // verify mode. No-op when a pin was already present.
+                                        if (entry.pinnedFingerprintHex == null) {
+                                            ConnectionHolder.client()?.let { client ->
+                                                scope.launch {
+                                                    val fp = client.observedFingerprint
+                                                        .filterNotNull().first()
+                                                    hostsRepo.update(
+                                                        entry.copy(pinnedFingerprintHex = fp),
+                                                    )
+                                                }
+                                            }
+                                        }
                                         connectingId = null
                                         onConnected()
                                     }.onFailure { e ->
                                         connectingId = null
-                                        val msg = e.message ?: "Connection failed"
-                                        scope.launch {
-                                            snackbarHostState.showSnackbar(
-                                                message = msg,
-                                                actionLabel = "Dismiss",
-                                            )
+                                        if (isPinMismatch(e)) {
+                                            // Surface the dedicated re-pair dialog instead
+                                            // of a generic snackbar — pin mismatch is a
+                                            // security-relevant signal.
+                                            pinMismatchTarget = entry
+                                        } else {
+                                            val msg = e.message ?: "Connection failed"
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar(
+                                                    message = msg,
+                                                    actionLabel = "Dismiss",
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -249,6 +283,63 @@ fun HostsScreen(
             },
         )
     }
+
+    pinMismatchTarget?.let { entry ->
+        PinMismatchDialog(
+            entry = entry,
+            onDismiss = { pinMismatchTarget = null },
+            onRepair = {
+                scope.launch {
+                    hostsRepo.update(entry.copy(pinnedFingerprintHex = null))
+                    pinMismatchTarget = null
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Recursively walks the cause chain looking for the `pin-mismatch:` marker
+ * thrown from [se.soderbjorn.termtastic.client.HttpClientFactory]'s Android
+ * trust manager. We can't rely on a specific exception type because the error
+ * surfaces through Ktor + OkHttp wrappers (e.g. `SSLHandshakeException` or
+ * a coroutine `CancellationException`).
+ */
+private fun isPinMismatch(t: Throwable?): Boolean {
+    var cur: Throwable? = t
+    while (cur != null) {
+        if (cur.message?.contains("pin-mismatch") == true) return true
+        cur = cur.cause
+    }
+    return false
+}
+
+/**
+ * Confirmation dialog shown when the server's TLS certificate doesn't match
+ * the previously-pinned fingerprint. Tapping "Re-pair" clears the stored pin
+ * and asks the user to retry the connection — capture mode then runs again
+ * and stores the new fingerprint. Tapping "Cancel" leaves the pin intact.
+ */
+@Composable
+private fun PinMismatchDialog(
+    entry: HostEntry,
+    onDismiss: () -> Unit,
+    onRepair: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Server certificate changed") },
+        text = {
+            Text(
+                "The server at ${entry.host}:${entry.port} is presenting a different " +
+                    "TLS certificate than the one you paired with previously.\n\n" +
+                    "This may mean the server was reinstalled, or that someone is intercepting " +
+                    "your connection. Re-pair only if you trust this network.",
+            )
+        },
+        confirmButton = { TextButton(onClick = onRepair) { Text("Re-pair") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**

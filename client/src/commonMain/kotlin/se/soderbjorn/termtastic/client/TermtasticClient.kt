@@ -18,11 +18,12 @@
 package se.soderbjorn.termtastic.client
 
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.websocket.WebSockets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 import se.soderbjorn.termtastic.windowJson
 
@@ -90,22 +91,34 @@ class TermtasticClient(
      */
     internal val json: Json = windowJson
 
-    internal val httpClient: HttpClient = HttpClient {
-        install(WebSockets)
-        // Without this, an unreachable host (device on a different subnet,
-        // Wi-Fi client isolation, wrong port) makes the WebSocket handshake
-        // hang in kernel SYN retransmit for ~75 seconds before OkHttp gives
-        // up. Cap it at 8 s so the UI surfaces the failure quickly.
-        install(HttpTimeout) {
-            connectTimeoutMillis = 8_000
-            requestTimeoutMillis = 15_000
-        }
-        // Note: we don't install HttpCookies here because ws(s):// upgrades
-        // in Ktor don't always thread cookies through all engines reliably.
-        // Instead, every socket URL gets `?auth=<token>` appended — this is
-        // the same belt-and-braces channel the server-side readAuthToken
-        // helper already recognises (see Application.kt:readAuthToken).
-    }
+    /**
+     * Lowercase hex SHA-256 of the server's leaf TLS certificate, observed
+     * during the most recent successful TLS handshake.
+     *
+     * - In **capture mode** (no pin set on [serverUrl]), the platform HTTP
+     *   client emits the captured fingerprint here on first connect; consumers
+     *   subscribe and persist it back to their host-list storage so subsequent
+     *   connections enter verify mode.
+     * - In **verify mode** (pin set), the value mirrors the pin once a connect
+     *   succeeds — useful for diagnostics but no write-back is required.
+     *
+     * Stays `null` until the first successful TLS handshake. Network thread
+     * must not call back into storage; see platform `actual` implementations
+     * for the off-thread emission contract.
+     */
+    private val _observedFingerprint: MutableStateFlow<String?> =
+        MutableStateFlow(serverUrl.pinnedFingerprintHex)
+    val observedFingerprint: StateFlow<String?> = _observedFingerprint.asStateFlow()
+
+    internal val httpClient: HttpClient = createPlatformHttpClient(
+        pinnedFingerprintHex = serverUrl.pinnedFingerprintHex,
+        onPeerCertCaptured = { fp -> _observedFingerprint.value = fp },
+    )
+    // Note: we don't install HttpCookies here because ws(s):// upgrades
+    // in Ktor don't always thread cookies through all engines reliably.
+    // Instead, every socket URL gets `?auth=<token>` appended — this is
+    // the same belt-and-braces channel the server-side readAuthToken
+    // helper already recognises (see Application.kt:readAuthToken).
 
     /**
      * Open (or return) a websocket to `/window`. The returned [WindowSocket]

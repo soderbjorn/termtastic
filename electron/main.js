@@ -24,7 +24,35 @@ const APP_NAME = "Termtastic";
 // running alongside developer iteration.
 const PROD_PORT = 8082;
 const URL_OVERRIDE = process.env.TERMTASTIC_URL || null;
-const TARGET_URL = URL_OVERRIDE || `http://localhost:${PROD_PORT}`;
+// Server is HTTPS-only with a self-signed cert generated on first boot.
+// The renderer loads from loopback, so the cert can't be MITM'd; the
+// `certificate-error` handler below accepts any cert for loopback hosts
+// without prompting the user to bypass a browser warning.
+const TARGET_URL = URL_OVERRIDE || `https://127.0.0.1:${PROD_PORT}`;
+
+// Accept the server's self-signed TLS cert silently when (and only when) it's
+// served from loopback. Loopback traffic cannot be MITM'd, so pinning here
+// would only complicate the dev cycle. Remote hosts still get the default
+// rejection — TERMTASTIC_URL pointing at a remote box would surface a fatal
+// `did-fail-load`, which is the right behaviour until the renderer learns to
+// fingerprint-pin.
+app.on("certificate-error", (event, _webContents, url, _error, _cert, callback) => {
+  let host = "";
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    callback(false);
+    return;
+  }
+  const isLoopback =
+    host === "127.0.0.1" || host === "::1" || host === "localhost";
+  if (isLoopback) {
+    event.preventDefault();
+    callback(true);
+  } else {
+    callback(false);
+  }
+});
 
 // Must run before `app.whenReady()` so the menu/about box pick up the name.
 // NOTE: on macOS in *dev mode*, the system menu bar still reads CFBundleName

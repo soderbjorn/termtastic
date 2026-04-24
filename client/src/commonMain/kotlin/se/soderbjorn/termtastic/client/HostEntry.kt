@@ -13,10 +13,14 @@ import kotlinx.serialization.Serializable
 /**
  * A single saved Termtastic server endpoint shown in the host picker UI.
  *
- * @property id    Unique identifier for this entry (typically a UUID).
- * @property label Human-readable display name chosen by the user (e.g. "Home server").
- * @property host  Hostname or IP address of the Termtastic server.
- * @property port  TCP port the server listens on.
+ * @property id                   Unique identifier for this entry (typically a UUID).
+ * @property label                Human-readable display name chosen by the user (e.g. "Home server").
+ * @property host                 Hostname or IP address of the Termtastic server.
+ * @property port                 TCP port the server listens on.
+ * @property pinnedFingerprintHex Lowercase hex SHA-256 of the server's leaf TLS
+ *   certificate, captured TOFU-style on the first successful connect. `null`
+ *   means "not yet captured" — the next connect runs in capture mode and pins
+ *   whatever the server presents.
  */
 @Serializable
 data class HostEntry(
@@ -24,4 +28,5 @@ data class HostEntry(
     val label: String,
     val host: String,
     val port: Int,
+    val pinnedFingerprintHex: String? = null,
 )

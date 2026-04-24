@@ -6,7 +6,20 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<!--
+		  Local-network networking: required so we can reach Termtastic
+		  servers on the LAN by IP/hostname without ATS blocking us.
+		-->
 		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<!--
+		  ATS-wide bypass: Termtastic talks to self-signed servers and
+		  enforces trust through SHA-256 fingerprint pinning in the
+		  URLSession challenge handler (HttpClientFactory.ios.kt).
+		  Without this key, ATS rejects the connection before the
+		  delegate even gets a chance to accept the leaf certificate.
+		-->
+		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
 </dict>
