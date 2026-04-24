@@ -661,4 +661,9 @@ private fun start() {
         fitVisible()
         positionActiveIndicator()
     })
+
+    // Register this BrowserWindow with the server-side multi-window registry.
+    // No-op in plain-browser (non-Electron) clients. See WindowRegistryClient
+    // for the full story; see server/.../WindowRegistry.kt for the storage.
+    installWindowRegistryReporter()
 }

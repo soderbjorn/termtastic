@@ -49,6 +49,34 @@ app.on("second-instance", () => showAndFocus());
 
 let mainWindow = null;
 
+// --- Multi-window tracking --------------------------------------------------
+//
+// Every main BrowserWindow we create is recorded here, keyed by its
+// client-assigned window id (UUID). Each renderer also receives its id via
+// the URL query string (?window=<id>) so the Kotlin/JS side can namespace
+// future per-window state to that id. The server owns the persistent list
+// — see server/.../WindowRegistry.kt and the /api/windows REST surface.
+//
+// `mainWindow` (above) is kept in sync with the most recently focused window
+// so existing single-window code paths (showAndFocus, setWindowBackgroundColor
+// without a sender resolution, etc.) still do something sensible.
+const mainWindows = new Map();
+
+/**
+ * Generate a fresh, opaque window id for a newly opened main window.
+ *
+ * @returns {string} a random identifier with no semantic meaning
+ */
+function makeWindowId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // Node's `crypto` module is the fallback for Electron main contexts without
+  // the global Web Crypto (very old builds). We only import it here because
+  // it isn't needed on current Electron versions.
+  return require("crypto").randomUUID();
+}
+
 // --- Window chrome preference (custom title bar toggle) ---------------------
 //
 // The `titleBarStyle` BrowserWindow option is immutable after creation, so we
@@ -99,6 +127,77 @@ function saveChromePrefs(prefs) {
 }
 
 let chromePrefs = loadChromePrefs();
+
+// --- Window-registry mirror (for cold-start restore) -----------------------
+//
+// The server is the source of truth for the window registry (see
+// server/.../WindowRegistry.kt), but at cold-start the Electron main
+// process needs to know how many BrowserWindows to spawn *before* any
+// renderer has loaded to hit the authed REST surface. We mirror the
+// registry to a JSON file under `userData` every time a window is created
+// or closed, and read it on startup. If the file is missing or malformed
+// we fall back to spawning exactly one window.
+
+/**
+ * Absolute path to the JSON file that mirrors the server-side window
+ * registry so Electron main can restore windows before any renderer runs.
+ *
+ * @returns {string} Path under Electron's `userData`.
+ */
+function windowsMirrorPath() {
+  return path.join(app.getPath("userData"), "electron-windows.json");
+}
+
+/**
+ * Load the mirrored registry from disk.
+ *
+ * @returns {Array<{id:string,x:number,y:number,width:number,height:number}>}
+ *   list of previously-open windows, or empty on first launch / malformed file
+ */
+function loadWindowsMirror() {
+  try {
+    const raw = fs.readFileSync(windowsMirrorPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((e) => e && typeof e.id === "string");
+  } catch (_) {
+    return [];
+  }
+}
+
+/**
+ * Persist the mirrored registry to disk. Called whenever a window is
+ * created, moved, resized, or closed. The server-side registry receives
+ * the same information via REST, but this local mirror is what cold-start
+ * reads before any renderer has a chance to hit the authed endpoint.
+ *
+ * @param {Array<object>} entries
+ */
+function saveWindowsMirror(entries) {
+  try {
+    fs.mkdirSync(path.dirname(windowsMirrorPath()), { recursive: true });
+    fs.writeFileSync(windowsMirrorPath(), JSON.stringify(entries));
+  } catch (_) {
+    // Cosmetic — worst case the next cold start forgets the extra windows
+    // and opens exactly one.
+  }
+}
+
+/**
+ * Serialise every currently-live BrowserWindow into the mirror file.
+ *
+ * Called on any lifecycle event (create/move/resize/close) so the mirror
+ * is never more than one event stale.
+ */
+function persistWindowsMirror() {
+  const out = [];
+  for (const [id, win] of mainWindows) {
+    if (win.isDestroyed()) continue;
+    const b = win.getBounds();
+    out.push({ id, x: b.x, y: b.y, width: b.width, height: b.height });
+  }
+  saveWindowsMirror(out);
+}
 
 // --- Embedded server bootstrap ----------------------------------------------
 //
@@ -409,6 +508,41 @@ function buildAppMenu() {
         ]
       : []),
     {
+      // The File menu is Electron-only — the web build has no equivalent
+      // affordance and issue #18 deliberately scopes the "additional main
+      // window" feature to the packaged app. Windows/Linux get the same
+      // submenu as macOS; the accelerators follow platform conventions
+      // (Cmd+N on macOS, Ctrl+N elsewhere).
+      label: "File",
+      submenu: [
+        {
+          label: "New Window",
+          accelerator: "CmdOrCtrl+N",
+          click: () => {
+            // Opens an additional main window with a fresh window id. The
+            // renderer reads `?window=<id>` from the URL and will
+            // eventually use that id to key per-window state — tabs,
+            // theme, sidebar widths — against the server. For now every
+            // window shares the same WindowState singleton, so the new
+            // window opens on the same tabs as the rest. See the
+            // "follow-ups" section of the PR for the per-window state
+            // split-out.
+            const win = createWindow();
+            win.focus();
+          },
+        },
+        ...(isMac
+          ? [
+              { type: "separator" },
+              { role: "close" },
+            ]
+          : [
+              { type: "separator" },
+              { role: "quit" },
+            ]),
+      ],
+    },
+    {
       label: "Edit",
       submenu: [
         { role: "undo" },
@@ -491,34 +625,102 @@ ipcMain.handle("set-window-background-color", (event, color) => {
  * @param {Electron.IpcMainEvent} _event
  * @param {boolean} enabled  `true` → themed chrome, `false` → native title bar.
  */
-ipcMain.handle("set-custom-title-bar", (_event, enabled) => {
+ipcMain.handle("set-custom-title-bar", (event, enabled) => {
   const next = enabled === true;
   if (next === chromePrefs.customTitleBar) return;
   chromePrefs = { ...chromePrefs, customTitleBar: next };
   saveChromePrefs(chromePrefs);
-  const old = mainWindow;
-  createWindow();
-  if (old && !old.isDestroyed()) old.destroy();
+  // Recreate every open BrowserWindow with the new titleBarStyle. The server
+  // owns every piece of user-facing state (PTY sessions, layout, settings)
+  // so destroying and respawning the windows is purely visual. Each new
+  // window keeps the same window id so the renderer's per-window state
+  // namespacing survives the reload.
+  const snapshot = Array.from(mainWindows.entries()).map(([id, win]) => ({
+    id,
+    bounds: !win.isDestroyed() ? win.getBounds() : null,
+  }));
+  // Identify the sender so we can raise its replacement at the end.
+  const senderWin = BrowserWindow.fromWebContents(event.sender);
+  const senderId = senderWin && senderWin.__termtasticWindowId;
+  // Destroy first, recreate second — `titleBarStyle` is an immutable
+  // construction option so we can't mutate in place.
+  for (const [, win] of mainWindows) {
+    if (!win.isDestroyed()) win.destroy();
+  }
+  mainWindows.clear();
+  mainWindow = null;
+  let reborn = null;
+  for (const entry of snapshot) {
+    const w = createWindow({ windowId: entry.id, bounds: entry.bounds || undefined });
+    if (entry.id === senderId) reborn = w;
+  }
+  if (reborn) reborn.focus();
 });
 
 // ----------------------------------------------------------------------------
 
 /**
- * Creates the main application BrowserWindow and loads the web app.
+ * Append or replace the `window` query parameter on a URL.
+ *
+ * The Kotlin/JS renderer reads this parameter on boot to know which window
+ * id it is running inside. Passing it via the URL (rather than, say, via
+ * an IPC round-trip) means the id is present on the very first paint.
+ *
+ * @param {string} baseUrl - the URL to augment
+ * @param {string} windowId - the window id to attach
+ * @returns {string} the URL with `window=<id>` set in the query string
+ */
+function urlWithWindowId(baseUrl, windowId) {
+  try {
+    const u = new URL(baseUrl);
+    u.searchParams.set("window", windowId);
+    return u.toString();
+  } catch (_) {
+    // Fallback for non-standard URLs (the dev-mode `data:` unreachable page
+    // already lives elsewhere; this path is only hit for regular http URLs).
+    const sep = baseUrl.includes("?") ? "&" : "?";
+    return `${baseUrl}${sep}window=${encodeURIComponent(windowId)}`;
+  }
+}
+
+/**
+ * Creates a main application BrowserWindow and loads the web app.
  *
  * The window is configured with context isolation and no Node integration
  * for security; renderer-side Electron APIs are exposed exclusively through
  * the preload script. A `did-fail-load` listener is attached to show a
  * user-friendly "server unreachable" page if the backend cannot be reached.
  *
+ * Each window carries a unique [windowId] (auto-generated if the caller
+ * doesn't supply one) that is appended to the URL as `?window=<id>` so the
+ * renderer can namespace future per-window state to that id. The window is
+ * registered in {@link mainWindows}, and {@link mainWindow} is updated to
+ * point at the newly created one — so legacy single-window code paths (the
+ * global-hotkey showAndFocus, the "server unreachable" error page, etc.)
+ * continue to target the most recently created window.
+ *
  * Called by {@link ensureServerThenCreateWindow} once the server is confirmed
- * reachable (or on error, to display a diagnostic page), and by
- * {@link showAndFocus} when the window was previously closed on macOS.
+ * reachable (or on error, to display a diagnostic page), by
+ * {@link showAndFocus} when every window was previously closed on macOS,
+ * and by the `File > New Window` menu entry which spawns an additional
+ * top-level BrowserWindow.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.windowId] - explicit id for this window (auto-
+ *   generated when omitted)
+ * @param {{x:number,y:number,width:number,height:number}} [opts.bounds] -
+ *   screen geometry to restore; omitted for the default 1280x800 centre
+ * @returns {Electron.BrowserWindow}
  */
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+function createWindow(opts = {}) {
+  const windowId = opts.windowId || makeWindowId();
+  const bounds = opts.bounds && Number.isFinite(opts.bounds.width) && Number.isFinite(opts.bounds.height)
+    ? opts.bounds
+    : null;
+
+  const browserOptions = {
+    width: bounds?.width ?? 1280,
+    height: bounds?.height ?? 800,
     minWidth: 720,
     minHeight: 480,
     title: "Termtastic",
@@ -533,25 +735,76 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
+  };
+  if (bounds && Number.isFinite(bounds.x) && Number.isFinite(bounds.y)) {
+    browserOptions.x = bounds.x;
+    browserOptions.y = bounds.y;
+  }
 
-  loadApp();
+  const win = new BrowserWindow(browserOptions);
+  mainWindow = win;
+  mainWindows.set(windowId, win);
 
-  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
+  // Stash the window id on the BrowserWindow itself (non-enumerable-ish
+  // via a plain property) so IPC handlers that receive an event.sender
+  // can map back to the id without consulting mainWindows.
+  win.__termtasticWindowId = windowId;
+
+  loadApp(win, windowId);
+
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     // -3 is ABORTED (e.g. an in-flight load was replaced) — ignore.
     if (errorCode === -3) return;
-    showUnreachable(errorDescription);
+    showUnreachableOn(win, errorDescription);
   });
+
+  // Track focus so `mainWindow` keeps pointing at whatever the user just
+  // interacted with. Matters for the global hotkey and the "raise the app"
+  // paths that predate multi-window and operate on the primary reference.
+  win.on("focus", () => {
+    mainWindow = win;
+  });
+
+  // Drop the window from our map when it's closed. The registry-side
+  // cleanup (DELETE /api/windows/<id>) is done from the renderer on
+  // `beforeunload` where it still has the auth token in scope; here we
+  // just keep the local mirror (used for cold-start restore) in sync.
+  win.on("closed", () => {
+    mainWindows.delete(windowId);
+    if (mainWindow === win) {
+      mainWindow = mainWindows.values().next().value || null;
+    }
+    persistWindowsMirror();
+  });
+
+  // Keep the mirror up to date as the user moves/resizes windows. The
+  // server-side registry is updated independently from the renderer (it
+  // owns the auth token); the mirror is what the main process reads on
+  // the *next* cold start to know how many BrowserWindows to spawn.
+  win.on("move", persistWindowsMirror);
+  win.on("resize", persistWindowsMirror);
+  persistWindowsMirror();
+
+  return win;
 }
 
 /**
- * Navigates the main window to the Termtastic web app URL.
+ * Navigates a main BrowserWindow to the Termtastic web app URL, tagged with
+ * its window id so the renderer knows which window it is running inside.
  *
  * Separated from {@link createWindow} so the load can be retried independently
  * (e.g. after a server-unreachable error is resolved by the user).
+ *
+ * @param {Electron.BrowserWindow} [win] - target window; defaults to the
+ *   most recently created window ({@link mainWindow})
+ * @param {string} [windowId] - explicit window id; defaults to the id stored
+ *   on `win` by {@link createWindow}
  */
-function loadApp() {
-  mainWindow.loadURL(TARGET_URL);
+function loadApp(win, windowId) {
+  const target = win || mainWindow;
+  if (!target) return;
+  const id = windowId || target.__termtasticWindowId;
+  target.loadURL(id ? urlWithWindowId(TARGET_URL, id) : TARGET_URL);
 }
 
 /**
@@ -565,13 +818,24 @@ function loadApp() {
  * the user relaunches the app), and the macOS `activate` event (dock click).
  */
 function showAndFocus() {
-  if (!mainWindow || mainWindow.isDestroyed()) {
+  // With multi-window support the "summon the app" gesture has to raise
+  // every main window (so the user gets back whatever they had open), not
+  // just `mainWindow`. The last-focused one gets focused last so it wins
+  // the Space-level activation.
+  const candidates = Array.from(mainWindows.values()).filter((w) => w && !w.isDestroyed());
+  if (candidates.length === 0) {
     createWindow();
     return;
   }
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  const last = mainWindow && !mainWindow.isDestroyed() ? mainWindow : candidates[candidates.length - 1];
+  for (const w of candidates) {
+    if (w === last) continue;
+    if (w.isMinimized()) w.restore();
+    w.show();
+  }
+  if (last.isMinimized()) last.restore();
+  last.show();
+  last.focus();
   // On macOS, focusing a BrowserWindow isn't enough to pull the app to the
   // front from another Space / another active app. `app.focus({ steal: true })`
   // is the macOS-only escape hatch that does.
@@ -596,6 +860,22 @@ function showAndFocus() {
  *   Defaults to a "Start the server with `./gradlew :server:run`" message.
  */
 function showUnreachable(errorDescription, hint) {
+  showUnreachableOn(mainWindow, errorDescription, hint);
+}
+
+/**
+ * Variant of {@link showUnreachable} that targets an explicit window.
+ *
+ * Needed now that multiple BrowserWindows can be alive — each window's own
+ * `did-fail-load` listener wants to render the error page into itself,
+ * not into whichever window happens to be {@link mainWindow} right now.
+ *
+ * @param {Electron.BrowserWindow} win
+ * @param {string} [errorDescription]
+ * @param {string} [hint]
+ */
+function showUnreachableOn(win, errorDescription, hint) {
+  if (!win || win.isDestroyed()) return;
   const hintHtml = hint
     ? `<p>${hint}</p>`
     : `<p>Start the server with:</p><p><code>./gradlew :server:run</code></p>`;
@@ -655,7 +935,7 @@ function showUnreachable(errorDescription, hint) {
       </body>
     </html>
   `;
-  mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+  win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
 }
 
 /**
@@ -675,20 +955,52 @@ function showUnreachable(errorDescription, hint) {
  *
  * @returns {Promise<void>}
  */
+/**
+ * Open every window listed in the local mirror, or a single fresh window
+ * when the mirror is empty (first launch, corrupt file, etc.).
+ *
+ * Called by {@link ensureServerThenCreateWindow} for each branch (dev URL,
+ * reused server, freshly spawned server, missing jar). Always returns at
+ * least one window so downstream callers can unconditionally talk to
+ * `mainWindow` for error-page rendering.
+ *
+ * @returns {Electron.BrowserWindow} the last-created window (the one the
+ *   rest of the startup path treats as the "primary" for error UI)
+ */
+function restoreOrCreateWindows() {
+  const mirror = loadWindowsMirror();
+  if (mirror.length === 0) {
+    return createWindow();
+  }
+  let last = null;
+  for (const entry of mirror) {
+    last = createWindow({
+      windowId: entry.id,
+      bounds: {
+        x: entry.x,
+        y: entry.y,
+        width: entry.width,
+        height: entry.height,
+      },
+    });
+  }
+  return last;
+}
+
 async function ensureServerThenCreateWindow() {
   buildAppMenu();
 
   // Dev escape hatch: TERMTASTIC_URL bypasses all bootstrap and just loads the
   // user-provided URL. Used by `:electron:run` to talk to the dev server.
   if (URL_OVERRIDE) {
-    createWindow();
+    restoreOrCreateWindows();
     return;
   }
 
   // Already running? Reuse it. This is also what makes "relaunch the app
   // without losing PTY state" work after the first launch.
   if (await isPortListening(PROD_PORT)) {
-    createWindow();
+    restoreOrCreateWindows();
     return;
   }
 
@@ -697,7 +1009,7 @@ async function ensureServerThenCreateWindow() {
   if (!jarPath) {
     // Dev electron with no jar staged — fall through and let the existing
     // did-fail-load handler render the "server unreachable" page.
-    createWindow();
+    restoreOrCreateWindows();
     return;
   }
 
@@ -705,7 +1017,7 @@ async function ensureServerThenCreateWindow() {
   try {
     spawned = spawnEmbeddedServer(jarPath);
   } catch (err) {
-    createWindow();
+    restoreOrCreateWindows();
     showUnreachable(
       String(err && err.message ? err.message : err),
       `Couldn't launch the embedded server. Make sure Java 17+ is installed (Homebrew: <code>brew install openjdk</code>) and discoverable via <code>JAVA_HOME</code> or <code>/usr/libexec/java_home</code>.`
@@ -720,7 +1032,7 @@ async function ensureServerThenCreateWindow() {
     spawned.spawnError.then((err) => ({ kind: "error", err })),
   ]);
 
-  createWindow();
+  restoreOrCreateWindows();
 
   if (result.kind === "error") {
     showUnreachable(
@@ -797,5 +1109,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  // Dock-click on macOS after all windows were closed. Restore the last
+  // known set so the user gets back whatever they had open, not just a
+  // single fresh window.
+  if (BrowserWindow.getAllWindows().length === 0) restoreOrCreateWindows();
 });

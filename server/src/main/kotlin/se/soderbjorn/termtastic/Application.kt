@@ -42,6 +42,7 @@ import io.ktor.server.plugins.origin
 import io.ktor.server.request.header
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -107,6 +108,11 @@ fun main() {
     // discard.
     val repo = SettingsRepository(AppPaths.databaseFile())
     WindowState.initialize(repo)
+    // Multi-window registry: load any persisted window entries so the first
+    // GET /api/windows reply reflects what was open on the previous launch.
+    // Electron's main process uses that list to decide how many BrowserWindows
+    // to recreate and where to place them.
+    WindowRegistry.initialize(repo)
 
     // Debounced async saver: every config mutation eventually writes one row
     // to `settings`, but bursts (drag a splitter, retitle a tab) coalesce into
@@ -296,6 +302,60 @@ fun Application.module(settingsRepo: SettingsRepository, sessionStates: MutableS
                     val incoming = call.receive<JsonObject>()
                     settingsRepo.mergeUiSettings(incoming)
                     call.respond(HttpStatusCode.NoContent)
+                }
+                DeviceAuth.Decision.REJECTED,
+                DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
+            }
+        }
+
+        // --- Multi-window registry -------------------------------------------
+        //
+        // Electron-only surface. The renderer reports its BrowserWindow's
+        // screen geometry here so the server can recreate the same windows
+        // on the next launch. See WindowRegistry for the data model and
+        // electron/main.js for the spawn-on-startup restore flow.
+
+        get("/api/windows") {
+            val token = call.readAuthToken()
+            val info = call.readClientInfo()
+            when (DeviceAuth.authorize(token, info, settingsRepo)) {
+                DeviceAuth.Decision.APPROVED -> call.respond(WindowRegistry.list())
+                DeviceAuth.Decision.REJECTED,
+                DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
+            }
+        }
+        post("/api/windows") {
+            val token = call.readAuthToken()
+            val info = call.readClientInfo()
+            when (DeviceAuth.authorize(token, info, settingsRepo)) {
+                DeviceAuth.Decision.APPROVED -> {
+                    val incoming = call.receive<WindowRecord>()
+                    // Reject empty ids early so garbage can't pollute the
+                    // persisted blob. Non-finite numbers can't enter via JSON
+                    // decoding so no further sanitisation is needed here.
+                    if (incoming.id.isBlank()) {
+                        call.respond(HttpStatusCode.BadRequest, "id required")
+                        return@post
+                    }
+                    val stored = WindowRegistry.upsert(incoming)
+                    call.respond(stored)
+                }
+                DeviceAuth.Decision.REJECTED,
+                DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
+            }
+        }
+        delete("/api/windows/{id}") {
+            val token = call.readAuthToken()
+            val info = call.readClientInfo()
+            when (DeviceAuth.authorize(token, info, settingsRepo)) {
+                DeviceAuth.Decision.APPROVED -> {
+                    val id = call.parameters["id"].orEmpty()
+                    if (id.isBlank()) {
+                        call.respond(HttpStatusCode.BadRequest, "id required")
+                        return@delete
+                    }
+                    val removed = WindowRegistry.remove(id)
+                    call.respond(if (removed) HttpStatusCode.NoContent else HttpStatusCode.NotFound)
                 }
                 DeviceAuth.Decision.REJECTED,
                 DeviceAuth.Decision.HEADLESS -> call.respond(HttpStatusCode.Unauthorized)
