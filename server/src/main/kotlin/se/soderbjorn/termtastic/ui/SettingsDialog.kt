@@ -185,15 +185,32 @@ object SettingsDialog {
             if (currentRepo != null) {
                 MaterialTheme(colorScheme = tronColorScheme) {
                     Surface {
-                        SettingsContent(currentRepo)
+                        SettingsContent(currentRepo, isShowing)
                     }
                 }
             }
         }
     }
 
+    /**
+     * Compose the body of the settings window.
+     *
+     * Called from [renderIfShowing] whenever the window is part of the
+     * composition tree. The [isShowing] flag is forwarded to the device
+     * sections as a refresh key so their lists are re-read from the repo
+     * each time the dialog is reopened — the Window is kept in the
+     * composition permanently and only its `visible` flag is toggled, so
+     * unkeyed `remember { }` would otherwise cache the lists for the
+     * lifetime of the process.
+     *
+     * @param repo settings repository backing the dialog
+     * @param isShowing current visibility of the dialog window; flipping
+     *   to true triggers a fresh read of trusted/denied device lists
+     * @see DeniedDevicesSection
+     * @see TrustedDevicesSection
+     */
     @Composable
-    private fun SettingsContent(repo: SettingsRepository) {
+    private fun SettingsContent(repo: SettingsRepository, isShowing: Boolean) {
         val scrollState = rememberScrollState()
         Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -232,9 +249,9 @@ object SettingsDialog {
             Spacer(Modifier.height(16.dp))
             ClaudeUsageSection(repo)
             Spacer(Modifier.height(16.dp))
-            TrustedDevicesSection(repo)
+            TrustedDevicesSection(repo, isShowing)
             Spacer(Modifier.height(16.dp))
-            DeniedDevicesSection(repo)
+            DeniedDevicesSection(repo, isShowing)
         }
         VerticalScrollbar(
             adapter = rememberScrollbarAdapter(scrollState),
@@ -351,11 +368,28 @@ object SettingsDialog {
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
     }
 
+    /**
+     * Render the "Trusted devices" section.
+     *
+     * Called from [SettingsContent]. Lists every device persisted by
+     * [DeviceAuth.persistApprovedDevice] and offers a "Revoke" action per
+     * row. The list is read from [repo] each time [refreshKey] changes —
+     * callers pass the dialog's visibility flag so a fresh snapshot is
+     * loaded whenever the window becomes visible (the Window stays in
+     * the composition tree, so an unkeyed `remember { }` would only read
+     * once on first show).
+     *
+     * @param repo settings repository to read trusted devices from
+     * @param refreshKey changing this value discards the cached list and
+     *   re-reads from the repo on the next composition
+     * @see DeviceAuth.listTrustedDevices
+     * @see DeviceAuth.revokeTrustedDevice
+     */
     @Composable
-    private fun TrustedDevicesSection(repo: SettingsRepository) {
+    private fun TrustedDevicesSection(repo: SettingsRepository, refreshKey: Any) {
         SectionHeader("Trusted devices")
 
-        var devices by remember { mutableStateOf(DeviceAuth.listTrustedDevices(repo)) }
+        var devices by remember(refreshKey) { mutableStateOf(DeviceAuth.listTrustedDevices(repo)) }
         val df = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT) }
 
         if (devices.isEmpty()) {
@@ -390,11 +424,29 @@ object SettingsDialog {
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
     }
 
+    /**
+     * Render the "Denied devices" section.
+     *
+     * Called from [SettingsContent]. Lists every device the user has
+     * explicitly denied via [DeviceAuth.promptOrReject] and offers an
+     * "Unban" action per row. The list is read from [repo] each time
+     * [refreshKey] changes — callers pass the dialog's visibility flag
+     * so a fresh snapshot is loaded whenever the window becomes visible.
+     * Without this, denials persisted while the dialog was closed would
+     * not appear on reopen, because the Window stays in the composition
+     * tree and an unkeyed `remember { }` only reads once on first show.
+     *
+     * @param repo settings repository to read denied devices from
+     * @param refreshKey changing this value discards the cached list and
+     *   re-reads from the repo on the next composition
+     * @see DeviceAuth.listDeniedDevices
+     * @see DeviceAuth.unbanDeniedDevice
+     */
     @Composable
-    private fun DeniedDevicesSection(repo: SettingsRepository) {
+    private fun DeniedDevicesSection(repo: SettingsRepository, refreshKey: Any) {
         SectionHeader("Denied devices")
 
-        var devices by remember { mutableStateOf(DeviceAuth.listDeniedDevices(repo)) }
+        var devices by remember(refreshKey) { mutableStateOf(DeviceAuth.listDeniedDevices(repo)) }
         val df = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT) }
 
         if (devices.isEmpty()) {
