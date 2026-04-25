@@ -136,25 +136,28 @@ fun buildPaneHeader(
             "This terminal session has <strong>${linkedCount - 1} linked pane${if (linkedCount > 2) "s" else ""}</strong> " +
                 "that will also be closed."
         } else {
-            "Are you sure you want to close <strong>${title}</strong>?"
+            "Are you sure you want to close <strong>${escapeHtmlForOverlay(title)}</strong>?"
         }
         showConfirmDialog(
-            "Close pane", msg,
-            if (hasLinks) "Close all" else "Close",
-        ) {
-            val cell = (header.parentElement as? HTMLElement)
-            val animTarget: HTMLElement? = if (cell?.parentElement?.classList?.contains("floating-pane") == true) {
-                cell.parentElement as? HTMLElement
-            } else cell
-            animTarget?.classList?.add("leaving")
-            window.setTimeout({
-                if (hasLinks && sessionId != null) {
-                    launchCmd(WindowCommand.CloseSession(sessionId = sessionId))
-                } else {
-                    launchCmd(WindowCommand.Close(paneId = paneId))
-                }
-            }, 200)
-        }
+            title = "Close pane",
+            message = msg,
+            confirmLabel = if (hasLinks) "Close all" else "Close",
+            messageIsHtml = true,
+            onConfirm = {
+                val cell = (header.parentElement as? HTMLElement)
+                val animTarget: HTMLElement? = if (cell?.parentElement?.classList?.contains("floating-pane") == true) {
+                    cell.parentElement as? HTMLElement
+                } else cell
+                animTarget?.classList?.add("leaving")
+                window.setTimeout({
+                    if (hasLinks && sessionId != null) {
+                        launchCmd(WindowCommand.CloseSession(sessionId = sessionId))
+                    } else {
+                        launchCmd(WindowCommand.Close(paneId = paneId))
+                    }
+                }, 200)
+            },
+        )
     }
 
     // Pane-scoped action buttons (operating on this pane's type/context)

@@ -244,22 +244,23 @@ internal fun appendTabBarOverflowMenu(
                 menuWrap.classList.remove("open"); menuList.classList.remove("open")
                 showConfirmDialog(
                     title = "Close tab",
-                    message = "Are you sure you want to close tab <strong>${activeTitle}</strong> and all its windows?",
+                    message = "Are you sure you want to close tab <strong>${escapeHtmlForOverlay(activeTitle)}</strong> and all its windows?",
                     confirmLabel = "Close",
                     messageIsHtml = true,
-                ) {
-                    // Mirror the old per-tab-menu polish: add the `leaving`
-                    // class to trigger the CSS exit animation, then dispatch
-                    // the CloseTab command after the animation length so the
-                    // user sees the tab slide away rather than vanish.
-                    val btn = tabBar.querySelector(".tab-button[data-tab=\"$activeTabId\"]") as? HTMLElement
-                    if (btn != null) {
-                        btn.classList.add("leaving")
-                        window.setTimeout({ launchCmd(WindowCommand.CloseTab(tabId = activeTabId)) }, 220)
-                    } else {
-                        launchCmd(WindowCommand.CloseTab(tabId = activeTabId))
-                    }
-                }
+                    onConfirm = {
+                        // Mirror the old per-tab-menu polish: add the `leaving`
+                        // class to trigger the CSS exit animation, then dispatch
+                        // the CloseTab command after the animation length so the
+                        // user sees the tab slide away rather than vanish.
+                        val btn = tabBar.querySelector(".tab-button[data-tab=\"$activeTabId\"]") as? HTMLElement
+                        if (btn != null) {
+                            btn.classList.add("leaving")
+                            window.setTimeout({ launchCmd(WindowCommand.CloseTab(tabId = activeTabId)) }, 220)
+                        } else {
+                            launchCmd(WindowCommand.CloseTab(tabId = activeTabId))
+                        }
+                    },
+                )
             })
         }
 
