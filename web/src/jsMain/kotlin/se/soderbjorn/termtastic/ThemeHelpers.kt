@@ -11,6 +11,9 @@
 package se.soderbjorn.termtastic
 
 import se.soderbjorn.darkness.core.*
+import se.soderbjorn.darkness.web.isDarkActive
+import se.soderbjorn.darkness.web.systemPrefersDark
+import se.soderbjorn.darkness.web.toCssVarMap
 
 import kotlinx.browser.window
 
@@ -27,25 +30,14 @@ val defaultTheme: ColorScheme
     get() = recommendedColorSchemes.first { it.name == DEFAULT_THEME_NAME }
 
 /**
- * Checks whether the user's system prefers dark mode via the `prefers-color-scheme` media query.
- *
- * @return true if the system prefers dark mode
- */
-fun systemPrefersDark(): Boolean =
-    window.matchMedia("(prefers-color-scheme: dark)").matches
-
-/**
- * Determines whether the light variant of a theme should be active based on the
- * current appearance setting.
+ * Determines whether the light variant of a theme should be active based on
+ * the current appearance setting. Convenience inverse of toolkit-web's
+ * [isDarkActive] so existing termtastic call sites stay terse.
  *
  * @param appearance the user's selected appearance mode
  * @return true if light mode should be used
  */
-fun isLightActive(appearance: Appearance): Boolean = when (appearance) {
-    Appearance.Light -> true
-    Appearance.Dark -> false
-    Appearance.Auto -> !systemPrefersDark()
-}
+fun isLightActive(appearance: Appearance): Boolean = !isDarkActive(appearance)
 
 /**
  * Returns the foreground color for the given theme and appearance mode.
@@ -171,88 +163,10 @@ fun ResolvedPalette.toCssAliasMap(): Map<String, String> = buildMap {
     put("--toolbar-shadow", "0 2px 8px ${argbToCss(chrome.shadow)}")
 }
 
-/**
- * Converts a [ResolvedPalette] to a map of CSS custom property names to
- * CSS colour values.
- *
- * Property names follow the `--t-group-token` convention (e.g.
- * `--t-surface-base`, `--t-text-primary`).  Colours with alpha use
- * `rgba()` format; fully opaque colours use `#rrggbb`.
- *
- * @return map of CSS property name to CSS colour string
- * @see argbToCss
- */
-fun ResolvedPalette.toCssVarMap(): Map<String, String> = buildMap {
-    // Surface
-    put("--t-surface-base", argbToCss(surface.base))
-    put("--t-surface-raised", argbToCss(surface.raised))
-    put("--t-surface-sunken", argbToCss(surface.sunken))
-    put("--t-surface-overlay", argbToCss(surface.overlay))
-    // Text
-    put("--t-text-primary", argbToCss(text.primary))
-    put("--t-text-secondary", argbToCss(text.secondary))
-    put("--t-text-tertiary", argbToCss(text.tertiary))
-    put("--t-text-disabled", argbToCss(text.disabled))
-    put("--t-text-inverse", argbToCss(text.inverse))
-    // Border
-    put("--t-border-subtle", argbToCss(border.subtle))
-    put("--t-border-default", argbToCss(border.default))
-    put("--t-border-strong", argbToCss(border.strong))
-    put("--t-border-focus", argbToCss(border.focus))
-    put("--t-border-focusGlow", argbToCss(border.focusGlow))
-    // Accent
-    put("--t-accent-primary", argbToCss(accent.primary))
-    put("--t-accent-primarySoft", argbToCss(accent.primarySoft))
-    put("--t-accent-primaryGlow", argbToCss(accent.primaryGlow))
-    put("--t-accent-onPrimary", argbToCss(accent.onPrimary))
-    // Semantic
-    put("--t-semantic-danger", argbToCss(semantic.danger))
-    put("--t-semantic-warn", argbToCss(semantic.warn))
-    put("--t-semantic-success", argbToCss(semantic.success))
-    put("--t-semantic-info", argbToCss(semantic.info))
-    // Terminal
-    put("--t-terminal-bg", argbToCss(terminal.bg))
-    put("--t-terminal-fg", argbToCss(terminal.fg))
-    put("--t-terminal-cursor", argbToCss(terminal.cursor))
-    put("--t-terminal-selection", argbToCss(terminal.selection))
-    put("--t-terminal-selectionText", argbToCss(terminal.selectionText))
-    // Chrome
-    put("--t-chrome-titlebar", argbToCss(chrome.titlebar))
-    put("--t-chrome-titleText", argbToCss(chrome.titleText))
-    put("--t-chrome-border", argbToCss(chrome.border))
-    put("--t-chrome-shadow", argbToCss(chrome.shadow))
-    put("--t-chrome-closeDot", argbToCss(chrome.closeDot))
-    put("--t-chrome-minDot", argbToCss(chrome.minDot))
-    put("--t-chrome-maxDot", argbToCss(chrome.maxDot))
-    // Sidebar
-    put("--t-sidebar-bg", argbToCss(sidebar.bg))
-    put("--t-sidebar-text", argbToCss(sidebar.text))
-    put("--t-sidebar-textDim", argbToCss(sidebar.textDim))
-    put("--t-sidebar-activeBg", argbToCss(sidebar.activeBg))
-    put("--t-sidebar-activeText", argbToCss(sidebar.activeText))
-    // Bottom bar (Claude usage footer)
-    put("--t-bottomBar-bg", argbToCss(bottomBar.bg))
-    put("--t-bottomBar-text", argbToCss(bottomBar.text))
-    put("--t-bottomBar-textDim", argbToCss(bottomBar.textDim))
-    put("--t-bottomBar-border", argbToCss(bottomBar.border))
-    // Diff
-    put("--t-diff-addBg", argbToCss(diff.addBg))
-    put("--t-diff-addFg", argbToCss(diff.addFg))
-    put("--t-diff-addGutter", argbToCss(diff.addGutter))
-    put("--t-diff-removeBg", argbToCss(diff.removeBg))
-    put("--t-diff-removeFg", argbToCss(diff.removeFg))
-    put("--t-diff-removeGutter", argbToCss(diff.removeGutter))
-    put("--t-diff-contextFg", argbToCss(diff.contextFg))
-    // Syntax
-    put("--t-syntax-keyword", argbToCss(syntax.keyword))
-    put("--t-syntax-string", argbToCss(syntax.string))
-    put("--t-syntax-number", argbToCss(syntax.number))
-    put("--t-syntax-comment", argbToCss(syntax.comment))
-    put("--t-syntax-function", argbToCss(syntax.function))
-    put("--t-syntax-type", argbToCss(syntax.type))
-    put("--t-syntax-operator", argbToCss(syntax.operator))
-    put("--t-syntax-constant", argbToCss(syntax.constant))
-}
+// `ResolvedPalette.toCssVarMap()` now lives in `toolkit-web` and is
+// imported at the top of this file. The previous in-package definition
+// (~70 lines listing every `--t-*` token) was identical to the toolkit's
+// and has been removed.
 
 /**
  * CSS custom property names used by the "active indicators" section.

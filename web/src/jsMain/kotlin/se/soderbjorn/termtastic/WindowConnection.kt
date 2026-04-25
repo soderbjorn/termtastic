@@ -16,6 +16,8 @@
  */
 package se.soderbjorn.termtastic
 
+import se.soderbjorn.darkness.web.showConfirmDialog
+
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.GlobalScope

@@ -25,6 +25,8 @@
  */
 package se.soderbjorn.termtastic
 
+import se.soderbjorn.darkness.web.showConfirmDialog
+
 import se.soderbjorn.darkness.core.*
 import se.soderbjorn.darkness.web.themeeditor.ThemeManagerHost
 import se.soderbjorn.darkness.web.themeeditor.buildSchemeGroups
