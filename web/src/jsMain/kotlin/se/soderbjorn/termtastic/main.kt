@@ -12,6 +12,7 @@
 package se.soderbjorn.termtastic
 
 import se.soderbjorn.darkness.core.*
+import se.soderbjorn.darkness.web.injectDarknessToolkitStyles
 
 import kotlinx.browser.document
 import kotlinx.browser.window
@@ -121,6 +122,7 @@ internal fun updateAppearanceToggle() {
  *    [connectWindow] to start the rendering pipeline
  */
 private fun start() {
+    injectDarknessToolkitStyles()
     ensureAuthToken()
 
     clientTypeAtStart =
