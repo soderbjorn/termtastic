@@ -16,6 +16,13 @@
  * can push live updates to all connected renderers when the user toggles
  * dark/light mode.
  *
+ * **UI settings persistence is owned by `toolkit-store`**, not SQLite.
+ * [loadUiSettings] / [mergeUiSettings] read and write the shared
+ * `defaultSharedThemesPath()` JSON file via the toolkit's atomic-write
+ * helpers, so any other Darkness app on the same machine sees the same
+ * theme state. SQLite still holds window/scrollback/auth/feature-flag
+ * data — those remain termtastic-private.
+ *
  * @see AppPaths
  * @see WindowState
  * @see DeviceAuth
@@ -35,6 +42,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.slf4j.LoggerFactory
+import se.soderbjorn.darkness.store.defaultSharedThemesPath
+import se.soderbjorn.darkness.store.readUiSettingsRaw
+import se.soderbjorn.darkness.store.writeUiSettingsRaw
 import se.soderbjorn.termtastic.FileBrowserContent
 import se.soderbjorn.termtastic.GitContent
 import se.soderbjorn.termtastic.LeafContent
@@ -334,13 +344,41 @@ class SettingsRepository(dbFile: File) {
         driver.execute(null, "PRAGMA user_version = $version", 0)
     }
 
+    /**
+     * Path to the shared Darkness ui-settings JSON, owned by `toolkit-store`.
+     * Used as the **single source of truth** for theme and UI settings across
+     * every Darkness app on this machine. Falls back to a sub-path of the
+     * termtastic data dir if the OS-conventional path can't be resolved
+     * (rare — `user.home` would have to be missing).
+     */
+    private val sharedThemesPath: String =
+        defaultSharedThemesPath() ?: java.io.File(dbFile.parentFile, "ui-settings.json").absolutePath
+
     private val _uiSettings = MutableStateFlow(loadUiSettings())
     val uiSettings: StateFlow<JsonObject> = _uiSettings.asStateFlow()
 
+    /**
+     * Loads the UI-settings JsonObject from the toolkit's shared themes file.
+     * On migration: if the file is absent and a legacy SQLite blob exists,
+     * lift the blob into the shared file (writing it through the toolkit
+     * helpers so atomic-write semantics apply) and clear the SQLite key.
+     */
     private fun loadUiSettings(): JsonObject {
-        val raw = getString(UI_SETTINGS_KEY) ?: return JsonObject(emptyMap())
-        return runCatching { Json.parseToJsonElement(raw) as JsonObject }
-            .getOrElse { JsonObject(emptyMap()) }
+        val sharedRaw = readUiSettingsRaw(sharedThemesPath)
+        if (sharedRaw != null && sharedRaw.isNotBlank()) {
+            return runCatching { Json.parseToJsonElement(sharedRaw) as JsonObject }
+                .getOrElse { JsonObject(emptyMap()) }
+        }
+        val legacy = getString(UI_SETTINGS_KEY)
+        if (!legacy.isNullOrBlank()) {
+            val legacyObj = runCatching { Json.parseToJsonElement(legacy) as JsonObject }
+                .getOrElse { JsonObject(emptyMap()) }
+            // One-shot migration: stream existing SQLite blob to the shared
+            // file so subsequent reads (and other Darkness apps) see it.
+            runCatching { writeUiSettingsRaw(sharedThemesPath, legacyObj.toString()) }
+            return legacyObj
+        }
+        return JsonObject(emptyMap())
     }
 
     /**
@@ -351,7 +389,20 @@ class SettingsRepository(dbFile: File) {
     fun getUiSettings(): JsonObject = _uiSettings.value
 
     /**
-     * Merge [incoming] keys into the existing UI settings, persist the result,
+     * Replace the in-memory UI settings snapshot with [snapshot] without
+     * touching disk. Called by the file-watch subscription installed in
+     * [se.soderbjorn.termtastic.installSharedThemesWatcher] when an
+     * external Darkness app rewrites the shared file.
+     *
+     * @param snapshot the new in-memory snapshot to publish to subscribers
+     */
+    fun publishExternalUiSettings(snapshot: JsonObject) {
+        _uiSettings.value = snapshot
+    }
+
+    /**
+     * Merge [incoming] keys into the existing UI settings, persist the result
+     * **to the shared toolkit themes file** (atomic write, last-writer-wins),
      * and update the in-memory [uiSettings] flow.
      *
      * @param incoming JSON object with the keys to merge (new keys are added,
@@ -361,10 +412,18 @@ class SettingsRepository(dbFile: File) {
     fun mergeUiSettings(incoming: JsonObject): JsonObject {
         val existing = _uiSettings.value
         val merged = JsonObject(existing + incoming)
-        putString(UI_SETTINGS_KEY, merged.toString())
+        runCatching { writeUiSettingsRaw(sharedThemesPath, merged.toString()) }
+            .onFailure { log.warn("Failed to persist UI settings to {}", sharedThemesPath, it) }
         _uiSettings.value = merged
         return merged
     }
+
+    /**
+     * Returns the absolute path of the toolkit-owned shared themes file
+     * the server reads from and writes to. Exposed so [se.soderbjorn.termtastic.ServerInitializer]
+     * can install a `watchUiSettings` subscription on it.
+     */
+    fun sharedThemesPath(): String = sharedThemesPath
 
     /**
      * Whether the server accepts connections from non-loopback addresses.
