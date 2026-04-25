@@ -26,6 +26,8 @@
  */
 package se.soderbjorn.termtastic
 
+import se.soderbjorn.darkness.core.*
+
 import com.pty4j.PtyProcess
 import com.pty4j.PtyProcessBuilder
 import com.pty4j.WinSize

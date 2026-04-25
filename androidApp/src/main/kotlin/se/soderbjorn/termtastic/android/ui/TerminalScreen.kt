@@ -16,6 +16,8 @@
  */
 package se.soderbjorn.termtastic.android.ui
 
+import se.soderbjorn.darkness.core.*
+
 import android.graphics.Typeface
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.RepeatMode
@@ -102,14 +104,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import se.soderbjorn.termtastic.Appearance
-import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
-import se.soderbjorn.termtastic.ResolvedPalette
-import se.soderbjorn.termtastic.recommendedColorSchemes
-import se.soderbjorn.termtastic.resolve
+import se.soderbjorn.darkness.core.Appearance
+import se.soderbjorn.darkness.core.DEFAULT_THEME_NAME
+import se.soderbjorn.darkness.core.ResolvedPalette
+import se.soderbjorn.darkness.core.recommendedColorSchemes
+import se.soderbjorn.darkness.core.resolve
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 import se.soderbjorn.termtastic.client.PtySocket
-import se.soderbjorn.termtastic.client.UiSettings
+import se.soderbjorn.darkness.core.UiSettings
 import se.soderbjorn.termtastic.client.fetchUiSettings
 
 // Accent colour for the terminal screen top bar. Previously hardcoded as

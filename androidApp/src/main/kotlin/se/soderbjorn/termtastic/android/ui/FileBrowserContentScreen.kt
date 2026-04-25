@@ -13,6 +13,8 @@
  */
 package se.soderbjorn.termtastic.android.ui
 
+import se.soderbjorn.darkness.core.*
+
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -41,12 +43,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import se.soderbjorn.termtastic.Appearance
-import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
+import se.soderbjorn.darkness.core.Appearance
+import se.soderbjorn.darkness.core.DEFAULT_THEME_NAME
 import se.soderbjorn.termtastic.FileContentKind
 import se.soderbjorn.termtastic.WindowEnvelope
-import se.soderbjorn.termtastic.recommendedColorSchemes
-import se.soderbjorn.termtastic.resolve
+import se.soderbjorn.darkness.core.recommendedColorSchemes
+import se.soderbjorn.darkness.core.resolve
 import se.soderbjorn.termtastic.client.fetchUiSettings
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 
@@ -80,7 +82,7 @@ fun FileBrowserContentScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isDark = isSystemInDarkTheme()
     val centralSettings = LocalUiSettings.current
-    var localSettings by remember { mutableStateOf<se.soderbjorn.termtastic.client.UiSettings?>(null) }
+    var localSettings by remember { mutableStateOf<se.soderbjorn.darkness.core.UiSettings?>(null) }
     LaunchedEffect(Unit) {
         if (centralSettings == null) {
             localSettings = ConnectionHolder.client()?.fetchUiSettings()
@@ -180,8 +182,8 @@ fun FileBrowserContentScreen(
  * pre-tokenised `<span class="hl-…">` spans from [SyntaxHighlighter] — those
  * need the same hl-\* palette the diff viewer already ships on the web.
  */
-private fun wrapFileHtml(bodyHtml: String, kind: FileContentKind, palette: se.soderbjorn.termtastic.ResolvedPalette): String {
-    val c = { v: Long -> se.soderbjorn.termtastic.argbToCss(v) }
+private fun wrapFileHtml(bodyHtml: String, kind: FileContentKind, palette: se.soderbjorn.darkness.core.ResolvedPalette): String {
+    val c = { v: Long -> se.soderbjorn.darkness.core.argbToCss(v) }
     val vars = """
     --background: ${c(palette.surface.base)};
     --surface: ${c(palette.surface.raised)};

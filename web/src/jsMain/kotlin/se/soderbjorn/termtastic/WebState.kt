@@ -20,6 +20,8 @@
  */
 package se.soderbjorn.termtastic
 
+import se.soderbjorn.darkness.core.*
+
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch

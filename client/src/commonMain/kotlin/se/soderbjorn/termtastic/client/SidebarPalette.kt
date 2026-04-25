@@ -9,6 +9,8 @@
  */
 package se.soderbjorn.termtastic.client
 
+import se.soderbjorn.darkness.core.*
+
 /**
  * Shared ARGB colour constants for the sidebar theme, matching the `:root`
  * and `body.appearance-light` blocks in `web/src/jsMain/resources/styles.css`.
@@ -49,7 +51,7 @@ object SidebarPalette {
 }
 
 /**
- * Sidebar-relevant colour values extracted from a [se.soderbjorn.termtastic.ResolvedPalette].
+ * Sidebar-relevant colour values extracted from a [se.soderbjorn.darkness.core.ResolvedPalette].
  *
  * Use [fromPalette] to construct.  Platform UI layers convert these
  * [Long] ARGB values to their native colour types.
@@ -71,10 +73,10 @@ data class SidebarThemeColors(
         /**
          * Extracts sidebar-relevant colours from a resolved semantic palette.
          *
-         * @param palette the fully resolved palette from [se.soderbjorn.termtastic.resolve]
+         * @param palette the fully resolved palette from [se.soderbjorn.darkness.core.resolve]
          * @return a [SidebarThemeColors] containing the relevant subset
          */
-        fun fromPalette(palette: se.soderbjorn.termtastic.ResolvedPalette): SidebarThemeColors =
+        fun fromPalette(palette: se.soderbjorn.darkness.core.ResolvedPalette): SidebarThemeColors =
             SidebarThemeColors(
                 background = palette.sidebar.bg,
                 surface = palette.surface.raised,

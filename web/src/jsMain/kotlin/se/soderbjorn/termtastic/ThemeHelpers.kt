@@ -10,6 +10,8 @@
  */
 package se.soderbjorn.termtastic
 
+import se.soderbjorn.darkness.core.*
+
 import kotlinx.browser.window
 
 /** Feature flag: when true, applies a "spiced" variant to dark themes. Currently disabled. */
