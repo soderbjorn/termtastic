@@ -41,6 +41,7 @@ tasks.named("processResources") {
 
 dependencies {
     implementation(projects.clientServer)
+    implementation(libs.darkness.core)
     implementation(libs.logback)
     implementation(libs.ktor.serverCore)
     implementation(libs.ktor.serverNetty)

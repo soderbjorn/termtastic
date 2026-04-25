@@ -21,6 +21,10 @@
  */
 package se.soderbjorn.termtastic
 
+import se.soderbjorn.darkness.web.toCssVarMap
+
+import se.soderbjorn.darkness.core.*
+
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineStart

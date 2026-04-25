@@ -25,6 +25,8 @@
  */
 package se.soderbjorn.termtastic
 
+import se.soderbjorn.darkness.web.showConfirmDialog
+
 import kotlinx.browser.document
 import kotlinx.browser.window
 import org.w3c.dom.HTMLElement
@@ -241,9 +243,10 @@ internal fun appendTabBarOverflowMenu(
             menuList.appendChild(menuRow(ICON_CLOSE, "Close") { _ ->
                 menuWrap.classList.remove("open"); menuList.classList.remove("open")
                 showConfirmDialog(
-                    "Close tab",
-                    "Are you sure you want to close tab <strong>${activeTitle}</strong> and all its windows?",
-                    "Close",
+                    title = "Close tab",
+                    message = "Are you sure you want to close tab <strong>${activeTitle}</strong> and all its windows?",
+                    confirmLabel = "Close",
+                    messageIsHtml = true,
                 ) {
                     // Mirror the old per-tab-menu polish: add the `leaving`
                     // class to trigger the CSS exit animation, then dispatch

@@ -23,12 +23,12 @@ enum Palette {
     /// Resolves the sidebar palette for the given appearance, using the
     /// user's selected theme if available, falling back to Tron.
     private static func sidebarPalette(isDark: Bool) -> Client.ResolvedPalette {
-        let theme: Client.TerminalTheme
+        let theme: Client.ColorScheme
         if let s = settings {
             theme = s.sectionTheme(section: "sidebar")
         } else {
-            let themes = Client.ThemesKt.recommendedThemes
-            theme = themes.first { ($0 as! Client.TerminalTheme).name == Client.ThemesKt.DEFAULT_THEME_NAME } as! Client.TerminalTheme
+            let themes = Client.ColorSchemesKt.recommendedColorSchemes
+            theme = themes.first { ($0 as! Client.ColorScheme).name == Client.ColorSchemesKt.DEFAULT_THEME_NAME } as! Client.ColorScheme
         }
         let effectiveIsDark: Bool
         if let appearance = settings?.appearance {

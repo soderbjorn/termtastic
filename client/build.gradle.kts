@@ -21,6 +21,7 @@ kotlin {
             baseName = "Client"
             isStatic = true
             export(projects.clientServer)
+            export(libs.darkness.core)
         }
     }
 
@@ -33,6 +34,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(projects.clientServer)
+            api(libs.darkness.core)
             api(libs.ktor.client.core)
             api(libs.ktor.client.websockets)
             api(libs.ktor.client.contentNegotiation)

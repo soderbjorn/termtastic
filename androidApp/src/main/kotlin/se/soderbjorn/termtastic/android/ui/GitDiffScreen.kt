@@ -11,6 +11,8 @@
  */
 package se.soderbjorn.termtastic.android.ui
 
+import se.soderbjorn.darkness.core.*
+
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -44,10 +46,10 @@ import se.soderbjorn.termtastic.DiffHunk
 import se.soderbjorn.termtastic.DiffLine
 import se.soderbjorn.termtastic.DiffLineType
 import se.soderbjorn.termtastic.WindowEnvelope
-import se.soderbjorn.termtastic.Appearance
-import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
-import se.soderbjorn.termtastic.recommendedColorSchemes
-import se.soderbjorn.termtastic.resolve
+import se.soderbjorn.darkness.core.Appearance
+import se.soderbjorn.darkness.core.DEFAULT_THEME_NAME
+import se.soderbjorn.darkness.core.recommendedColorSchemes
+import se.soderbjorn.darkness.core.resolve
 import se.soderbjorn.termtastic.client.fetchUiSettings
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 
@@ -80,7 +82,7 @@ fun GitDiffScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val isDark = isSystemInDarkTheme()
     val centralSettings = LocalUiSettings.current
-    var localSettings by remember { mutableStateOf<se.soderbjorn.termtastic.client.UiSettings?>(null) }
+    var localSettings by remember { mutableStateOf<se.soderbjorn.darkness.core.UiSettings?>(null) }
     LaunchedEffect(Unit) {
         if (centralSettings == null) {
             localSettings = ConnectionHolder.client()?.fetchUiSettings()
@@ -181,8 +183,8 @@ fun GitDiffScreen(
  * format, styled for mobile with line numbers, coloured backgrounds for
  * additions/deletions, and syntax-highlight CSS classes.
  */
-private fun buildDiffHtml(hunks: List<DiffHunk>, palette: se.soderbjorn.termtastic.ResolvedPalette): String {
-    val c = { v: Long -> se.soderbjorn.termtastic.argbToCss(v) }
+private fun buildDiffHtml(hunks: List<DiffHunk>, palette: se.soderbjorn.darkness.core.ResolvedPalette): String {
+    val c = { v: Long -> se.soderbjorn.darkness.core.argbToCss(v) }
     val vars = """
     --background: ${c(palette.surface.base)};
     --surface: ${c(palette.surface.raised)};

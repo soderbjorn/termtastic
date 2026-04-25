@@ -37,7 +37,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
-import se.soderbjorn.termtastic.client.UiSettings
+import se.soderbjorn.darkness.core.UiSettings
 import se.soderbjorn.termtastic.client.fetchUiSettings
 
 /**

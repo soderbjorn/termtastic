@@ -12,6 +12,8 @@
  */
 package se.soderbjorn.termtastic
 
+import se.soderbjorn.darkness.core.Theme
+
 /**
  * Convert a [Theme] to the dynamic JS object format consumed
  * by [renderConfigSilhouette]. Produces an object with `"theme"` and

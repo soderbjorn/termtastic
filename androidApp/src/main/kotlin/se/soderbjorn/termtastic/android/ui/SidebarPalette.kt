@@ -11,23 +11,25 @@
  * [se.soderbjorn.termtastic.android.ui.TermtasticApp] so that all screens
  * can access the user's theme settings without fetching independently.
  *
- * @see se.soderbjorn.termtastic.ResolvedPalette
+ * @see se.soderbjorn.darkness.core.ResolvedPalette
  * @see se.soderbjorn.termtastic.resolve
  * @see se.soderbjorn.termtastic.client.UiSettings
  */
 package se.soderbjorn.termtastic.android.ui
+
+import se.soderbjorn.darkness.core.*
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
-import se.soderbjorn.termtastic.Appearance
-import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
-import se.soderbjorn.termtastic.ResolvedPalette
-import se.soderbjorn.termtastic.recommendedColorSchemes
-import se.soderbjorn.termtastic.resolve
-import se.soderbjorn.termtastic.client.UiSettings
+import se.soderbjorn.darkness.core.Appearance
+import se.soderbjorn.darkness.core.DEFAULT_THEME_NAME
+import se.soderbjorn.darkness.core.ResolvedPalette
+import se.soderbjorn.darkness.core.recommendedColorSchemes
+import se.soderbjorn.darkness.core.resolve
+import se.soderbjorn.darkness.core.UiSettings
 
 /**
  * Composition-local providing the user's [UiSettings] fetched from the server.

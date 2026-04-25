@@ -1,0 +1,130 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "url": "../../toolkit-core/0.1.0/toolkit-core-0.1.0.module",
+    "group": "se.soderbjorn.darkness",
+    "module": "toolkit-core",
+    "version": "0.1.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.14.3"
+    }
+  },
+  "variants": [
+    {
+      "name": "iosSimulatorArm64ApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.native.target": "ios_simulator_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-serialization-json",
+          "version": {
+            "requires": "1.9.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.3.20"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-coroutines-core",
+          "version": {
+            "requires": "1.10.2"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "toolkit-core-iosSimulatorArm64Main-0.1.0.klib",
+          "url": "toolkit-core-iossimulatorarm64-0.1.0.klib",
+          "size": 98712,
+          "sha512": "f5d0481bcdb5961bdbf0bb3310ce768e80fff713a53a67eba345b7ee31f05605491fa431076555f902c5cd7c98fd4a5e935f1ebb2a79ea9445e1fe5e6d3eaf0d",
+          "sha256": "5dd81bd67d8414bdf552a98b5d88993712d2090d58808506aa8bb7f05a0c98ef",
+          "sha1": "c45a27dfc80cc5fa6d576b2b78a1ba1d23663e2c",
+          "md5": "5b1f200a2e5e1f36bf1955f5832b21be"
+        }
+      ]
+    },
+    {
+      "name": "iosSimulatorArm64SourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.native.target": "ios_simulator_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "files": [
+        {
+          "name": "toolkit-core-iossimulatorarm64-0.1.0-sources.jar",
+          "url": "toolkit-core-iossimulatorarm64-0.1.0-sources.jar",
+          "size": 27718,
+          "sha512": "393d07f500c222a1564564f379105891d957b967ab7db66cff458d4758066326cb677ae85b583767d6d2db35924189ec8c088a4eb6bd6ffce3d60509ca71ea27",
+          "sha256": "38786ba9b7b4f5defc649a05b25722e8737f6347e9839d4a4b55cc69ecc1092a",
+          "sha1": "8bf61f2753b88d31a3d6c5c5f4afa70abf63a569",
+          "md5": "4d0610ef728f2109d28bf166622e5395"
+        }
+      ]
+    },
+    {
+      "name": "iosSimulatorArm64MetadataElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-metadata",
+        "org.jetbrains.kotlin.native.target": "ios_simulator_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-serialization-json",
+          "version": {
+            "requires": "1.9.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.3.20"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-coroutines-core",
+          "version": {
+            "requires": "1.10.2"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "toolkit-core-iossimulatorarm64-0.1.0-metadata.jar",
+          "url": "toolkit-core-iossimulatorarm64-0.1.0-metadata.jar",
+          "size": 261,
+          "sha512": "26186d85e0b4220178dbaefd5ad9adad5eb4b3262332805dc4babccc048790eb9dceb0547464e8a95880385f9b34327a743baf7dd1904a63c9cf879236e4a050",
+          "sha256": "4e6f8afe02f1d22c65273a6ad64e8418f4489a450fa19dd4c64e024f967669ce",
+          "sha1": "47796690b7fda3550982dc51fe7f7a1f6b69dd92",
+          "md5": "2d1985f3ff4fc69c3c90ce27da7c0fbc"
+        }
+      ]
+    }
+  ]
+}

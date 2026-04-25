@@ -13,6 +13,8 @@
  */
 package se.soderbjorn.termtastic.client.viewmodel
 
+import se.soderbjorn.darkness.core.*
+
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,24 +32,24 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
-import se.soderbjorn.termtastic.Appearance
+import se.soderbjorn.darkness.core.Appearance
 import se.soderbjorn.termtastic.ClaudeUsageData
-import se.soderbjorn.termtastic.ConfigMode
-import se.soderbjorn.termtastic.CustomScheme
-import se.soderbjorn.termtastic.DEFAULT_DARK_THEME_NAME
-import se.soderbjorn.termtastic.DEFAULT_LIGHT_THEME_NAME
-import se.soderbjorn.termtastic.DEFAULT_THEME_NAME
-import se.soderbjorn.termtastic.ResolvedPalette
-import se.soderbjorn.termtastic.ColorScheme
-import se.soderbjorn.termtastic.Theme
+import se.soderbjorn.darkness.core.ConfigMode
+import se.soderbjorn.darkness.core.CustomScheme
+import se.soderbjorn.darkness.core.DEFAULT_DARK_THEME_NAME
+import se.soderbjorn.darkness.core.DEFAULT_LIGHT_THEME_NAME
+import se.soderbjorn.darkness.core.DEFAULT_THEME_NAME
+import se.soderbjorn.darkness.core.ResolvedPalette
+import se.soderbjorn.darkness.core.ColorScheme
+import se.soderbjorn.darkness.core.Theme
 import se.soderbjorn.termtastic.WindowCommand
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.WindowEnvelope
 import se.soderbjorn.termtastic.client.WindowSocket
 import se.soderbjorn.termtastic.client.WindowStateRepository
-import se.soderbjorn.termtastic.defaultThemes
-import se.soderbjorn.termtastic.recommendedColorSchemes
-import se.soderbjorn.termtastic.resolve
+import se.soderbjorn.darkness.core.defaultThemes
+import se.soderbjorn.darkness.core.recommendedColorSchemes
+import se.soderbjorn.darkness.core.resolve
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
