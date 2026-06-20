@@ -810,6 +810,7 @@ object DeviceAuth {
                             )
                             Text("Approve this device (save as trusted)", fontSize = 14.sp)
                         }
+                        Spacer(Modifier.height(8.dp))
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
