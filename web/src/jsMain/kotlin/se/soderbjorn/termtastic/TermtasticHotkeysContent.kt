@@ -43,19 +43,36 @@ internal fun termtasticHotkeysSpec(): HotkeysModalSpec = HotkeysModalSpec(
                             chord = listOf(if (isMacUserAgent()) "⌘" else "Ctrl", "D"),
                         ),
                     )
+                    // In the app, Ctrl+Option+arrows move focus by DIRECTION —
+                    // see PaneNavigation.kt. These override the toolkit's
+                    // Previous/Next-window cycle on the same chord, so the
+                    // directional bindings are listed here in place of the
+                    // cycle. The equivalent Ctrl+Option+H/J/K/L vim bindings
+                    // also work but are intentionally left out of the
+                    // cheatsheet as a power-user feature.
+                    val ctrl = if (isMacUserAgent()) "⌃" else "Ctrl"
+                    val opt = if (isMacUserAgent()) "⌥" else "Alt"
+                    add(HotkeyEntry(label = "Focus pane left", chord = listOf(ctrl, opt, "←")))
+                    add(HotkeyEntry(label = "Focus pane down", chord = listOf(ctrl, opt, "↓")))
+                    add(HotkeyEntry(label = "Focus pane up", chord = listOf(ctrl, opt, "↑")))
+                    add(HotkeyEntry(label = "Focus pane right", chord = listOf(ctrl, opt, "→")))
+                } else {
+                    // Plain browser build: the toolkit's linear pane cycle is
+                    // still active (the directional override is app-only), so
+                    // show it.
+                    add(
+                        HotkeyEntry(
+                            label = "Previous window",
+                            chord = StandardHotkeys.PreviousPane.toChordLabel(),
+                        ),
+                    )
+                    add(
+                        HotkeyEntry(
+                            label = "Next window",
+                            chord = StandardHotkeys.NextPane.toChordLabel(),
+                        ),
+                    )
                 }
-                add(
-                    HotkeyEntry(
-                        label = "Previous window",
-                        chord = StandardHotkeys.PreviousPane.toChordLabel(),
-                    ),
-                )
-                add(
-                    HotkeyEntry(
-                        label = "Next window",
-                        chord = StandardHotkeys.NextPane.toChordLabel(),
-                    ),
-                )
                 add(
                     HotkeyEntry(
                         label = "Previous tab",

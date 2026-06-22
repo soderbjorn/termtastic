@@ -313,6 +313,16 @@ private fun start() {
         // (showBottomBar = false). The bespoke chrome that
         // used to live here is gone — see TERMTASTIC-TOOLKIT-MIGRATION.md
         // for the migration boundary and the regressions documented there.
+        // Directional (vim-style) pane focus: Ctrl+Option+H/J/K/L and
+        // Ctrl+Option+arrows move focus between panes by direction. Must be
+        // installed BEFORE bootViaToolkitShell so its window capture-phase
+        // listener is registered ahead of the toolkit's own hotkey
+        // dispatcher (it overrides the toolkit's pane cycle). Gated to the
+        // Mac/Electron app, like the ⌘T/⌘D shortcuts.
+        if (isElectronClient) {
+            installDirectionalPaneNav()
+        }
+
         val appEl = document.getElementById("app") as HTMLElement
         bootViaToolkitShell(appEl)
 
