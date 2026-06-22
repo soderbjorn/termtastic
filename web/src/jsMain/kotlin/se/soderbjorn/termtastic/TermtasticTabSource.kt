@@ -140,7 +140,16 @@ fun termtasticTabSource(
                 // are in the DOM. Without this call, brand-new badges
                 // (after a tab/pane add or app first paint) sit empty
                 // until the next 3-second server poll.
-                updateStateIndicators(appVm.stateFlow.value.sessionStates)
+                //
+                // Read from the authoritative `windowState.states` (the same
+                // source the per-pane dot builders use via
+                // `currentSessionStates`) rather than the `appVm` mirror, which
+                // can still be empty here — e.g. in demo mode the single fixture
+                // state seed is otherwise missed, so this call would feed
+                // `updateAppLogoState` an empty map and reset the aggregate
+                // AppLogo dot to idle while the rows correctly show
+                // working/waiting. Mirrors the fix in `renderConfig`.
+                updateStateIndicators(termtasticClient.windowState.states.value)
             }
         }
     },
