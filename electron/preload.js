@@ -220,6 +220,23 @@ contextBridge.exposeInMainWorld("electronApi", {
   },
 
   /**
+   * Subscribes to the "new terminal" event sent by the main process when the
+   * user picks "File → New Terminal" (⌘D) from the macOS menu. The renderer
+   * adds a terminal pane to the active tab.
+   *
+   * Only the channel name is forwarded; the IPC event object itself is not
+   * leaked into the renderer for context-isolation safety.
+   *
+   * @param {() => void} handler - Called with no arguments on each event.
+   * @returns {() => void} Unsubscribe function that detaches the listener.
+   */
+  onNewTerminal: (handler) => {
+    const wrapped = () => handler();
+    ipcRenderer.on("new-terminal", wrapped);
+    return () => ipcRenderer.removeListener("new-terminal", wrapped);
+  },
+
+  /**
    * Subscribes to the "debug set pane state" event sent by the main
    * process when the user picks "Pane state: Working/Waiting/Clear"
    * from the macOS Debug submenu. The handler receives the requested

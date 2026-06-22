@@ -631,6 +631,25 @@ private fun showNewTab() {
     target.webContents.send("new-tab")
 }
 
+/**
+ * Opens a new terminal pane in the active tab in response to the
+ * "File → New Terminal" menu item (⌘D). Mirrors [showNewTab]: focus (and
+ * if needed reveal) the target window, then send the `new-terminal` IPC
+ * the renderer listens for. The renderer resolves the active tab + cwd and
+ * dispatches [se.soderbjorn.termtastic.WindowCommand.AddPaneToTab] — the
+ * same command the pane bar's "+" → Terminal action uses.
+ */
+private fun showNewTerminal() {
+    val focused = BrowserWindow.getFocusedWindow()
+    val mw = mainWindow
+    val target: BrowserWindow = focused
+        ?: (if (mw != null && !mw.isDestroyed()) mw else null)
+        ?: return
+    if (!target.isVisible()) target.show()
+    target.focus()
+    target.webContents.send("new-terminal")
+}
+
 // ── Application menu ─────────────────────────────────────────────────
 
 private fun buildAppMenu() {
@@ -684,9 +703,15 @@ private fun buildAppMenu() {
     newTabItem.label = "New Tab"
     newTabItem.accelerator = "CommandOrControl+T"
     newTabItem.click = { showNewTab() }
+    // "New Terminal" (⌘D) adds a terminal pane to the active tab — the pane
+    // equivalent of "New Tab". Sits directly below it in the File menu.
+    val newTerminalItem: dynamic = js("({})")
+    newTerminalItem.label = "New Terminal"
+    newTerminalItem.accelerator = "CommandOrControl+D"
+    newTerminalItem.click = { showNewTerminal() }
     val fileMenu: dynamic = js("({})")
     fileMenu.label = "File"
-    fileMenu.submenu = arrayOf<dynamic>(newTabItem)
+    fileMenu.submenu = arrayOf<dynamic>(newTabItem, newTerminalItem)
     template.add(fileMenu)
 
     template.add(js("({label:'Edit', submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]})"))

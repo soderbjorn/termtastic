@@ -37,6 +37,12 @@ internal fun termtasticHotkeysSpec(): HotkeysModalSpec = HotkeysModalSpec(
                             chord = listOf(if (isMacUserAgent()) "⌘" else "Ctrl", "T"),
                         ),
                     )
+                    add(
+                        HotkeyEntry(
+                            label = "New terminal",
+                            chord = listOf(if (isMacUserAgent()) "⌘" else "Ctrl", "D"),
+                        ),
+                    )
                 }
                 add(
                     HotkeyEntry(

@@ -541,6 +541,20 @@ private fun start() {
         electronApi.onNewTab({ launchCmd(WindowCommand.AddTab) })
     }
 
+    // macOS app menu → "File → New Terminal" (⌘D) adds a terminal pane to the
+    // active tab. Forwarded from the Electron main process via the
+    // `new-terminal` IPC; resolves the active tab + its cwd from the live
+    // config snapshot and fires the same AddPaneToTab the pane bar's
+    // "+" → Terminal action uses. No-op if there is no active tab yet.
+    if (electronApi?.onNewTerminal != null) {
+        electronApi.onNewTerminal({
+            val tabId = latestWindowConfig?.activeTabId
+            if (tabId != null) {
+                launchCmd(WindowCommand.AddPaneToTab(tabId = tabId, cwd = cwdForNewPaneIn(tabId)))
+            }
+        })
+    }
+
     // macOS Debug menu → per-pane state override (Working / Waiting /
     // Clear). Forwarded from the Electron main process via the
     // `debug-set-pane-state` IPC; the renderer-side helper looks up
