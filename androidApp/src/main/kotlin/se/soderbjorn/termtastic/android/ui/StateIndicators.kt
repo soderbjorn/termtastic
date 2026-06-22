@@ -1,14 +1,16 @@
 /**
  * Session state indicators for the Termtastic Android app.
  *
- * Renders the per-session status shown next to titles in [TreeScreen] rows
- * and the [TerminalScreen] top bar, mirroring the web client's
- * `.pane-status-spinner` element (`applySpinnerState()` in
- * `web/.../WebStateActions.kt`):
- *  - `"working"` — a small circular spinner.
- *  - `"waiting"` — a warning triangle with an exclamation mark, drawn in the
- *    theme's semantic warn colour and fading between full and 30% opacity
- *    (the web `fade-warning` keyframes: 2.5s ease-in-out cycle).
+ * Renders the per-session status shown next to titles in [TreeScreen] rows and
+ * the [TerminalScreen] top bar, mirroring the web client's `.tt-status-dot`
+ * indicator (`applyDotState()` in `web/.../WebStateActions.kt`). Per issue #38
+ * the indicator is painted in the theme's foreground text colour (not a fixed
+ * green/red) so it meshes with any theme:
+ *  - idle (`null`) → a solid dot, no pulse.
+ *  - `"working"`   → the same dot, breathing (pulsing) between full and ~30%.
+ *  - `"waiting"`   → the dot is swapped for a pulsing warning/exclamation
+ *    triangle, so working and waiting stay distinguishable now that they share
+ *    one colour.
  *
  * @see TreeScreen
  * @see TerminalScreen
@@ -22,20 +24,15 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
@@ -44,44 +41,45 @@ import androidx.compose.ui.unit.dp
 private val EaseInOutCss = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
 
 /**
- * Fixed status-dot colours, matching the web client's per-row sidebar dot
- * (`.tt-sidebar-dot` in `styles.css`) and the landing page's brand dot. Kept as
- * fixed values (not theme tokens) so the idle/working green and the waiting red
- * stay distinguishable in any appearance mode.
- */
-private val StatusDotGreen = Color(0xFF7CFC9E)
-private val StatusDotRed = Color(0xFFFF5F57)
-
-/**
- * Per-row status dot mirroring the web sidebar dot (issue #35 follow-up): a
- * small glowing bead whose colour/motion encodes the session state.
- *  - idle (`null`) → solid green, no pulse.
- *  - `"working"`   → green, pulsing (the bead "breathes" between full and ~35%).
- *  - `"waiting"`   → red, pulsing.
+ * Per-row status indicator mirroring the web `.tt-status-dot` (issue #38): a
+ * small bead whose motion/shape — but no longer its colour — encodes the
+ * session state. It is always painted in the theme's foreground text colour
+ * ([SidebarTextPrimary]) so it meshes with any theme instead of a fixed
+ * green/red.
+ *  - idle (`null`) → a solid dot, no pulse.
+ *  - `"working"`   → the same dot, breathing between full and ~30% opacity.
+ *  - `"waiting"`   → a pulsing warning/exclamation triangle (see
+ *    [WaitingWarningIcon]) in place of the dot.
  *
- * Rendered at the LEADING edge of each [TreeScreen] leaf row (replacing the old
- * leading pane-type icon, which now sits trailing). A soft radial-gradient glow
- * surrounds the core bead, echoing the web dot's festive box-shadow halo.
+ * Rendered at the LEADING edge of each [TreeScreen] leaf row and aggregated on
+ * tab headers; also shown next to the [TerminalScreen] title. A soft
+ * radial-gradient glow surrounds the dot, echoing the web bead's box-shadow
+ * halo.
  *
  * @param state the session state (`"working"`, `"waiting"`, or null/idle).
  * @param boxDp the square canvas size in dp; the core bead is ~44% of it, the
  *   rest is glow headroom.
- * @see StateIndicator
+ * @see WaitingWarningIcon
  */
 @Composable
 internal fun StatusDot(state: String?, boxDp: Int = 16) {
-    val pulsing = state == "working" || state == "waiting"
-    val color = if (state == "waiting") StatusDotRed else StatusDotGreen
+    val color = SidebarTextPrimary
+    // Waiting for input → swap the dot for the warning triangle, still pulsing.
+    if (state == "waiting") {
+        WaitingWarningIcon(boxDp = boxDp, color = color)
+        return
+    }
+    val pulsing = state == "working"
     val alpha = if (pulsing) {
         val transition = rememberInfiniteTransition(label = "statusDot")
         transition.animateFloat(
             initialValue = 1f,
-            targetValue = 0.35f,
+            targetValue = 0.3f,
             animationSpec = infiniteRepeatable(
-                // Web pulse cycle is 2.8s for both colours; the reversing tween
-                // runs the 1400ms half-cycle each way so red and green breathe
-                // at the same speed.
-                animation = tween(durationMillis = 1400, easing = EaseInOutCss),
+                // The web `.tt-status-dot.state-working` breathes over a 2.5s
+                // ease-in-out cycle; the reversing tween runs the 1250ms
+                // half-cycle each way so it matches.
+                animation = tween(durationMillis = 1250, easing = EaseInOutCss),
                 repeatMode = RepeatMode.Reverse,
             ),
             label = "statusDotAlpha",
@@ -89,11 +87,7 @@ internal fun StatusDot(state: String?, boxDp: Int = 16) {
     } else {
         1f
     }
-    val desc = when (state) {
-        "working" -> "working"
-        "waiting" -> "waiting for input"
-        else -> "idle"
-    }
+    val desc = if (state == "working") "working" else "idle"
     Canvas(
         modifier = Modifier
             .size(boxDp.dp)
@@ -119,58 +113,21 @@ internal fun StatusDot(state: String?, boxDp: Int = 16) {
 }
 
 /**
- * Status indicator for a session state, shown next to the session title.
- *
- * Renders a spinner when [state] is `"working"`, a fading warning triangle
- * when it is `"waiting"`, and nothing otherwise. Called by [TreeScreen]'s
- * tab header and leaf rows and by [TerminalScreen]'s top bar title.
- *
- * @param state the session state (`"working"`, `"waiting"`, or null)
- * @param sizeDp icon size in dp (12 in list rows, 14 in the pane header,
- *   matching the web client's two spinner variants)
- * @param leadingSpacer optional spacer width in dp before the indicator
- * @param trailingSpacer optional spacer width in dp after the indicator
- * @param spinnerColor stroke colour for the working spinner
- * @param spinnerTrackColor track colour for the working spinner
- */
-@Composable
-internal fun StateIndicator(
-    state: String?,
-    sizeDp: Int,
-    leadingSpacer: Int = 0,
-    trailingSpacer: Int = 0,
-    spinnerColor: Color = SidebarTextPrimary,
-    spinnerTrackColor: Color = SidebarTextSecondary.copy(alpha = 0.3f),
-) {
-    if (state != "working" && state != "waiting") return
-    if (leadingSpacer > 0) Spacer(Modifier.width(leadingSpacer.dp))
-    if (state == "working") {
-        CircularProgressIndicator(
-            modifier = Modifier
-                .size(sizeDp.dp)
-                .semantics { stateDescription = "working" },
-            strokeWidth = 2.dp,
-            color = spinnerColor,
-            trackColor = spinnerTrackColor,
-        )
-    } else {
-        WaitingWarningIcon(sizeDp = sizeDp)
-    }
-    if (trailingSpacer > 0) Spacer(Modifier.width(trailingSpacer.dp))
-}
-
-/**
  * Warning triangle with an exclamation mark, fading between full and 30%
  * opacity to flag a session waiting for user input.
  *
- * Geometry mirrors the web client's `WAITING_WARNING_SVG` (16x16 viewBox:
- * stroked triangle, exclamation bar, and dot), and the fade mirrors the
- * `fade-warning` CSS keyframes (opacity 1 → 0.3 → 1 over 2.5s ease-in-out).
+ * Geometry mirrors the web client's `.tt-status-dot.state-waiting` mask (a
+ * 16-unit viewBox: a filled triangle with the exclamation bar and dot punched
+ * out as transparent holes via an even-odd fill), and the fade mirrors the
+ * `fade-warning` keyframes (opacity 1 → 0.3 → 1 over 2.5s ease-in-out). Painted
+ * in the supplied [color] (the theme foreground) so it meshes with any theme.
  *
- * @param sizeDp icon size in dp
+ * @param boxDp the square canvas size in dp (matches the dot it replaces).
+ * @param color the fill colour (the theme's foreground text colour).
+ * @see StatusDot
  */
 @Composable
-private fun WaitingWarningIcon(sizeDp: Int) {
+private fun WaitingWarningIcon(boxDp: Int, color: Color) {
     val transition = rememberInfiniteTransition(label = "fadeWarning")
     val alpha = transition.animateFloat(
         initialValue = 1f,
@@ -181,27 +138,28 @@ private fun WaitingWarningIcon(sizeDp: Int) {
         ),
         label = "fadeWarningAlpha",
     ).value
-    val warn = SidebarWarn
     Canvas(
         modifier = Modifier
-            .size(sizeDp.dp)
+            .size(boxDp.dp)
             .semantics { stateDescription = "waiting for input" },
     ) {
+        // Scale the 16-unit viewBox to fill the canvas; the triangle has its
+        // own padding (apex at y=1.7, base at y=13.7) so it never touches the
+        // edges. A single even-odd path fills the triangle and cuts the
+        // exclamation bar + dot as holes (transparent, reading on any theme).
         val s = size.minDimension / 16f
-        val color = warn.copy(alpha = warn.alpha * alpha)
-        val triangle = Path().apply {
-            moveTo(8f * s, 1.5f * s)
-            lineTo(14.5f * s, 13.5f * s)
-            lineTo(1.5f * s, 13.5f * s)
+        val path = Path().apply {
+            fillType = PathFillType.EvenOdd
+            // Triangle silhouette.
+            moveTo(8f * s, 1.7f * s)
+            lineTo(14.5f * s, 13.7f * s)
+            lineTo(1.5f * s, 13.7f * s)
             close()
+            // Exclamation bar (cut-out).
+            addRect(Rect(7.25f * s, 5.6f * s, 8.75f * s, 9.8f * s))
+            // Exclamation dot (cut-out).
+            addOval(Rect(7.1f * s, 10.9f * s, 8.9f * s, 12.7f * s))
         }
-        drawPath(triangle, color, style = Stroke(width = 1.3f * s, join = StrokeJoin.Round))
-        drawRoundRect(
-            color = color,
-            topLeft = Offset(7.25f * s, 6f * s),
-            size = Size(1.5f * s, 4f * s),
-            cornerRadius = CornerRadius(0.5f * s),
-        )
-        drawCircle(color = color, radius = 0.85f * s, center = Offset(8f * s, 12f * s))
+        drawPath(path, color = color.copy(alpha = color.alpha * alpha))
     }
 }
