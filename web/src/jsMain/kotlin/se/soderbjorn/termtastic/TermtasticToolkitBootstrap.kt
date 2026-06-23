@@ -785,4 +785,15 @@ fun bootViaToolkitShell(root: HTMLElement) {
     // so it survives the toolkit's chrome rebuilds without per-render
     // re-wiring — see [installReformatHoverPopup].
     installReformatHoverPopup()
+
+    // Double-click a pane title to rename it (mirrors tab-label rename).
+    // Document-level delegation, so it survives toolkit chrome rebuilds;
+    // routes to the toolkit's beginPaneRename via appShellHandle (now set
+    // above). See [installPaneTitleDoubleClickRename].
+    installPaneTitleDoubleClickRename()
+
+    // Double-click a pane's name in the sidebar to rename it. Same
+    // delegation pattern; the sidebar has no toolkit rename hook, so this
+    // hand-rolls the inline input. See [installSidebarPaneDoubleClickRename].
+    installSidebarPaneDoubleClickRename()
 }
