@@ -313,6 +313,16 @@ private fun start() {
         // (showBottomBar = false). The bespoke chrome that
         // used to live here is gone — see TERMTASTIC-TOOLKIT-MIGRATION.md
         // for the migration boundary and the regressions documented there.
+        // Directional (vim-style) pane focus: Ctrl+Option+H/J/K/L and
+        // Ctrl+Option+arrows move focus between panes by direction. Must be
+        // installed BEFORE bootViaToolkitShell so its window capture-phase
+        // listener is registered ahead of the toolkit's own hotkey
+        // dispatcher (it overrides the toolkit's pane cycle). Gated to the
+        // Mac/Electron app, like the ⌘T/⌘D shortcuts.
+        if (isElectronClient) {
+            installDirectionalPaneNav()
+        }
+
         val appEl = document.getElementById("app") as HTMLElement
         bootViaToolkitShell(appEl)
 
@@ -531,6 +541,28 @@ private fun start() {
     // `show-settings` IPC.
     if (electronApi?.onShowSettings != null) {
         electronApi.onShowSettings({ openAppSettingsSidebar() })
+    }
+
+    // macOS app menu → "File → New Tab" (⌘T) adds a tab. Forwarded from the
+    // Electron main process via the `new-tab` IPC; fires the same AddTab
+    // command the "+" tab-strip button uses, so the shortcut and the button
+    // behave identically.
+    if (electronApi?.onNewTab != null) {
+        electronApi.onNewTab({ launchCmd(WindowCommand.AddTab) })
+    }
+
+    // macOS app menu → "File → New Terminal" (⌘D) adds a terminal pane to the
+    // active tab. Forwarded from the Electron main process via the
+    // `new-terminal` IPC; resolves the active tab + its cwd from the live
+    // config snapshot and fires the same AddPaneToTab the pane bar's
+    // "+" → Terminal action uses. No-op if there is no active tab yet.
+    if (electronApi?.onNewTerminal != null) {
+        electronApi.onNewTerminal({
+            val tabId = latestWindowConfig?.activeTabId
+            if (tabId != null) {
+                launchCmd(WindowCommand.AddPaneToTab(tabId = tabId, cwd = cwdForNewPaneIn(tabId)))
+            }
+        })
     }
 
     // macOS Debug menu → per-pane state override (Working / Waiting /
