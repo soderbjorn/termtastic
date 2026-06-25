@@ -13,6 +13,9 @@ struct HostsView: View {
     var onConnected: () -> Void
     var onOpenNews: () -> Void
 
+    /// Roomier (iPad) vs compact (iPhone) sizing.
+    @Environment(\.horizontalSizeClass) private var hSize
+
     @State private var editTarget: HostEntryLocal?
     @State private var showAddSheet = false
     @State private var deleteTarget: HostEntryLocal?
@@ -37,6 +40,11 @@ struct HostsView: View {
                 hostsList
             }
         }
+        // Keep the list/empty state in a readable column on iPad instead of
+        // stretching edge-to-edge, left-aligned so it lines up under the large
+        // "Hosts" title rather than floating centred. A no-op on iPhone (< 700 pt).
+        .frame(maxWidth: 700)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .safeAreaInset(edge: .bottom) {
             // Discreet, always-visible entry into the built-in demo, pinned to
             // the bottom of the screen below both the empty state and the host
@@ -169,21 +177,22 @@ private struct HostRow: View {
     let onConnect: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
+    @Environment(\.horizontalSizeClass) private var hSize
 
     var body: some View {
         Button(action: { if enabled { onConnect() } }) {
-            HStack(spacing: 12) {
+            HStack(spacing: hSize.scaled(12)) {
                 TerminalGlyph()
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.label)
-                        .font(.headline)
+                        .font(hSize.pick(.headline, .title3))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     // verbatim: interpolating an Int32 through Text's
                     // LocalizedStringKey path runs it through a locale-aware
                     // number formatter, rendering ports like "8 443".
                     Text(verbatim: "\(entry.host):\(entry.port)")
-                        .font(.subheadline)
+                        .font(hSize.pick(.subheadline, .body))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -260,6 +269,7 @@ private struct HostEditSheet: View {
     let onSave: (String, String, Int32) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var hSize
     @State private var label: String
     @State private var host: String
     @State private var portText: String
@@ -351,7 +361,9 @@ private struct HostEditSheet: View {
                 if initial == nil { focusedField = .label }
             }
         }
-        .presentationDetents([.medium, .large])
+        // On iPad a `.medium` detent renders as a small floating card; present
+        // the full form sheet there instead. iPhone keeps the half-sheet.
+        .presentationDetents(hSize.pick([.medium, .large], [.large]))
     }
 }
 

@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import se.soderbjorn.darkness.web.layout.GridSpec
 import se.soderbjorn.darkness.web.layout.LayoutPreset
@@ -92,6 +94,18 @@ class DemoServer internal constructor(
     /** Deterministic id counter for panes/tabs/sessions created at runtime. */
     private var nextId = 100
 
+    /**
+     * The simulated persisted `ui-settings` blob — the in-memory analogue of
+     * the real server's settings store. The mobile overview authors the
+     * toolkit-owned `LAYOUT_STATE` here for every geometry edit (move / resize /
+     * maximize / minimize / layout); [applyUiSettings] merges into it and
+     * mirrors the result into [windowState] so the layout survives a screen
+     * teardown the way it does against a real server. Starts empty — geometry
+     * then falls back to the fixture config's pane fields, exactly like a fresh
+     * real session with no persisted `LAYOUT_STATE`.
+     */
+    private val uiSettings: MutableMap<String, JsonElement> = mutableMapOf()
+
     init {
         for (spec in demoSessionSpecs()) {
             sessions[spec.sessionId] = DemoTerminalSession(spec, scope)
@@ -128,6 +142,32 @@ class DemoServer internal constructor(
      */
     suspend fun handle(command: WindowCommand) {
         mutex.withLock { dispatch(command) }
+    }
+
+    /**
+     * Persist a `ui-settings` patch the way the real server's
+     * `POST /api/ui-settings` does: merge it into the stored [uiSettings],
+     * mirror the merged blob into [windowState] (so `geometryByTab` /
+     * `rawLayoutState` reflect it for the whole client lifetime), and broadcast
+     * a [WindowEnvelope.UiSettings] so envelope subscribers re-sync too.
+     *
+     * Called (in demo mode) by the overview's settings persister for every
+     * geometry edit. Without it, demo-mode layout/geometry changes lived only
+     * in the overview view-model's optimistic overrides and were lost the
+     * moment that view-model was recreated — e.g. opening a pane and navigating
+     * back dropped the layout the user had just picked.
+     *
+     * @param patch the settings key/values to merge (verbatim JSON); the
+     *   overview sends the toolkit `LAYOUT_STATE` blob under that key.
+     */
+    suspend fun applyUiSettings(patch: JsonObject) {
+        if (patch.isEmpty()) return
+        mutex.withLock {
+            uiSettings.putAll(patch)
+            val merged = JsonObject(uiSettings.toMap())
+            windowState.updateUiSettings(merged)
+            emit(WindowEnvelope.UiSettings(merged))
+        }
     }
 
     // -- internal plumbing ---------------------------------------------------

@@ -58,9 +58,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -96,13 +96,17 @@ import se.soderbjorn.termtastic.TerminalContent
 import se.soderbjorn.termtastic.WindowConfig
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
 import se.soderbjorn.termtastic.android.net.NewsUpdatesController
+import se.soderbjorn.termtastic.client.WindowLayoutState
 import se.soderbjorn.termtastic.client.addPaneToTab
 import se.soderbjorn.termtastic.client.addTab
 import se.soderbjorn.termtastic.client.closePane
 import se.soderbjorn.termtastic.client.closeTab
 import se.soderbjorn.termtastic.client.renamePane
 import se.soderbjorn.termtastic.client.renameTab
+import se.soderbjorn.termtastic.client.viewmodel.HttpSettingsPersister
+import se.soderbjorn.termtastic.client.viewmodel.OverviewBackingViewModel
 import se.soderbjorn.termtastic.client.viewmodel.SessionsViewModeStore
+import se.soderbjorn.darkness.web.layout.LayoutPreset
 
 // Palette tokens live in SidebarPalette.kt — shared with MarkdownListScreen.
 
@@ -357,6 +361,51 @@ fun TreeScreen(
     val config by client.windowState.config.collectAsStateWithLifecycle()
     val states by client.windowState.states.collectAsStateWithLifecycle()
     val minimizedPaneIds by client.windowState.minimizedPaneIds.collectAsStateWithLifecycle()
+
+    // Shared overview model — hoisted here so the overview content *and* the
+    // toolbar's "New window" / "Layout" actions drive the same instance
+    // (issue #58). Null until the window socket exists. Owns all the geometry
+    // logic (move/resize/maximize/minimize/layout) in commonMain so iOS can
+    // render the same model later.
+    val windowSocket = ConnectionHolder.windowSocket()
+    val overviewVm = remember(client, windowSocket) {
+        windowSocket?.let { sock ->
+            OverviewBackingViewModel(
+                windowSocket = sock,
+                geometryByTab = client.windowState.geometryByTab,
+                rawLayoutState = client.windowState.rawLayoutState,
+                settingsPersister = HttpSettingsPersister(client),
+            )
+        }
+    }
+    LaunchedEffect(overviewVm) { overviewVm?.run() }
+
+    // The active (non-hidden) tab and its on-canvas pane count drive the
+    // overview toolbar actions (add pane → this tab; layout miniatures →
+    // this pane count). Derived from the already-collected config + minimized
+    // set so we don't need a second state subscription.
+    val overviewActiveTabId = config?.let { cfg ->
+        cfg.activeTabId?.takeIf { id -> cfg.tabs.any { it.id == id && !it.isHidden } }
+            ?: cfg.tabs.firstOrNull { !it.isHidden }?.id
+    }
+    val overviewActivePaneCount = config?.tabs
+        ?.firstOrNull { it.id == overviewActiveTabId }
+        ?.panes?.count { it.leaf.id !in minimizedPaneIds } ?: 0
+
+    // The active tab's persisted layout preset, read from the toolkit-owned
+    // `LAYOUT_STATE` blob (`presetByTab`). Drives the encircled "current layout"
+    // marker in the layout sheet so the user can see which preset is live —
+    // in practice that's [LayoutPreset.Auto], the only preset the toolkit keeps
+    // re-applying; one-shot presets relax to "custom" on the next manual edit
+    // (issue #59). Null when no preset is recorded for the tab.
+    val rawLayout by client.windowState.rawLayoutState.collectAsStateWithLifecycle()
+    val overviewActivePreset = overviewActiveTabId?.let { tabId ->
+        WindowLayoutState.parse(rawLayout).presetByTab[tabId]?.let { LayoutPreset.fromKey(it) }
+    }
+
+    // Overview toolbar UI state.
+    var showNewWindowMenu by remember { mutableStateOf(false) }
+    var showLayoutSheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Shared news/update checker — drives the toolbar bell's visibility (shown
@@ -464,6 +513,19 @@ fun TreeScreen(
         )
     }
 
+    if (showLayoutSheet) {
+        LayoutSheet(
+            paneCount = overviewActivePaneCount,
+            activePreset = overviewActivePreset,
+            onSelect = { preset ->
+                showLayoutSheet = false
+                val tabId = overviewActiveTabId ?: return@LayoutSheet
+                scope.launch { overviewVm?.applyLayout(tabId, preset) }
+            },
+            onDismiss = { showLayoutSheet = false },
+        )
+    }
+
     Scaffold(
         containerColor = SidebarBackground,
         topBar = {
@@ -485,6 +547,68 @@ fun TreeScreen(
                 },
                 title = { Text("Sessions", color = SidebarTextPrimary) },
                 actions = {
+                    // Combined "+" menu: always offers "New tab"; in overview
+                    // mode it also offers adding a pane to the current tab
+                    // (issue #58). Replaces the former separate "New window"
+                    // button so the toolbar carries a single add affordance.
+                    // Placed first so it sits leftmost in the action cluster.
+                    Box {
+                        IconButton(onClick = { showNewWindowMenu = true }) {
+                            PlusIcon(
+                                contentDescription = "Add",
+                                tint = SidebarTextPrimary,
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showNewWindowMenu,
+                            onDismissRequest = { showNewWindowMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("New tab") },
+                                onClick = {
+                                    showNewWindowMenu = false
+                                    showTabName = true
+                                },
+                            )
+                            if (viewMode == SessionsViewMode.OVERVIEW) {
+                                DropdownMenuItem(
+                                    text = { Text("New terminal") },
+                                    onClick = {
+                                        showNewWindowMenu = false
+                                        val tabId = overviewActiveTabId ?: return@DropdownMenuItem
+                                        scope.launch { overviewVm?.addPane(tabId, "terminal") }
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("New file browser") },
+                                    onClick = {
+                                        showNewWindowMenu = false
+                                        val tabId = overviewActiveTabId ?: return@DropdownMenuItem
+                                        scope.launch { overviewVm?.addPane(tabId, "fileBrowser") }
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("New git") },
+                                    onClick = {
+                                        showNewWindowMenu = false
+                                        val tabId = overviewActiveTabId ?: return@DropdownMenuItem
+                                        scope.launch { overviewVm?.addPane(tabId, "git") }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    // Overview-only layout preset picker (issue #58). Hidden in
+                    // list mode where it has no spatial meaning. Adding panes is
+                    // folded into the combined "+" menu above.
+                    if (viewMode == SessionsViewMode.OVERVIEW) {
+                        IconButton(onClick = { showLayoutSheet = true }) {
+                            LayoutGridIcon(
+                                contentDescription = "Layout",
+                                tint = SidebarTextPrimary,
+                            )
+                        }
+                    }
                     // Single toggle between the list and the overview. The icon
                     // shows the mode you'll switch *to*.
                     IconButton(onClick = {
@@ -514,13 +638,6 @@ fun TreeScreen(
                         shouldPulse = newsUpdatesState.hasNews,
                         muted = !newsUpdatesState.hasContent,
                     )
-                    IconButton(onClick = { showTabName = true }) {
-                        Icon(
-                            Icons.Filled.Add,
-                            contentDescription = "New tab",
-                            tint = SidebarTextPrimary,
-                        )
-                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = SidebarBackground,
@@ -546,14 +663,24 @@ fun TreeScreen(
             }
 
             when (viewMode) {
-                SessionsViewMode.OVERVIEW -> OverviewContent(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    onOpenTerminal = onOpenTerminal,
-                    onOpenFileBrowser = onOpenFileBrowser,
-                    onOpenGit = onOpenGit,
-                )
+                SessionsViewMode.OVERVIEW -> if (overviewVm == null) {
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("Connecting…", color = SidebarTextSecondary)
+                    }
+                } else {
+                    OverviewContent(
+                        vm = overviewVm,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        onOpenTerminal = onOpenTerminal,
+                        onOpenFileBrowser = onOpenFileBrowser,
+                        onOpenGit = onOpenGit,
+                    )
+                }
                 SessionsViewMode.LIST -> {
                     val rows = flatten(cfg, states, minimizedPaneIds, showHiddenTabs)
                     LazyColumn(

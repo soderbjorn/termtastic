@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -102,6 +103,22 @@ class WindowStateRepository {
     /** Observable per-tab pane geometry (see backing field). */
     val geometryByTab: StateFlow<Map<String, Map<String, ToolkitPaneGeometry>>> = _geometryByTab.asStateFlow()
 
+    /**
+     * The raw, unparsed `LAYOUT_STATE` element from the last UI-settings push,
+     * or `null` before the first push (or when the server has no layout state).
+     *
+     * [geometryByTab] is the parsed, render-ready projection; this is the
+     * *whole* blob (including `presetByTab`, `paneOrderByTab`, and any toolkit
+     * fields this client doesn't model) so that a mobile geometry edit can
+     * read-modify-write it without dropping anything the web/Electron client
+     * relies on. Consumed by
+     * [se.soderbjorn.termtastic.client.viewmodel.OverviewBackingViewModel] via
+     * [WindowLayoutState.parse].
+     */
+    private val _rawLayoutState = MutableStateFlow<JsonElement?>(null)
+    /** Observable raw `LAYOUT_STATE` element (see backing field). */
+    val rawLayoutState: StateFlow<JsonElement?> = _rawLayoutState.asStateFlow()
+
     /** Whether the server has sent a `PendingApproval` envelope (device not
      *  yet approved). */
     private val _pendingApproval = MutableStateFlow(false)
@@ -152,6 +169,7 @@ class WindowStateRepository {
      * @param settings the complete UI-settings JSON object.
      */
     fun updateUiSettings(settings: JsonObject) {
+        _rawLayoutState.value = settings[PersistKeys.LAYOUT_STATE]
         val geometry = parseGeometryByTab(settings)
         _geometryByTab.value = geometry
         _minimizedPaneIds.value = geometry.values

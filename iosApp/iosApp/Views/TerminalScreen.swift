@@ -277,8 +277,12 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDel
         }
         pendingOutput.removeAll()
 
-        // Set a reasonable default font size (Android uses 32px ≈ ~12pt at 2x/3x)
-        currentFontSize = 12
+        // Set a reasonable default font size (Android uses 32px ≈ ~12pt at 2x/3x).
+        // On a roomy iPad canvas (regular horizontal size class) the 12 pt phone
+        // default reads tiny, so start a few points larger; pinch-to-zoom still
+        // adjusts from there within the min/max bounds.
+        let isRegularWidth = view.traitCollection.horizontalSizeClass == .regular
+        currentFontSize = isRegularWidth ? 15 : 12
         view.font = Self.terminalFont(size: currentFontSize)
 
         // Apply theme from centrally-fetched settings, or fetch independently

@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.kotlinAndroid)
     alias(libs.plugins.kotlinSerialization)
     alias(libs.plugins.composeCompiler)
+    alias(libs.plugins.firebaseAppDistribution)
 }
 
 // Resolve the signing-credentials properties file, which lives OUTSIDE the
@@ -33,6 +34,35 @@ val keystoreProps = Properties().apply {
     keystorePropsFile?.inputStream()?.use { load(it) }
 }
 
+// Firebase App Distribution upload configuration. Like the signing
+// credentials, the Firebase App ID and the service-account key file live
+// OUTSIDE the repo and are read from the same external properties file as the
+// keystore (see above), or overridden via -P / env. Resolution order matches
+// the keystore's:
+//   1. -PtermtasticFirebaseAppId / -PtermtasticFirebaseCreds (command line)
+//   2. `termtasticFirebaseAppId` / `termtasticFirebaseCreds` in local.properties
+//   3. `firebaseAppId` / `firebaseServiceCredentials` in the keystore props file
+//   4. TERMTASTIC_FIREBASE_APP_ID / TERMTASTIC_FIREBASE_CREDS env vars
+// When unset, the plugin is still applied (so the upload task exists) but
+// normal builds are unaffected; the upload task only fails if actually invoked
+// without these values.
+val firebaseAppId: String? =
+    (findProperty("termtasticFirebaseAppId") as String?)
+        ?: localProps.getProperty("termtasticFirebaseAppId")
+        ?: keystoreProps.getProperty("firebaseAppId")
+        ?: System.getenv("TERMTASTIC_FIREBASE_APP_ID")
+val firebaseCredsFile: File? =
+    ((findProperty("termtasticFirebaseCreds") as String?)
+        ?: localProps.getProperty("termtasticFirebaseCreds")
+        ?: keystoreProps.getProperty("firebaseServiceCredentials")
+        ?: System.getenv("TERMTASTIC_FIREBASE_CREDS"))
+        ?.let { raw ->
+            // Like `storeFile`, a relative path resolves against the props
+            // file's own directory so the JSON can sit next to the keystore.
+            File(raw).takeIf { it.isAbsolute }
+                ?: keystorePropsFile?.parentFile?.resolve(raw)
+        }
+
 android {
     namespace = "se.soderbjorn.termtastic.android"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -41,8 +71,8 @@ android {
         applicationId = "se.soderbjorn.termtastic.android"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 5
-        versionName = "1.2.0"
+        versionCode = 8
+        versionName = "1.3.0"
     }
 
     buildFeatures {
@@ -97,6 +127,15 @@ android {
             termtasticSigning?.let { signingConfig = it }
         }
     }
+}
+
+// Wire the externally-resolved Firebase values into the App Distribution
+// plugin. Only set properties that resolved, so an unconfigured checkout still
+// configures cleanly. Testers/groups and release notes are passed at invoke
+// time (e.g. `--groups testers`) to keep this block minimal.
+firebaseAppDistribution {
+    firebaseAppId?.let { appId = it }
+    firebaseCredsFile?.let { serviceCredentialsFile = it.absolutePath }
 }
 
 kotlin {

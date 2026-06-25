@@ -84,6 +84,30 @@ enum Palette {
             return UIColor(Color(argb: resolved(isDark: isDark).textDim))
         })
     }
+    /// Brightest text token (`textBright`). Used for the overview mini-pane
+    /// title bars, which — matching the web/Mac pane headers — paint every
+    /// pane's title in the same bright colour regardless of focus.
+    static var textBright: Color {
+        Color(UIColor { traitCollection in
+            let isDark = traitCollection.userInterfaceStyle == .dark
+            return UIColor(Color(argb: resolved(isDark: isDark).textBright))
+        })
+    }
+    /// Elevated surface token (`surfaceAlt`). Backs the mini-pane title bar so
+    /// it reads as a distinct strip above the pane content (web parity).
+    static var surfaceAlt: Color {
+        Color(UIColor { traitCollection in
+            let isDark = traitCollection.userInterfaceStyle == .dark
+            return UIColor(Color(argb: resolved(isDark: isDark).surfaceAlt))
+        })
+    }
+    /// Divider/border token (`border`), e.g. the hairline under a title bar.
+    static var border: Color {
+        Color(UIColor { traitCollection in
+            let isDark = traitCollection.userInterfaceStyle == .dark
+            return UIColor(Color(argb: resolved(isDark: isDark).border))
+        })
+    }
     /// Semantic warn colour, used by the waiting-for-input state indicator.
     static var warn: Color {
         Color(UIColor { traitCollection in

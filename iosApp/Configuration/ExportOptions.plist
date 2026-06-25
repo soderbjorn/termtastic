@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ExportOptions for `xcodebuild -exportArchive`, used by
+  scripts/upload-ios-testflight.sh.
+
+  `method = app-store-connect` produces an App Store / TestFlight build, and
+  `destination = upload` makes xcodebuild push it straight to App Store Connect
+  instead of writing an .ipa to disk. Signing is automatic (Xcode-managed),
+  matching the project's CODE_SIGN_STYLE = Automatic and DEVELOPMENT_TEAM.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>destination</key>
+    <string>upload</string>
+    <key>teamID</key>
+    <string>CCJP95ZXG4</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>uploadSymbols</key>
+    <true/>
+    <key>manageAppVersionAndBuildNumber</key>
+    <false/>
+</dict>
+</plist>

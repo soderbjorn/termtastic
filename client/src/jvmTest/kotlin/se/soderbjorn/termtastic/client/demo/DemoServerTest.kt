@@ -18,6 +18,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import se.soderbjorn.darkness.core.PersistKeys
 import se.soderbjorn.termtastic.FileBrowserContent
 import se.soderbjorn.termtastic.GitContent
 import se.soderbjorn.termtastic.WindowCommand
@@ -26,6 +29,7 @@ import se.soderbjorn.termtastic.client.WindowStateRepository
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /** Tests for [DemoServer] and [DemoTerminalSession]. */
@@ -201,6 +205,37 @@ class DemoServerTest {
         server.handle(WindowCommand.SetFocusedPane(tabId = "demo-t1", paneId = "demo-p1"))
         server.handle(WindowCommand.RaisePane(paneId = "demo-p3")) // p3 has top z in t1
         assertTrue(repo.config.value === before) // same instance: nothing republished
+    }
+
+    /**
+     * The mobile overview authors pane geometry through the `ui-settings`
+     * (`LAYOUT_STATE`) path, not window commands. The demo server must persist
+     * those writes into the repository (and parse them into `geometryByTab`)
+     * the way the real server does, so the layout survives the overview
+     * view-model being recreated (open a pane, navigate back).
+     */
+    @Test
+    fun uiSettingsPersistLayoutState() = runBlocking {
+        val blob = """
+            {"presetByTab":{"demo-t1":"columns"},
+             "paneOrderByTab":{"demo-t1":["demo-p2","demo-p1"]},
+             "geometryByTab":{"demo-t1":{"demo-p2":
+               {"xPct":0.0,"yPct":0.0,"widthPct":0.5,"heightPct":1.0,
+                "zIndex":2,"isMaximized":false,"isMinimized":false}}}}
+        """.trimIndent()
+        server.applyUiSettings(buildJsonObject { put(PersistKeys.LAYOUT_STATE, blob) })
+
+        // Parsed geometry is now in the repository (process-lifetime), not just
+        // an overview view-model — so it outlives that view-model.
+        val geom = repo.geometryByTab.value["demo-t1"]?.get("demo-p2")
+        assertNotNull(geom)
+        assertEquals(0.5, geom.widthPct, 1e-9)
+        // The raw blob is kept for read-modify-write of later edits.
+        assertNotNull(repo.rawLayoutState.value)
+
+        // A second patch merges rather than replacing the stored settings.
+        server.applyUiSettings(buildJsonObject { put("SOME_OTHER_KEY", "x") })
+        assertTrue(repo.geometryByTab.value["demo-t1"]?.get("demo-p2") != null)
     }
 
     /** Unknown commands fall back to a shell-style error. */

@@ -26,6 +26,10 @@ package se.soderbjorn.termtastic
 
 import kotlinx.browser.document
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.w3c.dom.HTMLElement
 import se.soderbjorn.darkness.web.confirmClosePane
 import se.soderbjorn.darkness.web.layout.PaneAction
@@ -779,6 +783,24 @@ fun bootViaToolkitShell(root: HTMLElement) {
         ),
         scope = GlobalScope,
     )
+
+    // Live cross-client layout sync (issue #58): when another client (e.g. a
+    // phone on the same server) moves / resizes / maximizes / minimizes a pane
+    // or applies a layout, the server broadcasts the updated LAYOUT_STATE blob
+    // over /window. Feed it into the already-mounted shell so this view
+    // reflects the change immediately instead of only on reload. The toolkit
+    // no-ops when the blob matches its current state (so our own writes, echoed
+    // back, don't churn) and never re-persists what it adopts.
+    GlobalScope.launch {
+        termtasticClient.windowState.rawLayoutState.collect { el ->
+            val json = when {
+                el is JsonPrimitive && el.isString -> el.content
+                el is JsonObject -> el.toString()
+                else -> null
+            } ?: return@collect
+            appShellHandle?.applyExternalLayoutState(json)
+        }
+    }
 
     // Install the reformat-button hover popup ("Automatic reformat (this
     // window)" / "(future windows)"). Uses document-level event delegation

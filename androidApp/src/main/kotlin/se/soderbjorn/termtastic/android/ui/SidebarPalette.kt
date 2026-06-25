@@ -37,6 +37,8 @@ val LocalUiSettings = compositionLocalOf<ResolvedTheme?> { null }
 
 /** Neutral fallback colours used before a theme has been resolved. */
 private const val FALLBACK_SURFACE: Long = 0xFF2C2C2E
+private const val FALLBACK_SURFACE_ALT: Long = 0xFF3A3A3C
+private const val FALLBACK_BORDER: Long = 0x33FFFFFF
 private const val FALLBACK_TEXT: Long = 0xFFF5F5F5
 private const val FALLBACK_TEXT_DIM: Long = 0xFF8E8E93
 private const val FALLBACK_ACCENT: Long = 0xFF65DA82
@@ -51,6 +53,19 @@ internal val SidebarBackground: Color
 internal val SidebarSurface: Color
     @Composable @ReadOnlyComposable
     get() = Color((LocalUiSettings.current?.surface ?: FALLBACK_SURFACE).toInt())
+
+/**
+ * Adaptive elevated surface (`surfaceAlt`). Backs the overview mini-pane title
+ * bar so it reads as a distinct strip above the pane content (web parity).
+ */
+internal val SidebarSurfaceAlt: Color
+    @Composable @ReadOnlyComposable
+    get() = Color((LocalUiSettings.current?.surfaceAlt ?: FALLBACK_SURFACE_ALT).toInt())
+
+/** Adaptive divider/border colour (`border`), e.g. a hairline under a title bar. */
+internal val SidebarBorder: Color
+    @Composable @ReadOnlyComposable
+    get() = Color((LocalUiSettings.current?.border ?: FALLBACK_BORDER).toInt())
 
 /** Adaptive primary text colour for sidebar headings and labels. */
 internal val SidebarTextPrimary: Color

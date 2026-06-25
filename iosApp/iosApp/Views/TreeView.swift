@@ -43,6 +43,9 @@ struct TreeView: View {
     var onDisconnect: () -> Void
     var onOpenNews: () -> Void
 
+    /// Roomier (iPad) vs compact (iPhone) sizing for the list rows.
+    @Environment(\.horizontalSizeClass) private var hSize
+
     // Creation flow state
     @State private var showTabNameAlert = false
     @State private var tabName = ""
@@ -61,6 +64,15 @@ struct TreeView: View {
     /// (issue #54). The store is memory-only (never persisted to disk).
     @State private var viewMode: SessionsViewMode =
         Client.SessionsViewModeStore.shared.overviewMode ? .overview : .list
+
+    /// Shared overview model — hoisted here (not created inside `OverviewView`)
+    /// so the overview content *and* the toolbar's "New window" / "Layout"
+    /// actions drive the same instance (issue #58). Owns all the geometry logic
+    /// (move/resize/maximize/minimize/layout) in the shared `client` module.
+    @State private var overviewViewModel = OverviewViewModel()
+
+    /// Whether the layout-preset sheet is presented (overview mode only).
+    @State private var showLayoutSheet = false
 
     var body: some View {
         screenContent
@@ -90,6 +102,24 @@ struct TreeView: View {
                 renameText: $renameText,
                 closeTarget: $closeTarget
             ))
+            .sheet(isPresented: $showLayoutSheet) {
+                LayoutSheet(
+                    paneCount: overviewViewModel.activePaneCount,
+                    activePresetKey: overviewViewModel.activeTabId
+                        .flatMap { overviewViewModel.activePresetKey(tabId: $0) },
+                    onSelect: { key in
+                        guard let tabId = overviewViewModel.activeTabId else { return }
+                        overviewViewModel.applyLayout(tabId: tabId, presetKey: key)
+                    }
+                )
+            }
+    }
+
+    /// Add a pane of `kindWire` to the overview's active tab, from the toolbar's
+    /// "New window" menu. No-op until the first config arrives (no active tab).
+    private func addOverviewPane(_ kindWire: String) {
+        guard let tabId = overviewViewModel.activeTabId else { return }
+        overviewViewModel.addPane(tabId: tabId, kindWire: kindWire)
     }
 
     /// Navigation bar items: disconnect on the left, "new tab" on the right.
@@ -107,6 +137,56 @@ struct TreeView: View {
                     Text("Hosts")
                 }
                 .foregroundStyle(Palette.headerAccent)
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            // Combined "+" menu: always offers "New Tab"; in overview mode it
+            // also offers adding a pane to the current tab (issue #58).
+            // Replaces the former separate "New window" button so the toolbar
+            // carries a single add affordance. Mirrors the Android toolbar.
+            // Placed first so it sits leftmost in the trailing action cluster.
+            Menu {
+                Button {
+                    tabName = ""
+                    showTabNameAlert = true
+                } label: {
+                    Label("New Tab", systemImage: "plus.rectangle.on.rectangle.angled")
+                }
+                if viewMode == .overview {
+                    Button {
+                        addOverviewPane("terminal")
+                    } label: {
+                        Label("New Terminal", systemImage: "apple.terminal")
+                    }
+                    Button {
+                        addOverviewPane("fileBrowser")
+                    } label: {
+                        Label("New File Browser", systemImage: "folder")
+                    }
+                    Button {
+                        addOverviewPane("git")
+                    } label: {
+                        Label("New Git", systemImage: "arrow.triangle.branch")
+                    }
+                }
+            } label: {
+                PlusIcon()
+                    .foregroundStyle(Palette.textPrimary)
+            }
+            .accessibilityLabel("Add")
+        }
+        // Overview-only layout preset picker (issue #58). Hidden in list mode
+        // where it has no spatial meaning. Adding panes is folded into the
+        // combined "+" menu above. Mirrors the Android `TreeScreen` toolbar.
+        if viewMode == .overview {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showLayoutSheet = true
+                } label: {
+                    LayoutGridIcon()
+                        .foregroundStyle(Palette.textPrimary)
+                }
+                .accessibilityLabel("Layout")
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -131,16 +211,6 @@ struct TreeView: View {
         ToolbarItem(placement: .topBarTrailing) {
             NewsBellButton(action: onOpenNews)
         }
-        ToolbarItem(placement: .topBarTrailing) {
-            Button {
-                tabName = ""
-                showTabNameAlert = true
-            } label: {
-                Image(systemName: "plus")
-                    .foregroundStyle(Palette.textPrimary)
-            }
-            .accessibilityLabel("New tab")
-        }
     }
 
     /// The body's content area: the graphical overview when the toolbar toggle
@@ -154,6 +224,7 @@ struct TreeView: View {
         switch viewMode {
         case .overview:
             OverviewView(
+                viewModel: overviewViewModel,
                 onOpenTerminal: onOpenTerminal,
                 onOpenFileBrowser: onOpenFileBrowser,
                 onOpenGit: onOpenGit
@@ -181,7 +252,8 @@ struct TreeView: View {
             }
         }
         .listStyle(.plain)
-        .environment(\.defaultMinListRowHeight, 44)
+        // Taller minimum rows give the iPad's bigger pointer/touch targets room.
+        .environment(\.defaultMinListRowHeight, hSize.pick(44, 56))
         .scrollContentBackground(.hidden)
         // Only bleed the themed background into the *bottom* safe area. Letting
         // it ignore the top safe area too painted opaque black over the large
@@ -501,24 +573,25 @@ private struct HiddenToggleRow: View {
 private struct TabHeaderRow: View {
     let title: String
     let aggregateState: String?
+    @Environment(\.horizontalSizeClass) private var hSize
 
     var body: some View {
         HStack {
             // Dim section header — pane rows below carry the bright primary
             // color, matching the web sidebar's emphasis hierarchy.
             Text(title.uppercased())
-                .font(.caption)
+                .font(hSize.pick(.caption, .subheadline))
                 .fontWeight(.semibold)
                 .foregroundStyle(Palette.textSecondary)
                 .tracking(0.5)
             // Tab-aggregated status indicator (issue #38), painted in the theme
             // foreground colour: idle = solid dot, working = breathing dot,
             // waiting = pulsing warning triangle.
-            StatusDot(state: aggregateState)
+            StatusDot(state: aggregateState, box: hSize.scaled(16))
             Spacer()
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 6)
+        .padding(.horizontal, hSize.scaled(4))
+        .padding(.vertical, hSize.scaled(6))
     }
 }
 
@@ -529,29 +602,30 @@ private struct LeafRow: View {
     let kind: LeafKind
     let state: String?
     let floating: Bool
+    @Environment(\.horizontalSizeClass) private var hSize
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: hSize.scaled(6)) {
             // Leading: pane-type icon. The status dot and the pane-type icon
             // swapped places (issue #43), so each row reads
             // [pane icon] [title] [status] [chevron].
-            PaneIcon(kind: kind, floating: floating)
+            PaneIcon(kind: kind, floating: floating, size: hSize.scaled(16))
             Text(title)
-                .font(.body)
+                .font(hSize.pick(.body, .title3))
                 .foregroundStyle(Palette.textPrimary)
                 .lineLimit(1)
             Spacer()
             // Trailing: per-row status dot — working = breathing dot, waiting =
             // pulsing warning triangle; idle renders nothing (issue #43). The
             // navigation chevron follows it.
-            StatusDot(state: state)
+            StatusDot(state: state, box: hSize.scaled(16))
             Image(systemName: "chevron.right")
-                .font(.caption2)
+                .font(hSize.pick(.caption2, .footnote))
                 .foregroundStyle(Palette.textSecondary.opacity(0.5))
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
+        .padding(.leading, hSize.scaled(16))
+        .padding(.trailing, hSize.scaled(8))
+        .padding(.vertical, hSize.scaled(8))
         .accessibilityElement(children: .combine)
         .accessibilityHint(
             kind == .terminal ? "Opens terminal session" :
