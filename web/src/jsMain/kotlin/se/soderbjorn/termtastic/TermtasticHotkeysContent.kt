@@ -18,6 +18,7 @@ import se.soderbjorn.darkness.web.hotkey.HotkeyEntry
 import se.soderbjorn.darkness.web.hotkey.HotkeyGroup
 import se.soderbjorn.darkness.web.hotkey.HotkeysModalSpec
 import se.soderbjorn.darkness.web.hotkey.StandardHotkeys
+import se.soderbjorn.darkness.web.hotkey.tabSwitchHotkeyEntry
 import se.soderbjorn.darkness.web.hotkey.toChordLabel
 
 /** Build termtastic's cheatsheet spec. Pure — called once at boot. */
@@ -25,24 +26,29 @@ internal fun termtasticHotkeysSpec(): HotkeysModalSpec = HotkeysModalSpec(
     groups = listOf(
         HotkeyGroup(
             title = "Windows & tabs",
-            entries = listOf(
-                HotkeyEntry(
+            entries = buildList {
+                add(HotkeyEntry(
                     label = "Previous window",
                     chord = StandardHotkeys.PreviousPane.toChordLabel(),
-                ),
-                HotkeyEntry(
+                ))
+                add(HotkeyEntry(
                     label = "Next window",
                     chord = StandardHotkeys.NextPane.toChordLabel(),
-                ),
-                HotkeyEntry(
+                ))
+                add(HotkeyEntry(
                     label = "Previous tab",
                     chord = StandardHotkeys.PreviousTab.toChordLabel(),
-                ),
-                HotkeyEntry(
+                ))
+                add(HotkeyEntry(
                     label = "Next tab",
                     chord = StandardHotkeys.NextTab.toChordLabel(),
-                ),
-            ),
+                ))
+                // Cmd/Ctrl+1..9 jump straight to a tab by position (9 =
+                // last). The behaviour is installed by the toolkit's app
+                // shell and is Electron-only (a real browser owns the
+                // chord), so the cheatsheet advertises it only on desktop.
+                if (isElectronClient) add(tabSwitchHotkeyEntry())
+            },
         ),
         HotkeyGroup(
             title = "Dialogs",
