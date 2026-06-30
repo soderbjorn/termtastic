@@ -362,6 +362,35 @@ fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
         try { term.focus() } catch (_: Throwable) {}
     })
 
+    // Make Shift+Enter insert a newline instead of submitting. By default
+    // xterm.js emits a carriage return (`\r`) for Enter *and* Shift+Enter, so
+    // a TUI running inside (Claude Code, REPLs, chat-style prompts) can't tell
+    // them apart and treats Shift+Enter as "send". We intercept the keydown
+    // and emit a line feed (`\n`, 0x0A) instead — byte-identical to Ctrl+J,
+    // which such apps map to "insert newline", while a plain shell still reads
+    // it as submit (no regression). We deliberately send a bare `\n` rather
+    // than the CSI-u sequence (`\x1b[13;2u`) that the kitty keyboard protocol
+    // would use: xterm.js doesn't negotiate that protocol, and Claude Code's
+    // CSI-u decoder is unreliable (it can echo the literal escape) — `\n` is
+    // the robust path (it's the same workaround Ghostty users apply via
+    // `shift+enter=text:\n`). Returning `false` suppresses xterm's own `\r`;
+    // `preventDefault` stops the hidden textarea from also inserting a newline
+    // that would be re-sent. Only plain Shift+Enter is remapped — Ctrl/Alt/Meta
+    // combinations fall through to xterm so existing bindings keep working.
+    try {
+        term.attachCustomKeyEventHandler { ev ->
+            if (ev.type == "keydown" && ev.key == "Enter" &&
+                ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey
+            ) {
+                ev.preventDefault()
+                entry.sendInput?.invoke("\n")
+                false
+            } else {
+                true
+            }
+        }
+    } catch (_: Throwable) {}
+
     val observer = ResizeObserver { _, _ ->
         try {
             val visible = entry.container.offsetParent != null

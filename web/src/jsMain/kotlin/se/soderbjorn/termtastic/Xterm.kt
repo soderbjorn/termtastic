@@ -14,6 +14,7 @@
 package se.soderbjorn.termtastic
 
 import org.w3c.dom.HTMLElement
+import org.w3c.dom.events.KeyboardEvent
 
 /**
  * Kotlin external declaration for xterm.js's Terminal class.
@@ -36,4 +37,17 @@ external class Terminal(options: dynamic = definedExternally) {
     fun focus()
     fun paste(data: String)
     fun dispose()
+
+    /**
+     * Registers a custom key event handler that runs *before* xterm.js's own
+     * key processing, letting the host veto or replace the default behaviour.
+     *
+     * Called by [ensureTerminal] in [LayoutBuilder] to remap Shift+Enter to a
+     * line feed (so TUIs read it as "insert newline" rather than "submit").
+     *
+     * @param handler invoked for each `keydown`/`keyup`/`keypress`; return
+     *   `true` to let xterm.js process the event normally, or `false` to
+     *   suppress xterm's handling (e.g. so it does not emit `\r` for Enter).
+     */
+    fun attachCustomKeyEventHandler(handler: (KeyboardEvent) -> Boolean)
 }
