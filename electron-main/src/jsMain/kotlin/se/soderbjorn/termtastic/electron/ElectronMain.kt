@@ -28,8 +28,18 @@ import kotlin.js.Promise
 /** Production server port — mirrors shared `Constants.SERVER_TLS_PORT`. */
 private const val PROD_PORT = 8443
 
-/** Global hotkey accelerator that summons the app from any context. */
+/**
+ * Global hotkey accelerator that toggles the app from any context
+ * (Quake/iTerm-style show-hide). @see toggleQuakeWindow
+ */
 private const val SUMMON_ACCELERATOR = "Control+Alt+Command+Space"
+
+/**
+ * Second global toggle accelerator — the conventional Quake/iTerm
+ * hotkey-window key. Being global, it shadows Ctrl+` in every other app
+ * while termtastic runs. @see toggleQuakeWindow
+ */
+private const val QUAKE_ACCELERATOR = "Control+`"
 
 private val URL_OVERRIDE: String? = (process.env.TERMTASTIC_URL as? String)?.takeIf { it.isNotEmpty() }
 // Server is HTTPS-only with a self-signed cert generated on first boot
@@ -610,6 +620,46 @@ private fun showSettings() {
     target.webContents.send("show-settings")
 }
 
+// ── New tab dispatch ─────────────────────────────────────────────────
+
+/**
+ * Opens a new tab in response to the "File → New Tab" menu item (⌘T).
+ * Mirrors [showSettings]: focus (and if needed reveal) the target window,
+ * then send the `new-tab` IPC the renderer listens for. The renderer
+ * dispatches [se.soderbjorn.termtastic.WindowCommand.AddTab] — the same
+ * command the "+" tab-strip button uses — so the shortcut and the button
+ * behave identically.
+ */
+private fun showNewTab() {
+    val focused = BrowserWindow.getFocusedWindow()
+    val mw = mainWindow
+    val target: BrowserWindow = focused
+        ?: (if (mw != null && !mw.isDestroyed()) mw else null)
+        ?: return
+    if (!target.isVisible()) target.show()
+    target.focus()
+    target.webContents.send("new-tab")
+}
+
+/**
+ * Opens a new terminal pane in the active tab in response to the
+ * "File → New Terminal" menu item (⌘D). Mirrors [showNewTab]: focus (and
+ * if needed reveal) the target window, then send the `new-terminal` IPC
+ * the renderer listens for. The renderer resolves the active tab + cwd and
+ * dispatches [se.soderbjorn.termtastic.WindowCommand.AddPaneToTab] — the
+ * same command the pane bar's "+" → Terminal action uses.
+ */
+private fun showNewTerminal() {
+    val focused = BrowserWindow.getFocusedWindow()
+    val mw = mainWindow
+    val target: BrowserWindow = focused
+        ?: (if (mw != null && !mw.isDestroyed()) mw else null)
+        ?: return
+    if (!target.isVisible()) target.show()
+    target.focus()
+    target.webContents.send("new-terminal")
+}
+
 // ── Application menu ─────────────────────────────────────────────────
 
 private fun buildAppMenu() {
@@ -654,6 +704,25 @@ private fun buildAppMenu() {
         appMenu.submenu = appSubmenu
         template.add(appMenu)
     }
+
+    // File menu → "New Tab" (⌘T / Ctrl+T). Opens a new, focused tab via the
+    // `new-tab` IPC; sits in the conventional File-menu slot (after the app
+    // menu on macOS, first otherwise) so the shortcut is discoverable in the
+    // menu bar — not just a hidden chord.
+    val newTabItem: dynamic = js("({})")
+    newTabItem.label = "New Tab"
+    newTabItem.accelerator = "CommandOrControl+T"
+    newTabItem.click = { showNewTab() }
+    // "New Terminal" (⌘D) adds a terminal pane to the active tab — the pane
+    // equivalent of "New Tab". Sits directly below it in the File menu.
+    val newTerminalItem: dynamic = js("({})")
+    newTerminalItem.label = "New Terminal"
+    newTerminalItem.accelerator = "CommandOrControl+D"
+    newTerminalItem.click = { showNewTerminal() }
+    val fileMenu: dynamic = js("({})")
+    fileMenu.label = "File"
+    fileMenu.submenu = arrayOf<dynamic>(newTabItem, newTerminalItem)
+    template.add(fileMenu)
 
     template.add(js("({label:'Edit', submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]})"))
     template.add(js("({label:'View', submenu:[{role:'reload'},{role:'forceReload'},{role:'toggleDevTools'},{type:'separator'},{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{type:'separator'},{role:'togglefullscreen'}]})"))
@@ -823,6 +892,27 @@ private fun showAndFocus() {
     }
 }
 
+/**
+ * Quake / iTerm-style show-hide toggle for the main window, wired to both
+ * global hotkeys ([SUMMON_ACCELERATOR] and [QUAKE_ACCELERATOR]). When the
+ * window is already frontmost (visible, focused, and not minimized) it
+ * hides; otherwise it is restored/shown/focused via [showAndFocus]. A
+ * destroyed (or never-created) window is recreated.
+ *
+ * @see registerGlobalShortcut
+ */
+private fun toggleQuakeWindow() {
+    val w = mainWindow
+    if (w == null || w.isDestroyed()) {
+        createWindow(); return
+    }
+    if (w.isVisible() && w.isFocused() && !w.isMinimized()) {
+        w.hide()
+    } else {
+        showAndFocus()
+    }
+}
+
 private fun showUnreachable(errorDescription: String, hint: String?) {
     val hintHtml = hint?.let { "<p>$it</p>" }
         ?: "<p>Start the server with:</p><p><code>./gradlew :server:run</code></p>"
@@ -910,9 +1000,17 @@ private fun ensureServerThenCreateWindow(): Promise<Unit> = Promise { resolve, _
 }
 
 private fun registerGlobalShortcut() {
-    val ok = globalShortcut.register(SUMMON_ACCELERATOR) { showAndFocus() }
+    // Both global hotkeys toggle the window (Quake-style): the original
+    // summon chord and the conventional Ctrl+` hotkey-window key. Each is
+    // registered independently so one failing (e.g. another app already
+    // grabbed it) doesn't block the other.
+    val ok = globalShortcut.register(SUMMON_ACCELERATOR) { toggleQuakeWindow() }
     if (!ok) {
         console.warn("Failed to register global shortcut: $SUMMON_ACCELERATOR")
+    }
+    val quakeOk = globalShortcut.register(QUAKE_ACCELERATOR) { toggleQuakeWindow() }
+    if (!quakeOk) {
+        console.warn("Failed to register global shortcut: $QUAKE_ACCELERATOR")
     }
 }
 
