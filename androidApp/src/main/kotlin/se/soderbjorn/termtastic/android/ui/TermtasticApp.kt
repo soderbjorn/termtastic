@@ -45,10 +45,14 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.MaterialTheme
 import se.soderbjorn.termtastic.android.data.AppLocalRepository
 import se.soderbjorn.termtastic.android.net.ConnectionHolder
-import se.soderbjorn.termtastic.client.TermtasticThemeConfig
-import se.soderbjorn.termtastic.client.fetchThemeConfig
+import se.soderbjorn.termtastic.android.TermtasticDarkColorScheme
+import se.soderbjorn.termtastic.android.TermtasticLightColorScheme
+import se.soderbjorn.termtastic.client.viewmodel.ThemeBackingViewModel
+import se.soderbjorn.darkness.core.Appearance
+import se.soderbjorn.darkness.core.ThemeSnapshotV2
 
 /**
  * Top-level navigation host for the Termtastic Android app.
@@ -99,26 +103,46 @@ fun TermtasticApp(applicationContext: Context) {
 
     val navController = rememberNavController()
 
-    // The server's dual-slot theme choice (light theme + dark theme). Fetched
-    // once per connection; the active slot is resolved reactively below so a
+    // The editable canonical theme selection (dual-slot + appearance). Created
+    // once per connection; seeded from the server and then *owned* locally so
+    // the in-app appearance/theme picker can mutate it and the whole app
+    // repaints immediately. The active slot is resolved reactively below so a
     // device light/dark toggle switches *slots*, not just the current scheme's
     // light/dark variant.
-    var themeConfig by remember { mutableStateOf<TermtasticThemeConfig?>(null) }
-    // Incremented on each successful connection to trigger a theme fetch.
+    var themeVm by remember { mutableStateOf<ThemeBackingViewModel?>(null) }
+    var themeSnapshot by remember { mutableStateOf<ThemeSnapshotV2?>(null) }
+    // Incremented on each successful connection to trigger a theme (re)load.
     var connectionGeneration by remember { mutableStateOf(0) }
 
     LaunchedEffect(connectionGeneration) {
         if (connectionGeneration > 0) {
-            themeConfig = ConnectionHolder.client()?.fetchThemeConfig()
+            val vm = ConnectionHolder.client()?.let { ThemeBackingViewModel(it) }
+            themeVm = vm
+            vm?.load()
+            // Collect for the lifetime of this connection so picker edits
+            // (setAppearance / setActiveSlotTheme) repaint the app live.
+            vm?.snapshot?.collect { themeSnapshot = it }
         }
     }
 
     // Resolve the active slot for the current system appearance. Re-runs when
-    // either the fetched config or the system dark-mode flag changes, so the
-    // provided ResolvedTheme always reflects the correct light/dark theme slot.
+    // either the snapshot or the system dark-mode flag changes, so the provided
+    // ResolvedTheme always reflects the correct light/dark theme slot.
     val systemIsDark = isSystemInDarkTheme()
-    val theme = remember(themeConfig, systemIsDark) {
-        themeConfig?.resolve(systemIsDark)
+    val theme = remember(themeSnapshot, systemIsDark) {
+        themeSnapshot?.resolve(systemIsDark)
+    }
+
+    // Drive the Material colour scheme from the *chosen* appearance (resolved
+    // against the system flag), not the raw OS setting, so the Material chrome
+    // (bottom sheets, dialogs, chips) flips light/dark together with the themed
+    // surfaces. Without this the app looks half-switched when the user forces an
+    // appearance that differs from the device's. Falls back to the OS flag until
+    // the snapshot has loaded.
+    val effectiveDark = when (themeSnapshot?.appearance) {
+        Appearance.Dark -> true
+        Appearance.Light -> false
+        Appearance.Auto, null -> systemIsDark
     }
 
     // Re-validate the `/window` connection every time the app returns to
@@ -139,7 +163,10 @@ fun TermtasticApp(applicationContext: Context) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    CompositionLocalProvider(LocalUiSettings provides theme) {
+    MaterialTheme(
+        colorScheme = if (effectiveDark) TermtasticDarkColorScheme else TermtasticLightColorScheme,
+    ) {
+      CompositionLocalProvider(LocalUiSettings provides theme) {
         NavHost(
             navController = navController,
             startDestination = "hosts",
@@ -180,6 +207,7 @@ fun TermtasticApp(applicationContext: Context) {
             }
             composable("tree") {
                 TreeScreen(
+                    themeVm = themeVm,
                     onOpenTerminal = { sessionId ->
                         navController.navigate("terminal/$sessionId")
                     },
@@ -190,7 +218,8 @@ fun TermtasticApp(applicationContext: Context) {
                         navController.navigate("git/${Uri.encode(paneId)}")
                     },
                     onDisconnect = {
-                        themeConfig = null
+                        themeVm = null
+                        themeSnapshot = null
                         navController.popBackStack("hosts", inclusive = false)
                     },
                     onOpenNews = { navController.navigate("news") },
@@ -291,5 +320,6 @@ fun TermtasticApp(applicationContext: Context) {
                 )
             }
         }
+      }
     }
 }

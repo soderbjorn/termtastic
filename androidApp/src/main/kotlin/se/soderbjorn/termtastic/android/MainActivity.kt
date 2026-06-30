@@ -28,7 +28,7 @@ import se.soderbjorn.termtastic.android.ui.TermtasticApp
 import se.soderbjorn.termtastic.client.storage.LocalStoreContext
 
 /** Dark Material 3 colour scheme using amber as the primary accent and green as secondary. */
-private val TermtasticDarkColorScheme = darkColorScheme(
+internal val TermtasticDarkColorScheme = darkColorScheme(
     primary = Color(0xFFF4B869),        // Amber accent
     onPrimary = Color(0xFF1C1C1E),
     primaryContainer = Color(0xFF5A4A2A),
@@ -48,7 +48,7 @@ private val TermtasticDarkColorScheme = darkColorScheme(
 )
 
 /** Light Material 3 colour scheme, mirroring the dark variant with adjusted contrast. */
-private val TermtasticLightColorScheme = lightColorScheme(
+internal val TermtasticLightColorScheme = lightColorScheme(
     primary = Color(0xFFD4943D),        // Darker amber for light
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFFFF0D6),

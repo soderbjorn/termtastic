@@ -59,6 +59,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -106,6 +107,7 @@ import se.soderbjorn.termtastic.client.renameTab
 import se.soderbjorn.termtastic.client.viewmodel.HttpSettingsPersister
 import se.soderbjorn.termtastic.client.viewmodel.OverviewBackingViewModel
 import se.soderbjorn.termtastic.client.viewmodel.SessionsViewModeStore
+import se.soderbjorn.termtastic.client.viewmodel.ThemeBackingViewModel
 import se.soderbjorn.darkness.web.layout.LayoutPreset
 
 // Palette tokens live in SidebarPalette.kt — shared with MarkdownListScreen.
@@ -333,6 +335,9 @@ private fun addLeaf(
  * The back/disconnect button tears down the connection via [ConnectionHolder]
  * and returns to [HostsScreen].
  *
+ * @param themeVm the shared appearance/theme view-model (null until a
+ *   connection exists); drives the toolbar's appearance/theme picker. Edits made
+ *   through it write the canonical server selection and repaint the app live.
  * @param onOpenTerminal callback invoked with a session ID to open a terminal.
  * @param onOpenFileBrowser callback invoked with a pane ID to open the file browser.
  * @param onOpenGit callback invoked with a pane ID to open the git view.
@@ -342,10 +347,12 @@ private fun addLeaf(
  * @see TerminalScreen
  * @see FileBrowserListScreen
  * @see GitListScreen
+ * @see AppearanceSheet
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TreeScreen(
+    themeVm: ThemeBackingViewModel?,
     onOpenTerminal: (sessionId: String) -> Unit,
     onOpenFileBrowser: (paneId: String) -> Unit,
     onOpenGit: (paneId: String) -> Unit,
@@ -406,6 +413,7 @@ fun TreeScreen(
     // Overview toolbar UI state.
     var showNewWindowMenu by remember { mutableStateOf(false) }
     var showLayoutSheet by remember { mutableStateOf(false) }
+    var showAppearanceSheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Shared news/update checker — drives the toolbar bell's visibility (shown
@@ -526,6 +534,13 @@ fun TreeScreen(
         )
     }
 
+    if (showAppearanceSheet && themeVm != null) {
+        AppearanceSheet(
+            vm = themeVm,
+            onDismiss = { showAppearanceSheet = false },
+        )
+    }
+
     Scaffold(
         containerColor = SidebarBackground,
         topBar = {
@@ -630,6 +645,20 @@ fun TreeScreen(
                                 Icons.AutoMirrored.Filled.ViewList,
                                 contentDescription = "Switch to list",
                                 tint = SidebarAccent,
+                            )
+                        }
+                    }
+                    // Appearance + theme picker (parity with the Mac/Electron
+                    // app's appearance toggle + theme manager). Available in both
+                    // list and overview modes; disabled until the theme model is
+                    // ready. Writes the same canonical server selection the
+                    // desktop does, so the choice syncs across every client.
+                    if (themeVm != null) {
+                        IconButton(onClick = { showAppearanceSheet = true }) {
+                            Icon(
+                                Icons.Outlined.Palette,
+                                contentDescription = "Appearance & theme",
+                                tint = SidebarTextPrimary,
                             )
                         }
                     }

@@ -18,9 +18,17 @@ import Client
 enum Palette {
     /// The user's dual-slot theme config (light theme + dark theme) fetched
     /// from the server after connection. Set by `HostsViewModel` before
-    /// navigating to the tree. All colour accessors resolve the active slot
-    /// from this for the current system appearance.
-    static var config: Client.TermtasticThemeConfig?
+    /// navigating to the tree, and updated live by the appearance picker. All
+    /// colour accessors resolve the active slot from this for the current system
+    /// appearance.
+    ///
+    /// Backed by ``ThemeStore`` so an in-app theme/appearance change re-points
+    /// every accessor *and* bumps the store's repaint generation. The setter is
+    /// kept for `HostsViewModel`'s connect-time fetch.
+    static var config: Client.TermtasticThemeConfig? {
+        get { ThemeStore.shared.config }
+        set { ThemeStore.shared.apply(newValue) }
+    }
 
     /// Resolve the active flat ``ResolvedTheme`` (correct light/dark slot) for
     /// the given system appearance, falling back to the app defaults when no

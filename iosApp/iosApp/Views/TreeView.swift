@@ -74,6 +74,17 @@ struct TreeView: View {
     /// Whether the layout-preset sheet is presented (overview mode only).
     @State private var showLayoutSheet = false
 
+    /// The appearance + theme picker model, hoisted so the toolbar button and
+    /// the sheet share one instance across presentations.
+    @State private var appearanceViewModel = AppearanceViewModel()
+
+    /// Whether the appearance + theme picker sheet is presented.
+    @State private var showAppearanceSheet = false
+
+    /// The shared theme store; its `generation` is read below to repaint the
+    /// content when an in-app theme/appearance change lands.
+    @State private var themeStore = ThemeStore.shared
+
     var body: some View {
         screenContent
             .navigationTitle("Sessions")
@@ -112,6 +123,9 @@ struct TreeView: View {
                         overviewViewModel.applyLayout(tabId: tabId, presetKey: key)
                     }
                 )
+            }
+            .sheet(isPresented: $showAppearanceSheet) {
+                AppearanceSheet(viewModel: appearanceViewModel)
             }
     }
 
@@ -209,6 +223,20 @@ struct TreeView: View {
             .accessibilityLabel(viewMode == .list ? "Switch to overview" : "Switch to list")
         }
         ToolbarItem(placement: .topBarTrailing) {
+            // Appearance + theme picker (parity with the Mac/Electron app's
+            // appearance toggle + theme manager). Available in both list and
+            // overview modes; writes the same canonical server selection the
+            // desktop does, so the choice syncs across every client. Mirrors the
+            // Android `TreeScreen` appearance button.
+            Button {
+                showAppearanceSheet = true
+            } label: {
+                Image(systemName: "paintpalette")
+                    .foregroundStyle(Palette.textPrimary)
+            }
+            .accessibilityLabel("Appearance & theme")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
             NewsBellButton(action: onOpenNews)
         }
     }
@@ -221,17 +249,25 @@ struct TreeView: View {
     /// existing full-screen route.
     @ViewBuilder
     private var screenContent: some View {
-        switch viewMode {
-        case .overview:
-            OverviewView(
-                viewModel: overviewViewModel,
-                onOpenTerminal: onOpenTerminal,
-                onOpenFileBrowser: onOpenFileBrowser,
-                onOpenGit: onOpenGit
-            )
-        case .list:
-            content
+        Group {
+            switch viewMode {
+            case .overview:
+                OverviewView(
+                    viewModel: overviewViewModel,
+                    onOpenTerminal: onOpenTerminal,
+                    onOpenFileBrowser: onOpenFileBrowser,
+                    onOpenGit: onOpenGit
+                )
+            case .list:
+                content
+            }
         }
+        // Rebuild the content subtree when an in-app theme/appearance change
+        // lands so every `Palette` read re-resolves against the new palette —
+        // the system trait does not change, so the dynamic colours would
+        // otherwise stay frozen. The navigation chrome and presented sheets sit
+        // above this Group, so they are unaffected.
+        .id(themeStore.generation)
     }
 
     /// The tree list (or the connecting placeholder) on the themed background.
