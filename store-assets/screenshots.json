@@ -1,0 +1,59 @@
+{
+  "brand": {
+    "eyebrow": "// terminal · reimagined",
+    "url": "https://termtastic.soderbjorn.se",
+    "footerNote": "Requires the Termtastic app for Mac"
+  },
+  "screenshots": [
+    {
+      "id": "hero",
+      "tagline": "Your Mac terminal,\nin your pocket.",
+      "subtagline": "Organise terminal sessions in windows and tabs —\nmirror them live on your phone",
+      "mac": "sources/mac/01-sessions-mac.png",
+      "android": "sources/android/01-sessions.png",
+      "ios": "sources/ios/01-sessions.png"
+    },
+    {
+      "id": "welcome",
+      "tagline": "Your terminal,\neverywhere.",
+      "subtagline": "Securely connect to your Mac and pick up your work from any device.",
+      "android": "sources/android/02-1.png",
+      "ios": "sources/ios/02-1.png"
+    },
+    {
+      "id": "sessions",
+      "tagline": "Every session,\none tap away.",
+      "subtagline": "Windows, tabs and services — organised and always in sync.",
+      "android": "sources/android/03-2.png",
+      "ios": "sources/ios/03-2.png"
+    },
+    {
+      "id": "agents",
+      "tagline": "Watch your\nAI agents work.",
+      "subtagline": "See Claude Code read, write and test — live from your pocket.",
+      "android": "sources/android/04-3.png",
+      "ios": "sources/ios/04-3.png"
+    },
+    {
+      "id": "files",
+      "tagline": "Browse your\nproject files.",
+      "subtagline": "Navigate the whole working tree without leaving the terminal.",
+      "android": "sources/android/05-4.png",
+      "ios": "sources/ios/05-4.png"
+    },
+    {
+      "id": "docs",
+      "tagline": "Docs, beautifully\nrendered.",
+      "subtagline": "Markdown files render cleanly, right on your phone.",
+      "android": "sources/android/06-5.png",
+      "ios": "sources/ios/06-5.png"
+    },
+    {
+      "id": "code",
+      "tagline": "Syntax-highlighted\ncode & diffs.",
+      "subtagline": "Review source and changes with full highlighting on any device.",
+      "android": "sources/android/07-6.png",
+      "ios": "sources/ios/07-6.png"
+    }
+  ]
+}
