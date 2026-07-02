@@ -15,7 +15,7 @@ Each JSON entry supplies:
                             When absent, the phone frame fills most of the canvas.
 
 Output:
-  out/app-store/<NN>-<id>.jpg   1320 x 2868  (iPhone 6.9")
+  out/app-store/<NN>-<id>.jpg   1284 x 2778  (iPhone 6.5")
   out/google-play/<NN>-<id>.jpg 2880 x 3840  (3:4, ratio <= 2:1)
 
 Both are flattened RGB JPEGs (no alpha), sized/weighted within each store's limits.
@@ -47,7 +47,7 @@ MONO_CANDIDATES = [
 STORES = [
     # name,          target_w, target_h, phone_kind, shot_key, supersample
     ("google-play", 2880, 3840, "pixel", "android", 1),
-    ("app-store",   1320, 2868, "iphone", "ios",    2),
+    ("app-store",   1284, 2778, "iphone", "ios",    2),
 ]
 
 
