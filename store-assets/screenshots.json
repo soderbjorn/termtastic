@@ -9,51 +9,51 @@
       "id": "hero",
       "tagline": "Your Mac terminal,\nin your pocket.",
       "subtagline": "Organise terminal sessions in windows and tabs —\nmirror them live on your phone",
-      "mac": "sources/mac/01-sessions-mac.png",
-      "android": "sources/android/01-sessions.png",
-      "ios": "sources/ios/01-sessions.png"
-    },
-    {
-      "id": "welcome",
-      "tagline": "Your terminal,\neverywhere.",
-      "subtagline": "Securely connect to your Mac and pick up your work from any device.",
-      "android": "sources/android/02-1.png",
-      "ios": "sources/ios/02-1.png"
+      "mac": "sources/mac/sessions-mac.png",
+      "android": "sources/android/sessions-graphical.png",
+      "ios": "sources/ios/sessions-graphical.png"
     },
     {
       "id": "sessions",
       "tagline": "Every session,\none tap away.",
-      "subtagline": "Windows, tabs and services — organised and always in sync.",
-      "android": "sources/android/03-2.png",
-      "ios": "sources/ios/03-2.png"
+      "subtagline": "Windows and tabs — organised and always in sync.",
+      "android": "sources/android/sessions-graphical.png",
+      "ios": "sources/ios/sessions-graphical.png"
+    },
+    {
+      "id": "terminal",
+      "tagline": "Full terminal emulation.",
+      "subtagline": "Right from your Mac, formatted to fit your phone's screen.",
+      "android": "sources/android/terminal.png",
+      "ios": "sources/ios/terminal.png"
     },
     {
       "id": "agents",
       "tagline": "Watch your\nAI agents work.",
-      "subtagline": "See Claude Code read, write and test — live from your pocket.",
-      "android": "sources/android/04-3.png",
-      "ios": "sources/ios/04-3.png"
+      "subtagline": "Keep track of which agents are working and which are waiting for input.",
+      "android": "sources/android/sessions-list.png",
+      "ios": "sources/ios/sessions-list.png"
     },
     {
       "id": "files",
       "tagline": "Browse your\nproject files.",
       "subtagline": "Navigate the whole working tree without leaving the terminal.",
-      "android": "sources/android/05-4.png",
-      "ios": "sources/ios/05-4.png"
+      "android": "sources/android/files-list.png",
+      "ios": "sources/ios/files-list.png"
     },
     {
       "id": "docs",
       "tagline": "Docs, beautifully\nrendered.",
       "subtagline": "Markdown files render cleanly, right on your phone.",
-      "android": "sources/android/06-5.png",
-      "ios": "sources/ios/06-5.png"
+      "android": "sources/android/files-content.png",
+      "ios": "sources/ios/files-content.png"
     },
     {
       "id": "code",
       "tagline": "Syntax-highlighted\ncode & diffs.",
-      "subtagline": "Review source and changes with full highlighting on any device.",
-      "android": "sources/android/07-6.png",
-      "ios": "sources/ios/07-6.png"
+      "subtagline": "Review git diffs with full highlighting, wherever you are.",
+      "android": "sources/android/diff.png",
+      "ios": "sources/ios/diff.png"
     }
   ]
 }
