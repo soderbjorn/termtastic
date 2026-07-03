@@ -53,8 +53,21 @@ struct AppearanceSheet: View {
     /// appearance is Auto, and which colour scheme the nav bar needs.
     @Environment(\.colorScheme) private var colorScheme
 
-    private let columns = [GridItem(.flexible(), spacing: 12),
-                           GridItem(.flexible(), spacing: 12)]
+    /// The theme grid's columns, chosen by the *presenting* device (issue #99).
+    ///
+    /// On a roomy iPad canvas (`presentingSizeClass == .regular`) the sheet is
+    /// promoted to a large page-sized presentation, so a fixed 2-up layout would
+    /// blow each thumbnail up to half the width and waste the space — the owner's
+    /// "this wastes a lot of space, we could fit many more themes by making the
+    /// thumbnails smaller" feedback. An `.adaptive` layout with a compact minimum
+    /// therefore packs as many smaller cards per row as the width allows (roughly
+    /// 6–9 across a landscape iPad), while iPhone keeps its familiar 2-up grid.
+    private var columns: [GridItem] {
+        presentingSizeClass == .regular
+            ? [GridItem(.adaptive(minimum: 132), spacing: 12)]
+            : [GridItem(.flexible(), spacing: 12),
+               GridItem(.flexible(), spacing: 12)]
+    }
 
     /// Guards the one-time "scroll to the active theme when the sheet opens"
     /// behaviour (issue #105). The theme catalog is populated asynchronously by

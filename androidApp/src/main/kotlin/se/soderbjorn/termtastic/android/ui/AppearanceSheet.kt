@@ -67,6 +67,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -102,6 +103,18 @@ fun AppearanceSheet(
     val snapshot by vm.snapshot.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // On a tablet / large-screen device (≥ 600 dp wide, Android's standard
+    // "expanded" breakpoint) a fixed 2-up grid capped at 560 dp would blow each
+    // thumbnail up to half the width and waste most of the sheet — the owner's
+    // "this wastes a lot of space, we could fit many more themes by making the
+    // thumbnails smaller" feedback on issue #99. On wide screens the grid instead
+    // switches to an adaptive layout that packs as many compact cards per row as
+    // the width allows, and is given more vertical room so more rows are visible
+    // at once; phones keep the familiar 2-up grid.
+    val isWideScreen = LocalConfiguration.current.screenWidthDp >= 600
+    val gridColumns = if (isWideScreen) GridCells.Adaptive(minSize = 132.dp) else GridCells.Fixed(2)
+    val gridMaxHeight = if (isWideScreen) 900.dp else 560.dp
 
     // Single ordered list (issue #107): starred dark → starred light → unstarred
     // dark → unstarred light. `orderThemesForPicker` and the favorites set both
@@ -146,10 +159,10 @@ fun AppearanceSheet(
     ) {
         LazyVerticalGrid(
             state = gridState,
-            columns = GridCells.Fixed(2),
+            columns = gridColumns,
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 560.dp)
+                .heightIn(max = gridMaxHeight)
                 .padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
