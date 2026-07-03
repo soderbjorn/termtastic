@@ -38,7 +38,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.Volatile
-import kotlin.time.TimeSource
+import kotlinx.datetime.Clock
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import se.soderbjorn.termtastic.PtyControl
@@ -72,12 +72,19 @@ class RealPtySocket internal constructor(
     @Volatile private var closed = false
 
     /**
-     * When output was last received (or the connection last completed its
-     * handshake). Drives [reconnectIfStale]; unlike `/window` there is no
-     * periodic server push here, so an idle shell looks "quiet" — callers
-     * use a small threshold meaning "refresh unless actively streaming".
+     * Wall-clock epoch-millis when output was last received (or the
+     * connection last completed its handshake). Drives [reconnectIfStale];
+     * unlike `/window` there is no periodic server push here, so an idle
+     * shell looks "quiet" — callers use a small threshold meaning "refresh
+     * unless actively streaming".
+     *
+     * Uses the wall clock ([Clock.System]) rather than a monotonic source on
+     * purpose: monotonic clocks pause while the device is suspended, so a PTY
+     * socket the OS killed during a long background would look freshly-quiet
+     * on resume and [reconnectIfStale] would skip the reconnect that repaints
+     * the terminal. See the matching note in RealWindowSocket.
      */
-    @Volatile private var lastTrafficMark = TimeSource.Monotonic.markNow()
+    @Volatile private var lastTrafficAtMillis = Clock.System.now().toEpochMilliseconds()
 
     /** Signalled by [reconnectIfStale] to cut a reconnect backoff short. */
     private val retrySignal = Channel<Unit>(Channel.CONFLATED)
@@ -117,7 +124,7 @@ class RealPtySocket internal constructor(
                         client.wsUrlWithAuth("/pty/$sessionId")
                     )
                     _activeSession.value = session
-                    lastTrafficMark = TimeSource.Monotonic.markNow()
+                    lastTrafficAtMillis = Clock.System.now().toEpochMilliseconds()
                     attempt = 0
                     if (everConnected) {
                         // The server is about to replay the whole ring
@@ -126,7 +133,7 @@ class RealPtySocket internal constructor(
                     }
                     everConnected = true
                     session.incoming.consumeEach { frame ->
-                        lastTrafficMark = TimeSource.Monotonic.markNow()
+                        lastTrafficAtMillis = Clock.System.now().toEpochMilliseconds()
                         when (frame) {
                             is Frame.Binary -> _output.emit(frame.readBytes())
                             is Frame.Text -> runCatching {
@@ -193,8 +200,11 @@ class RealPtySocket internal constructor(
 
     override fun reconnectIfStale(maxQuietMillis: Long) {
         if (closed) return
-        val quietMs = lastTrafficMark.elapsedNow().inWholeMilliseconds
-        if (_activeSession.value != null && quietMs < maxQuietMillis) return
+        val quietMs = Clock.System.now().toEpochMilliseconds() - lastTrafficAtMillis
+        // Leave an actively-streaming socket alone; a backward wall-clock step
+        // (negative quiet) falls outside the range and is treated as stale so
+        // we err toward a reconnect rather than a missed one.
+        if (_activeSession.value != null && quietMs in 0 until maxQuietMillis) return
         println("PtySocket($sessionId): reconnectIfStale — quiet for ${quietMs}ms, kicking connection")
         retrySignal.trySend(Unit)
         client.scope.launch {

@@ -45,7 +45,19 @@ import io.ktor.client.plugins.websocket.WebSockets
  * @param config the platform's [HttpClientConfig] builder; mutated in place.
  */
 fun applyCommonClientConfig(config: HttpClientConfig<*>) {
-    config.install(WebSockets)
+    config.install(WebSockets) {
+        // Keepalive ping. A mobile OS silently kills the underlying TCP
+        // connection while the app is backgrounded or the device sleeps —
+        // no close frame, no error; the WebSocket read loop simply hangs and
+        // the tree/state/terminal UIs stop updating (see
+        // RealWindowSocket / RealPtySocket). Periodic pings make Ktor probe
+        // the connection: a dead socket fails to round-trip a ping/pong, the
+        // session closes, and the socket's reconnect loop takes over —
+        // re-pulling the server's current state. This is the
+        // lifecycle-independent backstop behind the app-resume
+        // `reconnectIfStale()` path (which only handles the moment of resume).
+        pingIntervalMillis = 15_000
+    }
     config.install(HttpTimeout) {
         // Without this, an unreachable host (device on a different subnet,
         // Wi-Fi client isolation, wrong port) makes the WebSocket handshake

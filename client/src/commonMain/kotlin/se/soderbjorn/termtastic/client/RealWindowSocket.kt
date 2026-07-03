@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.Volatile
-import kotlin.time.TimeSource
+import kotlinx.datetime.Clock
 import kotlinx.serialization.encodeToString
 import se.soderbjorn.termtastic.WindowCommand
 import se.soderbjorn.termtastic.WindowConfig
@@ -98,12 +98,21 @@ class RealWindowSocket internal constructor(
     @Volatile private var closed = false
 
     /**
-     * When the last frame was received (or the connection last completed
-     * its handshake). Drives [reconnectIfStale]'s zombie detection — the
-     * server pushes a session-state envelope every ~3 s, so a healthy
-     * `/window` channel is never quiet for long.
+     * Wall-clock epoch-millis when the last frame was received (or the
+     * connection last completed its handshake). Drives [reconnectIfStale]'s
+     * zombie detection — the server pushes a session-state envelope every
+     * ~3 s, so a healthy `/window` channel is never quiet for long.
+     *
+     * This deliberately uses the wall clock ([Clock.System]) rather than a
+     * monotonic time source: monotonic clocks (`mach_absolute_time` on iOS,
+     * `CLOCK_MONOTONIC` on Android) pause while the device is suspended, so a
+     * socket the OS killed during a long background would look freshly-quiet
+     * on resume and [reconnectIfStale] would wrongly skip the reconnect. The
+     * wall clock counts suspended time, so the quiet window reflects real
+     * elapsed time. A rare NTP step is harmless here — the worst case is one
+     * unnecessary (or briefly deferred) reconnect.
      */
-    @Volatile private var lastTrafficMark = TimeSource.Monotonic.markNow()
+    @Volatile private var lastTrafficAtMillis = Clock.System.now().toEpochMilliseconds()
 
     /**
      * Signalled by [reconnectIfStale] to cut any reconnect backoff short so
@@ -135,11 +144,11 @@ class RealWindowSocket internal constructor(
                     println("WindowSocket: handshake complete for $url")
                     _activeSession.value = session
                     _connected.value = true
-                    lastTrafficMark = TimeSource.Monotonic.markNow()
+                    lastTrafficAtMillis = Clock.System.now().toEpochMilliseconds()
                     if (!sessionReady.isCompleted) sessionReady.complete(session)
                     attempt = 0 // reset backoff on successful connection
                     session.incoming.consumeEach { frame ->
-                        lastTrafficMark = TimeSource.Monotonic.markNow()
+                        lastTrafficAtMillis = Clock.System.now().toEpochMilliseconds()
                         if (frame !is Frame.Text) return@consumeEach
                         val envelope = runCatching {
                             client.json.decodeFromString<WindowEnvelope>(frame.readText())
@@ -205,8 +214,13 @@ class RealWindowSocket internal constructor(
 
     override fun reconnectIfStale(maxQuietMillis: Long) {
         if (closed) return
-        val quietMs = lastTrafficMark.elapsedNow().inWholeMilliseconds
-        if (_connected.value && quietMs < maxQuietMillis) return
+        val quietMs = Clock.System.now().toEpochMilliseconds() - lastTrafficAtMillis
+        // A healthy socket that has had traffic within the window is left
+        // alone (quick app switches are free). `quietMs !in 0..<maxQuietMillis`
+        // also covers a backward wall-clock step (negative quiet) by treating
+        // it as stale — the safe direction is an extra reconnect, not a
+        // skipped one.
+        if (_connected.value && quietMs in 0 until maxQuietMillis) return
         println("WindowSocket: reconnectIfStale — quiet for ${quietMs}ms, kicking connection")
         // Skip any backoff in progress, then kill the current session (a
         // zombie socket never errors on its own — cancel() works even when
