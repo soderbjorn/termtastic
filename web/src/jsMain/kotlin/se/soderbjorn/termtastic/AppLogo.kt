@@ -91,13 +91,14 @@ internal fun applyLogoDotState(dot: HTMLElement, sessionStates: Map<String, Stri
     dot.classList.remove("state-working")
     dot.classList.remove("state-waiting")
     when {
-        // Phase-lock the pulse to the shared global clock (see [phaseLockPulse])
-        // so a rebuilt logo element — the sidebar header is re-created on every
-        // config push — resumes the breathe at the current phase instead of
-        // snapping to full opacity.
-        anyWaiting -> { dot.classList.add("state-waiting"); phaseLockPulse(dot) }
-        anyWorking -> { dot.classList.add("state-working"); phaseLockPulse(dot) }
-        // Idle → no modifier class; the base .app-logo-dot rule paints a
-        // solid, non-pulsing dot in the theme foreground colour.
+        // Breathe via the shared JS pulse driver (see [startPulse]) rather than
+        // a CSS animation, so a rebuilt logo element picks up the current global
+        // opacity instead of snapping to full brightness.
+        anyWaiting -> { dot.classList.add("state-waiting"); startPulse(dot) }
+        anyWorking -> { dot.classList.add("state-working"); startPulse(dot) }
+        // Idle → no modifier class; drop the JS-driven opacity so the base
+        // .app-logo-dot rule paints a solid, fully-opaque dot in the theme
+        // foreground colour.
+        else -> { dot.style.opacity = "" }
     }
 }

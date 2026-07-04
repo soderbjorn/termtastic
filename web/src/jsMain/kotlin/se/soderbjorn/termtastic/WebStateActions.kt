@@ -469,68 +469,134 @@ private fun checkStateNotifications(sessionStates: Map<String, String?>) {
 }
 
 /**
- * Shared pulse period, in milliseconds, for every status indicator. MUST match
- * the `fade-warning` animation duration in styles.css (`2.5s`) that
- * `.tt-status-dot.state-working` / `.state-waiting` and `.app-logo-dot` all use.
- * Used by [phaseLockPulse] to compute the negative `animation-delay` that keeps
- * all indicators breathing in lockstep against one global clock.
+ * Shared breathing period, in milliseconds, for every status indicator.
  */
 private const val STATUS_PULSE_PERIOD_MS = 2500.0
 
 /**
- * Phase-locks a status indicator's breathing pulse to a shared wall clock by
- * setting a negative inline `animation-delay`.
- *
- * Why this exists: the toolkit rebuilds the chrome (sidebar rows, tab strip,
- * pane headers, sidebar logo) on every `WindowConfig` push, and each rebuild
- * creates a *fresh* `.tt-status-dot` / `.app-logo-dot` element via the badge
- * factories. A brand-new element starts its `fade-warning` CSS animation at the
- * `0% { opacity: 1 }` keyframe, snapping the dot to full opacity. Config pushes
- * became frequent once the opt-in program-title feature (commit c6012d6) began
- * rebroadcasting the window config on each program title change — Claude Code
- * rewrites its terminal title with a live task summary while working, so a
- * working pane re-pushes config roughly every debounce interval (~750 ms). The
- * result was every status icon "blipping" from faded back to full opacity on
- * each push instead of pulsing smoothly.
- *
- * The fix: because all indicators share one [STATUS_PULSE_PERIOD_MS] period,
- * anchoring each element's animation to `-(now % period)` places every element
- * — freshly created or long-lived — at the *same* point in the cycle as the
- * global clock. A recreated element therefore resumes exactly where its
- * predecessor was, so the rebuild is visually seamless. Re-applying the same
- * anchor to an already-running element is idempotent (the new start time
- * differs from the old only by whole periods, which is invisible for a periodic
- * animation), so it is safe to call on every in-place repaint too.
- *
- * @param el the status indicator element whose pulse is being (re)started.
+ * CSS selector matching every indicator that should breathe: the per-pane /
+ * per-tab dots (`.tt-status-dot`) and the aggregate sidebar logo dot
+ * (`.app-logo-dot`), in either the working or waiting state.
  */
-internal fun phaseLockPulse(el: HTMLElement) {
-    val phase = kotlin.js.Date().getTime() % STATUS_PULSE_PERIOD_MS
-    el.style.animationDelay = "-${phase}ms"
+private const val PULSE_SELECTOR =
+    ".tt-status-dot.state-working, .tt-status-dot.state-waiting, " +
+    ".app-logo-dot.state-working, .app-logo-dot.state-waiting"
+
+/** Live `requestAnimationFrame` handle for the pulse driver, or 0 when stopped. */
+private var pulseRafHandle: Int = 0
+
+/**
+ * True when the user has asked for reduced motion; the indicators then hold a
+ * static full-opacity look instead of breathing.
+ */
+private fun prefersReducedMotion(): Boolean =
+    kotlinx.browser.window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+/**
+ * The shared breathing opacity for the current instant, derived from one global
+ * clock: 1.0 at the cycle boundaries, easing down to 0.3 at the midpoint and
+ * back (a smoothstep approximation of the old `fade-warning` ease-in-out curve).
+ * Because it is a pure function of the wall clock, every indicator painted from
+ * it shows the SAME opacity regardless of when it was created.
+ *
+ * @return an opacity in `[0.3, 1.0]`.
+ */
+private fun currentPulseOpacity(): Double {
+    val phase = (kotlinx.browser.window.performance.now() % STATUS_PULSE_PERIOD_MS) / STATUS_PULSE_PERIOD_MS
+    val dip = kotlin.math.abs(2.0 * phase - 1.0)   // 1 at boundaries, 0 at midpoint
+    val eased = dip * dip * (3.0 - 2.0 * dip)       // smoothstep ≈ ease-in-out
+    return 0.3 + 0.7 * eased
+}
+
+/**
+ * One frame of the global pulse driver: paints [currentPulseOpacity] onto every
+ * working/waiting indicator, then reschedules itself. Stops (clearing
+ * [pulseRafHandle]) once no indicator is pulsing, so an idle app burns no frames
+ * — [ensurePulseRunning] restarts it the next time one enters working/waiting.
+ *
+ * Why a JS rAF loop rather than a CSS `@keyframes` animation: the toolkit
+ * rebuilds the sidebar / tab-strip / pane-header chrome on config pushes, which
+ * recreates these badge elements. A CSS animation on a freshly-created element
+ * restarts from its first keyframe (`opacity: 1`), so every rebuild snapped the
+ * dot to full brightness — and because rebuilds fire on the program-title
+ * feature's ~750 ms config cadence while a task runs (Claude Code rewrites its
+ * terminal title with a live task summary), the pulse looked erratic. Driving
+ * opacity from one shared clock is immune to that: a recreated element simply
+ * adopts the current global opacity on the next frame — no snap, all in sync.
+ */
+private fun pulseTick() {
+    val dots = kotlinx.browser.document.querySelectorAll(PULSE_SELECTOR)
+    if (dots.length == 0) {
+        pulseRafHandle = 0
+        return
+    }
+    val opacity = currentPulseOpacity().toString()
+    for (i in 0 until dots.length) {
+        (dots.item(i) as? HTMLElement)?.style?.opacity = opacity
+    }
+    pulseRafHandle = kotlinx.browser.window.requestAnimationFrame { pulseTick() }
+}
+
+/**
+ * Kicks the global pulse driver if it isn't already running. Under reduced
+ * motion the loop is skipped entirely (indicators keep the static full-opacity
+ * look that [startPulse] sets). Called whenever an indicator enters the
+ * working/waiting state.
+ */
+internal fun ensurePulseRunning() {
+    if (prefersReducedMotion()) return
+    if (pulseRafHandle == 0) {
+        pulseRafHandle = kotlinx.browser.window.requestAnimationFrame { pulseTick() }
+    }
+}
+
+/**
+ * Seeds a freshly-working/waiting indicator with the current breathing opacity
+ * and ensures the driver is running, so the element is at the correct global
+ * phase from its very first frame (no one-frame flash at full opacity) and then
+ * tracks the shared clock. Under reduced motion, holds static full opacity.
+ *
+ * @param el the indicator that just entered the working/waiting state.
+ */
+internal fun startPulse(el: HTMLElement) {
+    if (prefersReducedMotion()) {
+        el.style.opacity = "1"
+        return
+    }
+    el.style.opacity = currentPulseOpacity().toString()
+    ensurePulseRunning()
 }
 
 /**
  * Applies the working/waiting state to a status indicator (`.tt-status-dot`) —
  * the unified indicator used on sidebar rows, pane headers, and the tab strip.
- * Its look is driven purely by the `state-working` / `state-waiting` modifier
- * classes (see `.tt-status-dot` in styles.css), all painted in the theme's
- * foreground colour (issue #38): idle clears both so the base rule paints a
- * solid dot; `state-working` makes that dot breathe; `state-waiting` swaps the
- * dot for a pulsing warning/exclamation triangle.
+ * Its look is driven by the `state-working` / `state-waiting` modifier classes
+ * (see `.tt-status-dot` in styles.css) plus a JS-driven breathing opacity, all
+ * painted in the theme's foreground colour (issue #38): idle clears both classes
+ * so the base rule paints a solid dot; `state-working` makes that dot breathe;
+ * `state-waiting` swaps the dot for a pulsing warning/exclamation triangle.
+ *
+ * The breathe is driven by the shared rAF loop ([pulseTick]) rather than a CSS
+ * animation, so recreating the element (the toolkit rebuilds these on chrome
+ * renders) never restarts a keyframe and snaps the dot to full opacity.
  *
  * Called by [updateStateIndicators] on each server push and by the dot builders
  * at construction time.
  *
  * @param el the `.tt-status-dot` element to repaint.
  * @param state the session state (`"working"`, `"waiting"`, or null/idle).
- * @see phaseLockPulse
+ * @see startPulse
  */
 internal fun applyDotState(el: HTMLElement, state: String?) {
     el.classList.remove("state-working")
     el.classList.remove("state-waiting")
     when (state) {
-        "working" -> { el.classList.add("state-working"); phaseLockPulse(el) }
-        "waiting" -> { el.classList.add("state-waiting"); phaseLockPulse(el) }
+        "working" -> { el.classList.add("state-working"); startPulse(el) }
+        "waiting" -> { el.classList.add("state-waiting"); startPulse(el) }
+        // Idle: drop the JS-driven opacity so the element reverts to its CSS
+        // default (fully opaque). Harmless for `.tt-status-dot` (hidden while
+        // idle) and correct for the always-visible `.app-logo-dot` bead.
+        else -> { el.style.opacity = "" }
     }
 }
 

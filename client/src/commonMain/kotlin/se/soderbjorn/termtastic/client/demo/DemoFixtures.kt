@@ -15,6 +15,7 @@
  */
 package se.soderbjorn.termtastic.client.demo
 
+import se.soderbjorn.termtastic.ClaudeModelUsage
 import se.soderbjorn.termtastic.ClaudeUsageData
 import se.soderbjorn.termtastic.DiffHunk
 import se.soderbjorn.termtastic.DiffLine
@@ -249,7 +250,11 @@ internal object DemoFixtures {
         "demo-s7" to "working",
     )
 
-    /** The Claude usage snapshot shown in the bottom usage bar. */
+    /**
+     * The Claude usage snapshot shown in the bottom usage bar. Carries two
+     * model-specific rows so the demo exercises the variable-row rendering
+     * (plans can surface Fable, Sonnet, or both).
+     */
     val claudeUsage: ClaudeUsageData = ClaudeUsageData(
         sessionPercent = 37,
         sessionResetTime = "Jun 11, 1:00 AM",
@@ -259,6 +264,10 @@ internal object DemoFixtures {
         extraUsageEnabled = false,
         extraUsageInfo = null,
         fetchedAt = "2026-06-10T21:14:07Z",
+        modelUsages = listOf(
+            ClaudeModelUsage(label = "Fable", percent = 70),
+            ClaudeModelUsage(label = "Sonnet", percent = 41),
+        ),
     )
 
     /** Shorthand for a directory entry in [dirListings]. */

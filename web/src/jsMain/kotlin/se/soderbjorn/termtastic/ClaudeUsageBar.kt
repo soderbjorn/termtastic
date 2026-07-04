@@ -2,7 +2,8 @@
  * Claude API usage bar component for the Termtastic web frontend.
  *
  * Renders a compact vertical stack of Claude Code usage rows — one per metric
- * (Session / Week / Sonnet) — for the narrow left-sidebar footer. Each row is
+ * (Session / Week / one row per model-specific weekly limit, e.g. Fable or
+ * Sonnet) — for the narrow left-sidebar footer. Each row is
  * a label, a thin severity-coloured progress bar, and the percentage, kept to
  * a single tight line. Hovering anywhere over the bar reveals one consolidated
  * popup ([buildUsagePopupHtml]) that lays out every metric together with its
@@ -147,17 +148,61 @@ private fun usagePopupRow(label: String, pct: Int, resetTime: String): String {
 }
 
 /**
+ * One model-specific weekly usage row as extracted from the envelope's
+ * `modelUsages` payload (server-side `ClaudeModelUsage`). The set of rows
+ * varies with the CLI version and plan — e.g. just "Fable" today, "Sonnet"
+ * on plans without Fable access, or both.
+ *
+ * @property label the model name shown as the row label (e.g. "Fable")
+ * @property pct usage percentage (0-100) for this model's weekly window
+ * @property reset raw "Resets ..." text, possibly empty
+ */
+private data class ModelUsageRow(val label: String, val pct: Int, val reset: String)
+
+/**
+ * Extracts the model-specific weekly rows from a dynamic usage payload.
+ *
+ * Reads the `modelUsages` array when present (servers that send
+ * `ClaudeModelUsage` entries). For older servers that predate the field,
+ * falls back to synthesizing a "Sonnet" row from the legacy
+ * `weeklySonnetPercent` when it is non-zero, so a stale server still shows
+ * its one model row instead of nothing.
+ *
+ * @param usage dynamic usage payload from the [WindowEnvelope.ClaudeUsage] JSON
+ * @return the model rows in screen order, possibly empty
+ */
+private fun extractModelRows(usage: dynamic): List<ModelUsageRow> {
+    val rows = mutableListOf<ModelUsageRow>()
+    val arr = usage.modelUsages
+    if (arr != null && arr != undefined) {
+        val len = (arr.length as? Int) ?: 0
+        for (i in 0 until len) {
+            val entry = arr[i] ?: continue
+            val label = (entry.label as? String)?.takeIf { it.isNotBlank() } ?: continue
+            val pct = (entry.percent as? Int) ?: 0
+            val reset = (entry.resetTime as? String) ?: ""
+            rows.add(ModelUsageRow(label, pct, reset))
+        }
+    }
+    if (rows.isEmpty()) {
+        val legacySonnet = (usage.weeklySonnetPercent as? Int) ?: 0
+        if (legacySonnet > 0) rows.add(ModelUsageRow("Sonnet", legacySonnet, ""))
+    }
+    return rows
+}
+
+/**
  * Builds the inner HTML for the consolidated usage hover popup: a title, a
- * four-column grid with one [usagePopupRow] per metric (Session / Week /
- * Sonnet) showing its bar, percentage and reset limit, and an "Updated …"
- * footer. Shown by [ensureUsagePopup]'s hover wiring whenever the pointer is
- * over the usage bar.
+ * four-column grid with one [usagePopupRow] per metric (Session / Week / one
+ * per model row) showing its bar, percentage and reset limit, and an
+ * "Updated …" footer. Shown by [ensureUsagePopup]'s hover wiring whenever the
+ * pointer is over the usage bar.
  *
  * @param sessionPct session-window usage percentage
  * @param sessionReset raw session reset-time string
  * @param weeklyAllPct weekly all-models usage percentage
  * @param weeklyAllReset raw weekly all-models reset-time string
- * @param weeklySonnetPct weekly Sonnet usage percentage
+ * @param modelRows model-specific weekly rows (e.g. Fable / Sonnet)
  * @param fetchedAt ISO-8601 fetch timestamp, rendered in the footer
  * @return the popup's inner HTML string
  */
@@ -166,15 +211,15 @@ private fun buildUsagePopupHtml(
     sessionReset: String,
     weeklyAllPct: Int,
     weeklyAllReset: String,
-    weeklySonnetPct: Int,
+    modelRows: List<ModelUsageRow>,
     fetchedAt: String,
 ): String {
+    // Model rows often share the weekly reset window; usagePopupRow renders a
+    // dash when their reset text is empty or unparseable.
     val grid = """<div class="usage-popup-grid">""" +
         usagePopupRow("Session", sessionPct, sessionReset) +
         usagePopupRow("Week", weeklyAllPct, weeklyAllReset) +
-        // The Sonnet weekly limit shares the weekly reset window, so it has no
-        // separate reset time of its own — leave its reset cell blank.
-        usagePopupRow("Sonnet", weeklySonnetPct, "") +
+        modelRows.joinToString("") { usagePopupRow(it.label, it.pct, it.reset) } +
         """</div>"""
     val updated = formatFetchedAt(fetchedAt).removeSurrounding("(", ")")
     val foot = if (updated.isNotBlank()) {
@@ -242,12 +287,13 @@ private fun ensureUsagePopup(bar: HTMLElement): HTMLElement {
  * Updates the Claude usage bar DOM element with the latest usage data.
  *
  * Called by [connectWindow] when a [WindowEnvelope.ClaudeUsage] envelope is received.
- * Extracts session, weekly, and Sonnet usage percentages from the dynamic payload,
+ * Extracts session, weekly, and per-model usage percentages from the dynamic payload,
  * renders them as color-coded badges, and attaches a refresh button that sends
  * [WindowCommand.RefreshUsage] to the server.
  *
  * @param usage a dynamic object containing sessionPercent, weeklyAllPercent,
- *              weeklySonnetPercent, reset times, and fetchedAt fields; or null to hide the bar
+ *              modelUsages (per-model rows, see [extractModelRows]), reset
+ *              times, and fetchedAt fields; or null to hide the bar
  * @see connectWindow
  */
 fun updateClaudeUsageBadge(usage: dynamic) {
@@ -272,7 +318,7 @@ fun updateClaudeUsageBadge(usage: dynamic) {
     val sessionReset = (usage.sessionResetTime as? String) ?: ""
     val weeklyAllPct = (usage.weeklyAllPercent as? Int) ?: 0
     val weeklyAllReset = (usage.weeklyAllResetTime as? String) ?: ""
-    val weeklySonnetPct = (usage.weeklySonnetPercent as? Int) ?: 0
+    val modelRows = extractModelRows(usage)
     val fetchedAt = (usage.fetchedAt as? String) ?: ""
 
     // Header (title + refresh) then one compact row per metric. Reset limits
@@ -284,7 +330,7 @@ fun updateClaudeUsageBadge(usage: dynamic) {
         """</div>"""
     html += usageRow("Session", sessionPct)
     html += usageRow("Week", weeklyAllPct)
-    html += usageRow("Sonnet", weeklySonnetPct)
+    for (row in modelRows) html += usageRow(row.label, row.pct)
 
     bar.innerHTML = html
     bar.querySelector(".usage-refresh-btn")?.addEventListener("click", { launchCmd(WindowCommand.RefreshUsage) })
@@ -298,7 +344,7 @@ fun updateClaudeUsageBadge(usage: dynamic) {
         sessionReset = sessionReset,
         weeklyAllPct = weeklyAllPct,
         weeklyAllReset = weeklyAllReset,
-        weeklySonnetPct = weeklySonnetPct,
+        modelRows = modelRows,
         fetchedAt = fetchedAt,
     )
     // Reset the class list but preserve the user's collapsed preference so a

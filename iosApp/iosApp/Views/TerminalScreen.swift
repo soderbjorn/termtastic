@@ -200,7 +200,7 @@ struct TerminalScreen: View {
 /// Manages the SwiftTerm TerminalView lifecycle, PtySocket I/O, and
 /// server-pushed resize handling. This is the iOS equivalent of the
 /// Android TerminalScreen's emulator + PtySocket wiring.
-final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDelegate {
+final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     let ptySocket: Client.PtySocket
     let client: Client.TermtasticClient
     let sessionId: String
@@ -237,6 +237,17 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDel
     private var naturalCols: Int = 80
     private var naturalRows: Int = 24
     private var hasSentInitialSize = false
+
+    /// Our own pan recognizer that converts vertical finger swipes into mouse
+    /// wheel events while the foreground program has mouse reporting enabled
+    /// (full-screen TUIs — Claude Code, vim, less, tmux — that own the
+    /// alternate screen and therefore have no local scrollback to drag). See
+    /// `handleScrollPan(_:)` for why this is needed and how it mirrors Android's
+    /// `TerminalView.doScroll`.
+    weak var scrollWheelPan: UIPanGestureRecognizer?
+    /// Accumulated vertical pan translation (points) not yet converted into a
+    /// discrete wheel step; one step is emitted per cell-height of travel.
+    private var wheelScrollAccumulator: CGFloat = 0
     private(set) var currentFontSize: CGFloat = 12
     private static let minFontSize: CGFloat = 6
     private static let maxFontSize: CGFloat = 32
@@ -267,6 +278,15 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDel
         // pause/jump-to-bottom affordance without disturbing SwiftTerm.
         view.delegate = self
         view.inputAccessoryView = nil
+        // Don't let the scroll view auto-inset for the safe area. Inside a
+        // NavigationStack SwiftUI can propagate the window's top safe area to
+        // a hosted UIScrollView, which pushes the resting `contentOffset` to a
+        // negative value; SwiftTerm then draws its first row below that inset,
+        // leaving a band of background at the top (the "weird padding" seen on
+        // notched phones — it varies by device because the inset is the safe
+        // area height). `.never` also keeps `contentOffset` free of any inset
+        // so the scroll-pause offset math below stays exact.
+        view.contentInsetAdjustmentBehavior = .never
 
         // TEMP diagnostic — remove once font load is confirmed working.
         print("[Termtastic] JetBrainsMono-Regular loaded: \(UIFont(name: "JetBrainsMono-Regular", size: 12) != nil)")
@@ -276,6 +296,12 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDel
             view.feed(byteArray: ArraySlice(chunk))
         }
         pendingOutput.removeAll()
+
+        // A pane restored directly into a full-screen app (mouse reporting
+        // already on from the replayed buffer) must start with native scrolling
+        // disabled; otherwise the first swipe tears the top rows before the next
+        // fed chunk re-syncs it.
+        syncScrollEnabled(view)
 
         // Set a reasonable default font size (Android uses 32px ≈ ~12pt at 2x/3x).
         // On a roomy iPad canvas (regular horizontal size class) the 12 pt phone
@@ -324,13 +350,19 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDel
                 if isReset, let settings = Palette.settings {
                     self.applyTheme(settings)
                 }
+                // Keep native scrolling disabled while the program owns the
+                // screen (mouse reporting on): this fed chunk may have just
+                // entered/left the alternate screen, so re-sync now.
+                self.syncScrollEnabled(tv)
                 // SwiftTerm's `updateScroller` just yanked the viewport to the
                 // bottom. If the user was reading history, re-pin them at the
                 // same distance from the bottom — this both holds the pause
                 // during streaming and (because distance-from-bottom is
                 // preserved) restores their place across the resume reset's
-                // wipe + replay as the content regrows.
-                if wasPaused {
+                // wipe + replay as the content regrows. Skipped in mouse-
+                // reporting mode, where the viewport is pinned to the bottom
+                // and swipes are forwarded as wheel events instead.
+                if wasPaused && !self.mouseReportingActive(tv) {
                     self.repinScroll(tv)
                     self.onNewOutputWhilePaused?()
                 }
@@ -428,6 +460,10 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDel
     /// so the read line stays put across subsequent feeds.
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard let view = terminalView else { return }
+        // In mouse-reporting mode there's no scrollback pause affordance — the
+        // viewport stays pinned and swipes become wheel events — so ignore any
+        // offset changes here.
+        guard !mouseReportingActive(view) else { return }
         // Only react to user-initiated scrolling; SwiftTerm's auto-scroll to
         // the bottom also lands here but with no active drag/deceleration.
         guard scrollView.isDragging || scrollView.isDecelerating || scrollView.isTracking else { return }
@@ -438,6 +474,54 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDel
             isScrolledUp = up
             onScrollChanged?(!up)
         }
+    }
+
+    // MARK: - UIGestureRecognizerDelegate (wheel-scroll pan)
+
+    /// Only lets `scrollWheelPan` begin while mouse reporting is active. When
+    /// it's off, the recognizer fails immediately, releasing the failure
+    /// requirement below so the scroll view's own pan drives native scrollback
+    /// scrolling as usual.
+    ///
+    /// - Parameter gestureRecognizer: The recognizer asking to begin.
+    /// - Returns: `true` to begin; `false` to fail (defer to native scrolling).
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === scrollWheelPan, let view = terminalView else { return true }
+        return mouseReportingActive(view)
+    }
+
+    /// Coexist with the taps / long-press / pinch recognizers, but never with
+    /// another *pan* — while our wheel-scroll pan is active it must be the sole
+    /// pan handler so SwiftTerm's mouse-drag pan and the scroll view's own pan
+    /// don't also fire (which would start an in-app selection or a competing
+    /// scroll). Paired with `shouldBeRequiredToFailBy` below.
+    ///
+    /// - Parameters:
+    ///   - gestureRecognizer: Our recognizer (`scrollWheelPan`).
+    ///   - otherGestureRecognizer: The competing recognizer.
+    /// - Returns: `true` for non-pan recognizers, `false` for pans.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === scrollWheelPan else { return false }
+        return !(otherGestureRecognizer is UIPanGestureRecognizer)
+    }
+
+    /// Makes the other pan recognizers (SwiftTerm's mouse-drag pan and the
+    /// scroll view's built-in pan) wait for `scrollWheelPan` to fail while mouse
+    /// reporting is active — so when our wheel pan recognizes, they're blocked.
+    /// When reporting is off, `gestureRecognizerShouldBegin` fails our pan and
+    /// native scrolling proceeds.
+    ///
+    /// - Parameters:
+    ///   - gestureRecognizer: Our recognizer (`scrollWheelPan`).
+    ///   - otherGestureRecognizer: The competing recognizer to gate.
+    /// - Returns: `true` to require our pan's failure before `otherGestureRecognizer`.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === scrollWheelPan,
+              otherGestureRecognizer is UIPanGestureRecognizer,
+              let view = terminalView else { return false }
+        return mouseReportingActive(view)
     }
 
     @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
@@ -455,6 +539,98 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate, UIScrollViewDel
                 gesture.scale = 1.0
             }
         }
+    }
+
+    /// Whether the foreground program currently has mouse reporting on. When it
+    /// does, the app owns the alternate screen (no local scrollback) and expects
+    /// wheel events to move its own viewport, so finger swipes must be forwarded
+    /// as wheel events rather than handled by the scroll view.
+    ///
+    /// - Parameter view: The SwiftTerm view whose terminal is queried.
+    /// - Returns: `true` when mouse reporting is active and allowed.
+    private func mouseReportingActive(_ view: SwiftTerm.TerminalView) -> Bool {
+        view.allowMouseReporting && view.getTerminal().mouseMode != .off
+    }
+
+    /// Enables the scroll view's own scrolling only when the program is *not*
+    /// mouse-reporting.
+    ///
+    /// In mouse-reporting mode the foreground app owns the alternate screen and
+    /// has no local scrollback, so the scroll view has nothing to scroll — but
+    /// its pan would still drag `contentOffset` around, and SwiftTerm renders
+    /// straight from `contentOffset`, so a stray offset tears the top rows
+    /// (drawing stale scrollback lines there). Pinning `isScrollEnabled = false`
+    /// keeps `contentOffset` at the bottom; our `scrollWheelPan` is a separate
+    /// recognizer and keeps working, forwarding swipes as wheel events. Called
+    /// from `configureView` and after every fed chunk (mouse mode can toggle at
+    /// any time).
+    ///
+    /// - Parameter view: The SwiftTerm view to reconfigure.
+    private func syncScrollEnabled(_ view: SwiftTerm.TerminalView) {
+        let shouldScroll = !mouseReportingActive(view)
+        if view.isScrollEnabled != shouldScroll {
+            view.isScrollEnabled = shouldScroll
+        }
+    }
+
+    /// Converts a vertical finger swipe into a stream of mouse wheel events for
+    /// the foreground program.
+    ///
+    /// Wired to `scrollWheelPan` (installed in `TerminalViewRepresentable.makeUIView`).
+    /// SwiftTerm's iOS view only translates swipes into wheel scrolling for the
+    /// *local* scrollback; in mouse-reporting mode its pan handler instead sends
+    /// button-drag motion, which full-screen apps read as a selection rather
+    /// than a scroll — so those apps (Claude Code, vim, less, tmux) never scroll
+    /// on a swipe. This mirrors Android's `TerminalView.doScroll`, which emits
+    /// `MOUSE_WHEELUP/DOWN` when `isMouseTrackingActive()`. One wheel step is
+    /// sent per cell-height of travel; a downward drag scrolls the content up
+    /// (wheel up), matching natural touch scrolling.
+    ///
+    /// - Parameter gesture: The pan recognizer driving the scroll.
+    @objc func handleScrollPan(_ gesture: UIPanGestureRecognizer) {
+        guard let view = terminalView, mouseReportingActive(view) else { return }
+        switch gesture.state {
+        case .began:
+            wheelScrollAccumulator = 0
+        case .changed:
+            let terminal = view.getTerminal()
+            let rows = max(1, terminal.rows)
+            let cellHeight = view.bounds.height / CGFloat(rows)
+            guard cellHeight > 0 else { return }
+            wheelScrollAccumulator += gesture.translation(in: view).y
+            gesture.setTranslation(.zero, in: view)
+            // Emit one discrete wheel step per cell of accumulated travel.
+            while abs(wheelScrollAccumulator) >= cellHeight {
+                let up = wheelScrollAccumulator > 0
+                wheelScrollAccumulator -= up ? cellHeight : -cellHeight
+                sendWheel(up: up, at: gesture.location(in: view), view: view)
+            }
+        default:
+            break
+        }
+    }
+
+    /// Sends a single mouse wheel event to the PTY, encoded for whichever mouse
+    /// protocol the program negotiated (SGR, x10, urxvt, …).
+    ///
+    /// Uses SwiftTerm's own `encodeButton`/`sendEvent`, so the escape sequence
+    /// matches the active protocol and is routed to the host through the same
+    /// `send(source:data:)` delegate path as typed input. Called from
+    /// `handleScrollPan`.
+    ///
+    /// - Parameters:
+    ///   - up: `true` for a wheel-up (button 4), `false` for wheel-down (button 5).
+    ///   - point: The touch location in the view, used to derive the cell the
+    ///     event is reported at.
+    ///   - view: The SwiftTerm view whose terminal encodes and sends the event.
+    private func sendWheel(up: Bool, at point: CGPoint, view: SwiftTerm.TerminalView) {
+        let terminal = view.getTerminal()
+        let cols = max(1, terminal.cols)
+        let rows = max(1, terminal.rows)
+        let col = min(cols - 1, max(0, Int(point.x / (view.bounds.width / CGFloat(cols)))))
+        let row = min(rows - 1, max(0, Int(point.y / (view.bounds.height / CGFloat(rows)))))
+        let flags = terminal.encodeButton(button: up ? 4 : 5, release: false, shift: false, meta: false, control: false)
+        terminal.sendEvent(buttonFlags: flags, x: col, y: row)
     }
 
     func sendBytes(_ bytes: [UInt8]) {
@@ -566,6 +742,16 @@ private struct TerminalViewRepresentable: UIViewRepresentable {
         // Pinch-to-zoom for font size (matches Android behaviour)
         let pinch = UIPinchGestureRecognizer(target: coordinator, action: #selector(TerminalCoordinator.handlePinch(_:)))
         tv.addGestureRecognizer(pinch)
+
+        // Wheel-scroll pan: forwards swipes as mouse wheel events while the
+        // foreground program has mouse reporting on, so full-screen TUIs scroll
+        // on a swipe (see TerminalCoordinator.handleScrollPan). Its delegate
+        // gates it to mouse-reporting mode and blocks the competing pans, so it
+        // stays out of the way of native scrollback scrolling otherwise.
+        let scrollPan = UIPanGestureRecognizer(target: coordinator, action: #selector(TerminalCoordinator.handleScrollPan(_:)))
+        scrollPan.delegate = coordinator
+        tv.addGestureRecognizer(scrollPan)
+        coordinator.scrollWheelPan = scrollPan
 
         return tv
     }

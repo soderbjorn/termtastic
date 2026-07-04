@@ -113,6 +113,11 @@ private fun hotkeyGroups(): List<HotkeyGroupModel> = listOf(
             actionRow("Focus window right", ToolkitHotkeyIds.PANE_FOCUS_RIGHT),
             actionRow("Focus window up", ToolkitHotkeyIds.PANE_FOCUS_UP),
             actionRow("Focus window down", ToolkitHotkeyIds.PANE_FOCUS_DOWN),
+            // Opt+Cmd+Up/Down (default) step the focused window through
+            // its three states: docked ⇄ normal ⇄ maximized. Toolkit
+            // actions — see LayoutRenderer's cyclePaneStateUp/Down.
+            actionRow("Expand window (docked → normal → max)", ToolkitHotkeyIds.PANE_EXPAND),
+            actionRow("Collapse window (max → normal → docked)", ToolkitHotkeyIds.PANE_COLLAPSE),
             // App-specific (not a toolkit action): reflow the active terminal
             // to fit its pane. Default ⌃⌥R; configurable + registered in
             // `registerReformatHotkey`. See [REFORMAT_HOTKEY_ACTION_ID].

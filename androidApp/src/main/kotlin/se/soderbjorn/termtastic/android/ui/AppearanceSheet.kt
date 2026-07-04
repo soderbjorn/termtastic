@@ -76,6 +76,7 @@ import kotlinx.coroutines.launch
 import se.soderbjorn.darkness.core.Appearance
 import se.soderbjorn.darkness.core.ResolvedTheme
 import se.soderbjorn.darkness.core.Theme
+import se.soderbjorn.darkness.core.allThemes
 import se.soderbjorn.darkness.core.orderThemesForPicker
 import se.soderbjorn.termtastic.client.viewmodel.ThemeBackingViewModel
 
