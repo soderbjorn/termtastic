@@ -1,9 +1,19 @@
 /**
- * 3D tab overview ("carousel ring") for the Termtastic web/Electron frontend.
+ * 3D tab overview for the Termtastic web/Electron frontend — the shared core.
  *
- * A task-switcher-style full-screen overlay that presents every visible tab
- * as a card on a slowly turning 3D ring, each card textured with a *live*
- * view of the tab's focused terminal. Content is sourced directly from each
+ * A task-switcher-style full-screen overlay presenting every visible tab and its
+ * panes in 3D. This file owns everything **style-independent**: the cached
+ * renderer / scene / camera / overlay, capturing each pane's live content into a
+ * textured plane (terminal grid, file listing, git status — every pane type),
+ * selection state ([ovSelected] / [ovPaneSelected]), and the open / close /
+ * render-loop / input-routing lifecycle. The *spatial arrangement and motion* is
+ * pluggable via [Overview3DStyle]: [CarouselStyle] (the default turning ring),
+ * [RotundaStyle] (inside a cylinder), and [ExposeStyle] (real-layout → grid
+ * zoom), chosen at open time from [experimental3dSwitcherStyle]. Both keyboard
+ * and mouse/trackpad drive navigation (see [openOverview3d] and [ensureOverlay]).
+ *
+ * The carousel — described below — is the reference style; the same capture and
+ * lifecycle machinery serves all three. Content is sourced directly from each
  * pane's **live** xterm.js instance in the [terminals] registry — the exact
  * buffer the visible pane renders — so no second `/pty` socket is opened and
  * the PTY is never resized (reading a buffer is size-neutral). A [ThumbSource]
@@ -70,7 +80,6 @@ import org.w3c.dom.events.KeyboardEvent
 import org.w3c.dom.events.MouseEvent
 import org.w3c.dom.events.WheelEvent
 import se.soderbjorn.termtastic.three.CanvasTexture
-import se.soderbjorn.termtastic.three.Group
 import se.soderbjorn.termtastic.three.Mesh
 import se.soderbjorn.termtastic.three.MeshBasicMaterial
 import se.soderbjorn.termtastic.three.PerspectiveCamera
@@ -80,20 +89,21 @@ import se.soderbjorn.termtastic.three.Scene
 import se.soderbjorn.termtastic.three.Vector2
 import se.soderbjorn.termtastic.three.WebGLRenderer
 import kotlin.js.json
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 /** DOM id of the full-screen overlay element (also its CSS hook). */
 private const val OVERLAY_ID = "overview3d-overlay"
 
-/** Card plane size in world units (3.2 : 2 matches the canvas aspect). */
-private const val CARD_W = 3.2
-private const val CARD_H = 2.0
+/**
+ * Reference card plane size in world units (3.2 : 2 matches the canvas aspect).
+ * The tab-card thumbnail and the pane-tile world sizes ([buildPaneTile]) are
+ * derived from this; styles read [PaneTile.worldW]/[PaneTile.worldH] rather than
+ * these constants directly.
+ */
+internal const val CARD_W = 3.2
+internal const val CARD_H = 2.0
 
 /**
  * Supersampling factor for thumbnail textures. Canvas backing stores are
@@ -115,39 +125,26 @@ private const val TITLE_STRIP_PX = 26
 private const val TILE_STRIP_PX = 18
 
 /**
- * Minimum device-px glyph size for a full-fidelity terminal grid ([gridFontPx]).
- * A tile whose exact grid would render smaller than this (a narrow pane holding
- * a wide/tall terminal) is demoted to the re-wrapped, fixed-font thumbnail so
- * its text stays legible. Read in [ThumbSource.repaint].
+ * Minimum device-px glyph size ([RES]-supersampled) below which a tile falls back
+ * from the exact colored terminal grid ([renderTerminalGrid]) to the re-wrapped
+ * monochrome thumbnail ([renderThumbnail]). Kept deliberately low: the 3D styles
+ * (rotunda/exposé especially) show panes up close, where the accurate, correctly
+ * sized, *colored* cell grid is the whole point — so we render it for panes of
+ * essentially any real size and only demote a degenerately tiny tile (a wide/tall
+ * terminal crammed into a sliver) where a micro-grid would be pure noise. Read in
+ * [ThumbSource.repaint].
  */
-private const val MIN_GRID_FONT_PX = 18.0
+private const val MIN_GRID_FONT_PX = 4.0
 
 /** Monospace font stack for thumbnail title bars / placeholders. */
 private const val THUMB_FONT = "Menlo, Monaco, 'Courier New', monospace"
 
-/** Camera distance from the *front* card (world units). Closer = the front
- * tab fills more of the screen (bigger, more legible panes). Kept a touch
- * back from the legibility floor so the split front card's bottom row of
- * panes (spread + lifted + idle-bobbing) always clears the viewport edges. */
-private const val CAMERA_DISTANCE = 3.35
-
 /**
- * Camera height above the ring center (world units). A gentle downward tilt
- * that keeps the ring grounded; deliberately shallow so the framing stays
- * roughly symmetric top-to-bottom and the split card's bottom panes don't
- * fall off the lower edge. Shared by the open pose and the dive-in animation
- * so they never disagree.
+ * Duration of the dive-in activation transition (ms; matches the CSS fade).
+ * The core closes the overview when this elapses after [beginDive]; styles may
+ * animate a landing camera over the same window.
  */
-private const val CAMERA_Y = 0.32
-
-/** Ring radius floor so 2–3 tabs still form a visible ring. */
-private const val MIN_RING_RADIUS = 2.2
-
-/** How long fresh PTY output keeps a card's activity glow lit (ms). */
-private const val GLOW_FADE_MS = 1600.0
-
-/** Duration of the dive-in activation transition (ms; matches the CSS fade). */
-private const val DIVE_MS = 340.0
+internal const val DIVE_MS = 340.0
 
 /** World-units gap shaved off each pane tile so split panes read as tiles. */
 private const val TILE_GAP = 0.05
@@ -157,31 +154,6 @@ private const val SPLIT_SPREAD = 1.28
 
 /** How far tiles lift toward the camera when split (world units). */
 private const val SPLIT_LIFT = 0.16
-
-/**
- * Ring-rotation arc (radians, measured from dead-center) over which the
- * selected card dissolves from its flat whole-tab thumbnail into its pane
- * tiles. The tiles carry the pane borders and the active-pane accent header,
- * so cross-dissolving on the *incoming rotation* — rather than at the split —
- * makes that chrome fade in **with** the panes, as one unit, while the card is
- * still turning to the front. Otherwise the flat card (which already shows the
- * focused pane's body) sits underneath until the split, and the border + header
- * appear to pop in as a separate step after the pane is already visible.
- */
-private const val REVEAL_ARC = 0.9
-
-/**
- * Inward-curve strength for split panes: radians of tilt per world-unit of a
- * tile's offset from the card center. Panes right of center yaw left, left of
- * center yaw right, top tiles pitch down and bottom tiles pitch up, so the
- * exploded panes bend back toward the center like a shallow bowl facing the
- * camera — deepening the 3D read. Scaled by the split factor (flat when
- * assembled) and capped by [CURVE_MAX_RAD].
- */
-private const val CURVE_K = 0.18
-
-/** Cap on the per-tile inward-curve tilt (radians, ≈17°). */
-private const val CURVE_MAX_RAD = 0.3
 
 /** Plane subdivisions per axis for the dished pane geometry ([dishGeometry]). */
 private const val DISH_SEGMENTS = 14
@@ -215,7 +187,7 @@ private const val DISH_DEPTH = 0.34
  *   square off *behind* the split tiles' own rounded corners; pane tiles get
  *   this implicitly via [paneBorder].
  */
-private class ThumbView(
+internal class ThumbView(
     val canvas: HTMLCanvasElement,
     val texture: CanvasTexture,
     val stripTitle: String?,
@@ -509,7 +481,7 @@ private class ThumbView(
  * @property live `true` for a registry term (full-fidelity capable, not owned).
  * @property hiddenHost off-screen host for a mirror term, else `null`.
  */
-private class ThumbSource(
+internal class ThumbSource(
     val term: Terminal,
     val live: Boolean,
     private val hiddenHost: HTMLElement?,
@@ -602,7 +574,7 @@ private class ThumbSource(
  * painted: a live PTY transcript, a fetched file-browser listing, a fetched
  * git status, or a static placeholder.
  */
-private enum class TileKind { TERMINAL, FILE_BROWSER, GIT, OTHER }
+internal enum class TileKind { TERMINAL, FILE_BROWSER, GIT, OTHER }
 
 /**
  * A pane's fractional rectangle within its tab (0..1 of the tab area) plus
@@ -631,8 +603,14 @@ private class PaneRect(val x: Double, val y: Double, val w: Double, val h: Doubl
  * @property source live source feeding [view], or `null` for placeholders.
  * @property homeX/homeY/homeZ assembled position (card-local).
  * @property splitX/splitY/splitZ split position (card-local).
+ * @property worldW/worldH the tile plane's world-space size. Their ratio is the
+ *   pane's **true on-screen aspect** (it fills its pane, so the pane rectangle's
+ *   aspect is the content's). Styles other than the carousel read these to
+ *   letterbox the pane into their own slot — scaling uniformly by
+ *   `min(slotW / worldW, slotH / worldH)` — so a pane is never stretched away
+ *   from the geometry we capture it at.
  */
-private class PaneTile(
+internal class PaneTile(
     val paneId: String,
     val paneTitle: String,
     val contentKind: TileKind,
@@ -643,6 +621,7 @@ private class PaneTile(
     val source: ThumbSource?,
     val homeX: Double, val homeY: Double, val homeZ: Double,
     val splitX: Double, val splitY: Double, val splitZ: Double,
+    val worldW: Double, val worldH: Double,
 ) {
     /** Releases the tile's GPU resources (textures, materials, geometries). */
     fun dispose() {
@@ -671,7 +650,7 @@ private class PaneTile(
  * @property focusedPaneId the tab's active pane, marked with a persistent
  *   accent ring in the split view.
  */
-private class OverviewCard(
+internal class OverviewCard(
     val tabId: String,
     val title: String,
     val mesh: Mesh,
@@ -714,6 +693,141 @@ private class OverviewCard(
 }
 
 /* ---------------------------------------------------------------------- */
+/* Pluggable switcher styles.                                              */
+/*                                                                          */
+/* The overview core owns everything style-independent: the renderer /      */
+/* scene / camera / overlay, capturing each pane's live content into a      */
+/* [ThumbView] (terminal grid, file listing, git status — all pane types),  */
+/* selection state ([ovSelected] / [ovPaneSelected]), and the open/close/    */
+/* render-loop/event-routing lifecycle. A style only decides the *spatial*   */
+/* arrangement and motion: where the [OverviewCard]s and their [PaneTile]s   */
+/* sit in the scene, how they animate, how navigation maps, and what the     */
+/* camera does. Three ship — [CarouselStyle], [RotundaStyle], [ExposeStyle]  */
+/* — chosen at open time from [experimental3dSwitcherStyle].                 */
+/* ---------------------------------------------------------------------- */
+
+/**
+ * Directional navigation intent, produced by the core key handler and handed to
+ * the active [Overview3DStyle] so every style shares one vocabulary while
+ * interpreting it in its own geometry (e.g. the carousel treats LEFT/RIGHT as
+ * "previous/next tab", the rotunda as "spin the wall", the exposé grid as
+ * "move one column"). [PANE_NEXT]/[PANE_PREV] come from Tab / Shift+Tab.
+ */
+internal enum class OvNav { LEFT, RIGHT, UP, DOWN, PANE_NEXT, PANE_PREV }
+
+/**
+ * One spatial arrangement + interaction model for the 3D overview. Implemented
+ * as a stateless-per-open object; per-open scene state it owns (groups, angles,
+ * gesture latches) lives in the implementation's own module vars, reset in
+ * [build]. The core calls these hooks against the shared state it has already
+ * populated (the [ovCards], [ovSelected], [ovPaneSelected], the cached
+ * [ovScene] / [ovCamera]).
+ *
+ * Contract for implementations:
+ *  - **Aspect ratio:** never distort a pane. Each [PaneTile] carries its true
+ *    world size ([PaneTile.worldW]/[PaneTile.worldH]); scale tiles *uniformly*
+ *    to fit a slot (letterbox), never set a non-uniform scale.
+ *  - **All pane types:** tiles are pre-built with terminal / file-browser / git
+ *    content by the core — just place `card.tiles`; don't special-case kinds.
+ *  - **Both input modalities:** implement [nav] (keyboard) *and* [wheel] / [drag]
+ *    / [click] (mouse/trackpad) so tabs and panes can be switched either way.
+ *  - **Selection:** drive [ovSelected] (front tab) and [ovPaneSelected] (pane
+ *    within it) through the shared [stepSelection] / [cyclePane] / [selectCard]
+ *    helpers so [applyFidelity] and the title readout stay in sync.
+ *  - **Activation:** call [beginDive] with [selectedPaneId] to open the pick.
+ */
+internal interface Overview3DStyle {
+    /**
+     * Builds this style's scene graph for the just-opened overview: parent the
+     * pre-built [ovCards] / their [PaneTile] meshes into [scene] and position
+     * them. [ovCards], [ovSelected] and [ovPaneSelected] are already set.
+     *
+     * @param scene the cached scene to add objects to.
+     * @param camera the cached camera (usually configured in [resetCamera]).
+     */
+    fun build(scene: Scene, camera: PerspectiveCamera)
+
+    /**
+     * Positions the camera for the opening pose (called once after [build]).
+     *
+     * @param camera the cached camera.
+     */
+    fun resetCamera(camera: PerspectiveCamera)
+
+    /**
+     * Per-frame update, called each animation frame before the core renders.
+     * Eases layout/motion toward the current selection and, while a dive is in
+     * progress ([ovDiveStart] not NaN), may animate the camera (the core closes
+     * the overview when the dive completes).
+     *
+     * @param now `window.performance.now()` for this frame.
+     * @param camera the cached camera.
+     */
+    fun tick(now: Double, camera: PerspectiveCamera)
+
+    /**
+     * Handles a directional keyboard navigation.
+     *
+     * @param dir the intent (see [OvNav]).
+     */
+    fun nav(dir: OvNav)
+
+    /**
+     * Handles a wheel / trackpad delta along the dominant axis. Discrete styles
+     * (carousel) latch this into single steps; continuous styles (rotunda floor
+     * ride, exposé zoom) integrate it. Default: ignore.
+     *
+     * @param delta signed dominant-axis wheel delta.
+     * @param nowMs `window.performance.now()` (for gesture timing).
+     */
+    fun wheel(delta: Double, nowMs: Double) {}
+
+    /**
+     * Handles a pointer drag while the button is held (look-around / orbit).
+     * Default: ignore.
+     *
+     * @param dx horizontal movement (px) since the last event.
+     * @param dy vertical movement (px) since the last event.
+     */
+    fun drag(dx: Double, dy: Double) {}
+
+    /**
+     * The meshes the core should raycast for click/hover picking (nearest hit's
+     * `userData` wins). Typically the cards, plus the front card's pane tiles.
+     *
+     * @return the pickable meshes for the current frame.
+     */
+    fun pickables(): Array<dynamic>
+
+    /**
+     * Handles a click on the picked `userData` (`null` = empty space). The
+     * payload carries `index` (card) and, on a tile, `paneId`.
+     *
+     * @param userData the nearest raycast hit's payload, or `null`.
+     */
+    fun click(userData: dynamic)
+
+    /**
+     * Releases scene objects this style added (groups, decorations). The core
+     * disposes the shared cards / tiles / sources itself.
+     *
+     * @param scene the cached scene to remove objects from.
+     */
+    fun teardown(scene: Scene)
+
+    /**
+     * The one-line key/gesture hint shown in the overlay footer while this style
+     * is active. Each style's input mapping differs (the carousel rotates a ring,
+     * the rotunda spins a wall and rides floors, the exposé zooms a grid), so the
+     * footer must describe *this* style's controls rather than a single generic
+     * line. Defaults to the carousel's mapping; other styles override.
+     *
+     * @return the footer hint text for this style.
+     */
+    fun hint(): String = "← → tabs · ↑ ↓ panes · ⏎ open · click a pane to jump · esc close"
+}
+
+/* ---------------------------------------------------------------------- */
 /* Module state. The renderer / scene / camera / overlay are app-lifetime  */
 /* caches (see file kdoc); everything else is rebuilt per open.            */
 /* ---------------------------------------------------------------------- */
@@ -733,11 +847,21 @@ private var ovOverlay: HTMLElement? = null
 /** Selected-tab title readout at the bottom of the overlay. */
 private var ovTitleEl: HTMLElement? = null
 
-/** Per-open carousel group holding the card meshes. */
-private var ovRing: Group? = null
+/** Footer key/gesture hint element; its text is set per style each open. */
+private var ovHintEl: HTMLElement? = null
 
-/** Per-open card list, ring order = config tab order. */
-private val ovCards = mutableListOf<OverviewCard>()
+/**
+ * The active switcher style for the current open, chosen in [openOverview3d]
+ * from [experimental3dSwitcherStyle]; `null` while closed. Every lifecycle and
+ * input hook routes through it.
+ */
+private var ovActiveStyle: Overview3DStyle? = null
+
+/**
+ * Per-open card list, in config tab order. Populated by [buildCards]; the active
+ * [Overview3DStyle] parents these into the scene and arranges them.
+ */
+internal val ovCards = mutableListOf<OverviewCard>()
 
 /** Per-open live content sources, deduplicated by pane id. */
 private val ovSources = mutableMapOf<String, ThumbSource>()
@@ -755,8 +879,12 @@ private var ovCardGeometry: PlaneGeometry? = null
 /** Shared glow plane geometry (per open). */
 private var ovGlowGeometry: PlaneGeometry? = null
 
-/** Index (into [ovCards]) of the card currently rotated to the front. */
-private var ovSelected = 0
+/**
+ * Index (into [ovCards]) of the card currently selected — the front card on the
+ * carousel ring, the current floor in the rotunda, the tab in front in exposé.
+ * Shared across styles so [applyFidelity] and the readout stay style-agnostic.
+ */
+internal var ovSelected = 0
 
 /**
  * Index (into the front card's [OverviewCard.tiles]) of the currently
@@ -764,13 +892,7 @@ private var ovSelected = 0
  * ↑/↓/Tab and by hovering a pane tile; reset to `-1` whenever the front tab
  * changes. `Enter` jumps to this pane (or the whole tab when `-1`).
  */
-private var ovPaneSelected = -1
-
-/** Current ring rotation (radians); eased toward the selected card. */
-private var ovRingAngle = 0.0
-
-/** Ring radius for the current open (depends on card count). */
-private var ovRadius = 0.0
+internal var ovPaneSelected = -1
 
 /** rAF handle of the render loop while open. */
 private var ovAnimHandle: Int? = null
@@ -778,8 +900,12 @@ private var ovAnimHandle: Int? = null
 /** True between [openOverview3d] and the end of [closeOverview3d]. */
 private var ovOpen = false
 
-/** `performance.now()` when the dive-in activation started; NaN = not diving. */
-private var ovDiveStart = Double.NaN
+/**
+ * `performance.now()` when the dive-in activation started; NaN = not diving.
+ * Styles read this to freeze input and animate a landing camera during the
+ * transition; the core closes the overview once [DIVE_MS] elapses.
+ */
+internal var ovDiveStart = Double.NaN
 
 /** Capture-phase key handler while open (removed on close). */
 private var ovKeyHandler: ((Event) -> Unit)? = null
@@ -787,63 +913,36 @@ private var ovKeyHandler: ((Event) -> Unit)? = null
 /** Window resize handler while open (removed on close). */
 private var ovResizeHandler: ((Event) -> Unit)? = null
 
-/** Last pointer position in normalized device coordinates (for hover). */
-private val ovPointerNdc = Vector2(0.0, -2.0)
+/** Last pointer position in normalized device coordinates (for hover/picking). */
+internal val ovPointerNdc = Vector2(0.0, -2.0)
 
-/** Shared raycaster for click/hover picking. */
+/** Shared raycaster for click/hover picking (see [raycastPointer]). */
 private val ovRaycaster = Raycaster()
 
-/** Wheel delta accumulator (a notch of ±60 steps one card). */
-private var ovWheelAcc = 0.0
-
 /**
- * True once the current wheel/trackpad gesture has already stepped the
- * selection. A trackpad swipe emits a long tail of momentum events, so
- * without this latch one physical swipe would cross the ±60 threshold
- * repeatedly and skip several tabs. Cleared when a gap in wheel events
- * (see [OV_WHEEL_GESTURE_GAP_MS]) marks the start of a fresh gesture.
- */
-private var ovWheelLatched = false
-
-/** Timestamp (`performance.now()`) of the last observed wheel event. */
-private var ovWheelLastTs = 0.0
-
-/** `|delta|` of the previous wheel event, for rising-edge detection. */
-private var ovWheelPrevMag = 0.0
-
-/**
- * Idle gap (ms) between wheel events that ends one gesture and arms the
- * next. Covers cleanly separated swipes where the momentum tail has fully
- * stopped before the next physical swipe.
- */
-private const val OV_WHEEL_GESTURE_GAP_MS = 220.0
-
-/**
- * A wheel event whose magnitude both exceeds this floor and climbs
- * meaningfully above the previous event (see [OV_WHEEL_RISE_FACTOR]) is
- * treated as a fresh finger push cutting through the decaying momentum tail
- * of the prior swipe. macOS momentum deltas decay monotonically, so a rising
- * edge above a sane floor is only ever a new gesture — this is what lets two
- * quick back-to-back swipes each register even before momentum stops.
- */
-private const val OV_WHEEL_RISE_FLOOR = 22.0
-
-/** Factor by which a delta must exceed the prior one to count as a new push. */
-private const val OV_WHEEL_RISE_FACTOR = 2.2
-
-/**
- * Accumulated wheel/swipe delta (either axis) needed to step one tab. Higher =
- * a more deliberate swipe is required, so a light or bumpy trackpad flick no
- * longer skips several tabs at once.
- */
-private const val OV_WHEEL_STEP = 90.0
-
-/**
- * Set on every `mousemove`, consumed once per frame. Gates hover-driven pane
+ * Set on every pointer move, consumed once per frame. Gates hover-driven pane
  * selection on actual pointer movement, so a mouse resting over one tile
  * doesn't keep yanking the highlight back while you navigate with ↑/↓.
  */
-private var ovPointerMoved = false
+internal var ovPointerMoved = false
+
+/** True while a pointer button is held over the overlay (drag in progress). */
+private var ovPointerDown = false
+
+/** Last pointer client X/Y, for computing per-move drag deltas. */
+private var ovPointerLastX = 0.0
+private var ovPointerLastY = 0.0
+
+/**
+ * Accumulated `|dx|+|dy|` (px) since pointer-down. A release under
+ * [OV_CLICK_MOVE_THRESHOLD] is treated as a click (select/activate); past it the
+ * gesture was a drag (look-around / orbit) and no click fires — so styles that
+ * both drag *and* click never mistake one for the other.
+ */
+private var ovPointerMovedPx = 0.0
+
+/** Pointer-travel (px) under which a release counts as a click, not a drag. */
+private const val OV_CLICK_MOVE_THRESHOLD = 7.0
 
 /**
  * Toggles the 3D overview: opens it if closed, closes it if open. The
@@ -922,63 +1021,70 @@ private fun ensureOverlay(): HTMLElement {
 
     val hint = document.createElement("div") as HTMLElement
     hint.className = "overview3d-hint"
+    // Text is set per active style in openOverview3d (each style's controls
+    // differ); seed with the carousel default so it's never blank pre-open.
     hint.textContent = "← → tabs · ↑ ↓ panes · ⏎ open · click a pane to jump · esc close"
     overlay.appendChild(hint)
+    ovHintEl = hint
 
-    // Wheel / trackpad swipe steps the selection along the dominant axis, so a
-    // horizontal two-finger swipe (or a vertical scroll) rotates between tabs.
-    // A single swipe steps exactly one tab: once the ±[OV_WHEEL_STEP] threshold
-    // is crossed we latch and ignore the rest of that gesture's momentum tail. The latch
-    // re-arms either after OV_WHEEL_GESTURE_GAP_MS of wheel silence, or the
-    // moment a fresh finger push makes the delta magnitude climb back up out of
-    // the decaying tail — so quick back-to-back swipes each register even
-    // before momentum stops. passive=false so the page never scrolls and macOS
-    // back/forward-swipe navigation is suppressed.
+    // Wheel / trackpad: forward the dominant-axis delta to the active style,
+    // which decides what it means — the carousel latches it into single tab
+    // steps, the rotunda rides between floors, the exposé zooms continuously.
+    // passive=false so the page never scrolls and macOS back/forward-swipe
+    // navigation is suppressed.
     overlay.addEventListener("wheel", { ev: Event ->
         ev.preventDefault()
         if (!ovDiveStart.isNaN()) return@addEventListener
         val we = ev as WheelEvent
-        val now = window.performance.now()
         val delta = if (abs(we.deltaX) > abs(we.deltaY)) we.deltaX else we.deltaY
-        val mag = abs(delta)
-        val gap = now - ovWheelLastTs > OV_WHEEL_GESTURE_GAP_MS
-        // Rising edge only counts as a new gesture once we're latched — while
-        // still accumulating the first swipe, ramping deltas are expected.
-        val risingEdge = ovWheelLatched &&
-            mag > OV_WHEEL_RISE_FLOOR && mag > ovWheelPrevMag * OV_WHEEL_RISE_FACTOR
-        if (gap || risingEdge) {
-            ovWheelLatched = false
-            ovWheelAcc = 0.0
-        }
-        ovWheelLastTs = now
-        ovWheelPrevMag = mag
-        if (ovWheelLatched) return@addEventListener
-        ovWheelAcc += delta
-        if (ovWheelAcc > OV_WHEEL_STEP) { stepSelection(1); ovWheelAcc = 0.0; ovWheelLatched = true }
-        if (ovWheelAcc < -OV_WHEEL_STEP) { stepSelection(-1); ovWheelAcc = 0.0; ovWheelLatched = true }
+        ovActiveStyle?.wheel(delta, window.performance.now())
     }, json("passive" to false))
 
-    // Track the pointer for hover feedback (consumed in the render loop).
-    overlay.addEventListener("mousemove", { ev: Event ->
+    // Pointer move: always update the hover NDC (the render loop highlights the
+    // pane under the cursor). While a button is held it's also a drag — feed the
+    // per-move delta to the style's drag() (look-around / orbit) and tally the
+    // travel so the release can tell a click from a drag.
+    overlay.addEventListener("pointermove", { ev: Event ->
         val me = ev as MouseEvent
         ovPointerNdc.x = me.clientX / window.innerWidth.toDouble() * 2.0 - 1.0
         ovPointerNdc.y = -(me.clientY / window.innerHeight.toDouble() * 2.0 - 1.0)
         ovPointerMoved = true
+        if (ovPointerDown && ovDiveStart.isNaN()) {
+            val dx = me.clientX - ovPointerLastX
+            val dy = me.clientY - ovPointerLastY
+            ovPointerLastX = me.clientX.toDouble()
+            ovPointerLastY = me.clientY.toDouble()
+            ovPointerMovedPx += abs(dx) + abs(dy)
+            ovActiveStyle?.drag(dx, dy)
+        }
     })
 
-    // Click: pane tile focuses that pane, front card activates the tab,
-    // other cards rotate to front, empty space closes.
-    overlay.addEventListener("click", { ev: Event ->
+    // Pointer down: arm a gesture and capture the pointer so drags that leave
+    // the overlay keep flowing here.
+    overlay.addEventListener("pointerdown", { ev: Event ->
+        if (!ovDiveStart.isNaN()) return@addEventListener
+        val me = ev as MouseEvent
+        ovPointerDown = true
+        ovPointerMovedPx = 0.0
+        ovPointerLastX = me.clientX.toDouble()
+        ovPointerLastY = me.clientY.toDouble()
+        runCatching { overlay.asDynamic().setPointerCapture(me.asDynamic().pointerId) }
+    })
+
+    // Pointer up: a release that barely moved is a click — raycast the style's
+    // pickables and hand the hit (or `null` for empty space) to its click(); a
+    // release that dragged past the threshold was a look-around, so no click
+    // fires (the style already consumed the motion via drag()).
+    overlay.addEventListener("pointerup", { ev: Event ->
+        if (!ovPointerDown) return@addEventListener
+        ovPointerDown = false
         if (!ovDiveStart.isNaN()) return@addEventListener
         val me = ev as MouseEvent
         ovPointerNdc.x = me.clientX / window.innerWidth.toDouble() * 2.0 - 1.0
         ovPointerNdc.y = -(me.clientY / window.innerHeight.toDouble() * 2.0 - 1.0)
-        val ud = pickUserData()
-        if (ud == null) {
-            closeOverview3d()
-        } else {
-            val idx = (ud.index as? Int) ?: return@addEventListener
-            if (idx == ovSelected) beginDive(ud.paneId as? String) else selectCard(idx)
+        if (ovPointerMovedPx < OV_CLICK_MOVE_THRESHOLD) {
+            val ud = raycastPointer(ovActiveStyle?.pickables() ?: emptyArray<dynamic>())
+            ovActiveStyle?.click(ud)
         }
     })
 
@@ -1003,10 +1109,8 @@ internal fun openOverview3d() {
 
     ovOpen = true
     ovDiveStart = Double.NaN
-    ovWheelAcc = 0.0
-    ovWheelLatched = false
-    ovWheelLastTs = 0.0
-    ovWheelPrevMag = 0.0
+    ovPointerDown = false
+    ovPointerMovedPx = 0.0
     val renderer = ensureRenderer()
     val scene = ovScene!!
     val camera = ovCamera!!
@@ -1031,66 +1135,49 @@ internal fun openOverview3d() {
     // Resolved 256-color palette for full-fidelity terminal tiles (front tab).
     ovPalette = buildTermPalette()
 
-    // Ring sizing: keep a comfortable chord gap between card centers.
-    val n = tabs.size
-    ovRadius = if (n >= 2) {
-        max(MIN_RING_RADIUS, (CARD_W * 1.35) / (2.0 * sin(PI / n)))
-    } else {
-        0.0
-    }
-
+    // Shared plane geometries consumed by buildCardContent (the tab card + its
+    // glow halo). Pane tiles get their own per-pane geometry in buildPaneTile.
     ovCardGeometry = PlaneGeometry(CARD_W, CARD_H)
     ovGlowGeometry = PlaneGeometry(CARD_W + 0.24, CARD_H + 0.24)
-    val ring = Group()
-    ovRing = ring
-    scene.add(ring)
 
-    val step = if (n > 0) 2.0 * PI / n else 0.0
-    tabs.forEachIndexed { i, tab ->
-        val card = buildCard(tab, fg, bg, accent)
-        val angle = i * step
-        card.mesh.position.set(ovRadius * sin(angle), 0.0, ovRadius * cos(angle))
-        card.mesh.rotation.y = angle
-        card.mesh.userData = json("index" to i)
-        for (tile in card.tiles) tile.mesh.userData = json("index" to i, "paneId" to tile.paneId)
-        ring.add(card.mesh)
-        ovCards.add(card)
-    }
-
-    // Start with the active tab at the front, ring already settled on it, and
-    // the pane highlight seeded on that tab's active pane so the first ↑/↓/Tab
-    // steps to its neighbour.
+    // Build style-independent content for every visible tab (thumbnails, live
+    // sources, pane tiles for all pane types), then seed the selection on the
+    // active tab and its focused pane so the first ↑/↓/Tab steps to a neighbour.
+    buildCards(tabs, fg, bg, accent)
     ovSelected = tabs.indexOfFirst { it.id == cfg.activeTabId }.takeIf { it >= 0 } ?: 0
     ovPaneSelected = focusedTileIndex(ovSelected)
-    ovRingAngle = -ovSelected * step
-    ring.rotation.y = ovRingAngle
+
+    // Hand off to the chosen style: it arranges the cards/tiles in the scene
+    // and poses the camera. Everything above is shared across all styles.
+    val style = styleFor(experimental3dSwitcherStyle())
+    ovActiveStyle = style
+    style.build(scene, camera)
+    style.resetCamera(camera)
+    ovHintEl?.textContent = style.hint()
+
     updateTitleReadout()
     applyFidelity()
-
-    camera.position.set(0.0, CAMERA_Y, ovRadius + CAMERA_DISTANCE)
-    camera.lookAt(0.0, 0.0, 0.0)
 
     layoutRenderer()
     val resizeHandler: (Event) -> Unit = { layoutRenderer() }
     ovResizeHandler = resizeHandler
     window.addEventListener("resize", resizeHandler)
 
-    // Capture-phase keys: the overlay steals focus from the terminal on
-    // open, but capture also guarantees Escape/arrows never leak to other
-    // handlers underneath while the overview is up.
+    // Capture-phase keys: the overlay steals focus from the terminal on open,
+    // but capture also guarantees Escape/arrows never leak to other handlers
+    // underneath while the overview is up. Directional keys route to the active
+    // style (which maps them to its own geometry); Enter/Escape are uniform.
     val keyHandler: (Event) -> Unit = handler@{ ev ->
         if (!ovOpen || !ovDiveStart.isNaN()) return@handler
         val ke = ev as KeyboardEvent
+        val st = ovActiveStyle
         when (ke.key) {
             "Escape" -> { ke.preventDefault(); ke.stopPropagation(); closeOverview3d() }
-            // Left/right rotate between tabs; up/down (and Tab) walk the front
-            // tab's panes. Enter opens whatever is highlighted — the selected
-            // pane if one is, otherwise the whole tab.
-            "ArrowLeft" -> { ke.preventDefault(); ke.stopPropagation(); stepSelection(-1) }
-            "ArrowRight" -> { ke.preventDefault(); ke.stopPropagation(); stepSelection(1) }
-            "ArrowDown" -> { ke.preventDefault(); ke.stopPropagation(); cyclePane(1) }
-            "ArrowUp" -> { ke.preventDefault(); ke.stopPropagation(); cyclePane(-1) }
-            "Tab" -> { ke.preventDefault(); ke.stopPropagation(); cyclePane(if (ke.shiftKey) -1 else 1) }
+            "ArrowLeft" -> { ke.preventDefault(); ke.stopPropagation(); st?.nav(OvNav.LEFT) }
+            "ArrowRight" -> { ke.preventDefault(); ke.stopPropagation(); st?.nav(OvNav.RIGHT) }
+            "ArrowDown" -> { ke.preventDefault(); ke.stopPropagation(); st?.nav(OvNav.DOWN) }
+            "ArrowUp" -> { ke.preventDefault(); ke.stopPropagation(); st?.nav(OvNav.UP) }
+            "Tab" -> { ke.preventDefault(); ke.stopPropagation(); st?.nav(if (ke.shiftKey) OvNav.PANE_PREV else OvNav.PANE_NEXT) }
             "Enter" -> { ke.preventDefault(); ke.stopPropagation(); beginDive(selectedPaneId()) }
         }
     }
@@ -1102,6 +1189,41 @@ internal fun openOverview3d() {
     primeDataTiles()
 
     startRenderLoop(renderer, scene, camera)
+}
+
+/**
+ * Builds the style-independent content for every visible tab into [ovCards]:
+ * one [OverviewCard] per tab (via [buildCardContent]), tagging each card mesh
+ * and pane-tile mesh with the `userData` the raycaster reads for click/hover
+ * picking (`index` = card index; `paneId` on tiles). The active style then
+ * places these in the scene.
+ *
+ * @param tabs the visible tabs, in order.
+ * @param fg thumbnail foreground color. @param bg background color.
+ * @param accent theme accent color.
+ */
+private fun buildCards(tabs: List<TabConfig>, fg: String, bg: String, accent: String) {
+    tabs.forEachIndexed { i, tab ->
+        val card = buildCardContent(tab, fg, bg, accent)
+        card.mesh.userData = json("index" to i)
+        for (tile in card.tiles) tile.mesh.userData = json("index" to i, "paneId" to tile.paneId)
+        ovCards.add(card)
+    }
+}
+
+/**
+ * Resolves the persisted style id (see [experimental3dSwitcherStyle]) to its
+ * [Overview3DStyle] implementation, defaulting to the carousel for any
+ * unrecognised value.
+ *
+ * @param id one of [OVERVIEW_3D_STYLE_CAROUSEL] / [OVERVIEW_3D_STYLE_ROTUNDA] /
+ *   [OVERVIEW_3D_STYLE_EXPOSE].
+ * @return the matching style object.
+ */
+private fun styleFor(id: String): Overview3DStyle = when (id) {
+    OVERVIEW_3D_STYLE_ROTUNDA -> RotundaStyle
+    OVERVIEW_3D_STYLE_EXPOSE -> ExposeStyle
+    else -> CarouselStyle
 }
 
 /**
@@ -1212,16 +1334,22 @@ private fun paneSessionId(pane: Pane): String? {
 }
 
 /**
- * Builds one ring card for [tab]: the full-card thumbnail (the focused /
- * first terminal pane), the glow halo, and one pane tile per pane placed
- * per the tab's real layout geometry ([resolvePaneRects]).
+ * Builds the style-independent **content** for one tab: the full-card
+ * thumbnail (the focused / first terminal pane), the glow halo (child of the
+ * card mesh), and one [PaneTile] per pane — each with its captured content
+ * (terminal grid / file listing / git status), live source, and true world
+ * size. It does *not* place anything in the scene: the active [Overview3DStyle]
+ * (via [buildCards] → [Overview3DStyle.build]) parents the card / tile meshes
+ * and arranges them. Pane tiles are built at their real layout geometry
+ * ([resolvePaneRects]); a style that wants a different arrangement repositions
+ * the tile meshes.
  *
- * @param tab the tab to build a card for.
+ * @param tab the tab to build content for.
  * @param fg thumbnail foreground color. @param bg thumbnail background color.
  * @param accent CSS accent color for the glow halo.
- * @return the assembled card, already painted once.
+ * @return the assembled card content, already painted once.
  */
-private fun buildCard(tab: TabConfig, fg: String, bg: String, accent: String): OverviewCard {
+private fun buildCardContent(tab: TabConfig, fg: String, bg: String, accent: String): OverviewCard {
     // Full-card view mirrors the focused pane's terminal (or the first
     // terminal pane), titled with the tab name.
     val focusPane = tab.panes.firstOrNull { it.leaf.id == tab.focusedPaneId && paneSessionId(it) != null }
@@ -1276,7 +1404,9 @@ private fun buildCard(tab: TabConfig, fg: String, bg: String, accent: String): O
         val rank = zRank[pi] ?: 0
         buildPaneTile(pane, rect, rank, fg, bg, accent)
     }
-    for (tile in tiles) mesh.add(tile.mesh)
+    // Tiles are left unparented here; the active style parents them (the
+    // carousel adds them to the card mesh, the rotunda/exposé to their own
+    // scene groups).
 
     val card = OverviewCard(tab.id, tab.title, mesh, cardMaterial, glowMaterial, cardView, cardSource, tiles, tab.focusedPaneId)
     if (cardSource != null) cardSource.views.add(cardView)
@@ -1374,6 +1504,7 @@ private fun buildPaneTile(
         pane.leaf.id, pane.leaf.title, kind, mesh, material, geometry, view, source,
         homeX, homeY, homeZ,
         homeX * SPLIT_SPREAD, homeY * SPLIT_SPREAD, splitZ,
+        tileW, tileH,
     )
     if (source != null) source.views.add(view) else view.paint(null)
     return tile
@@ -1522,7 +1653,7 @@ private fun primeDataTiles() {
  *
  * @param delta +1 = next card (clockwise), -1 = previous.
  */
-private fun stepSelection(delta: Int) {
+internal fun stepSelection(delta: Int) {
     if (ovCards.isEmpty()) return
     selectCard(((ovSelected + delta) % ovCards.size + ovCards.size) % ovCards.size)
 }
@@ -1533,7 +1664,7 @@ private fun stepSelection(delta: Int) {
  *
  * @param index card index into [ovCards].
  */
-private fun selectCard(index: Int) {
+internal fun selectCard(index: Int) {
     if (index !in ovCards.indices) return
     ovSelected = index
     // Start the pane highlight on the tab's *active* pane so the first ↑/↓/Tab
@@ -1553,7 +1684,7 @@ private fun selectCard(index: Int) {
  * @param cardIndex index into [ovCards].
  * @return the focused pane's tile index, or `-1`.
  */
-private fun focusedTileIndex(cardIndex: Int): Int {
+internal fun focusedTileIndex(cardIndex: Int): Int {
     val card = ovCards.getOrNull(cardIndex) ?: return -1
     val focused = card.focusedPaneId ?: return -1
     return card.tiles.indexOfFirst { it.paneId == focused }
@@ -1561,10 +1692,13 @@ private fun focusedTileIndex(cardIndex: Int): Int {
 
 /**
  * Recomputes every tile view's render state and repaints, so it shows at once:
- *  - **fidelity**: the selected tab's live terminal tiles paint the exact
- *    colored cell grid; all others stay on the cheap thumbnail (only the front
- *    tab paints grids; mirror fallbacks never do — their 120×40 isn't the real
- *    geometry);
+ *  - **fidelity**: *every* live-terminal tile paints the exact colored cell grid
+ *    ([renderTerminalGrid]) — not just the selected tab's. The rotunda and exposé
+ *    show several tabs' panes at once, so limiting the accurate grid to the front
+ *    tab left the rest as the ugly re-wrapped monochrome thumbnail; rendering all
+ *    mounted panes keeps the whole scene true-to-form. Only mirror fallbacks
+ *    (unmounted tabs, fixed 120×40 — not the pane's real geometry) stay on the
+ *    cheap thumbnail, since their grid would be the wrong size.
  *  - **highlights**: each tile's `paneActive` (its tab's focused pane → steady
  *    accent glow + tinted header) and `paneSelected` (the front tab's current
  *    keyboard/hover pane → brighter, thicker glow) flags, drawn into the tile
@@ -1573,14 +1707,15 @@ private fun focusedTileIndex(cardIndex: Int): Int {
  * Called on open and on every tab/pane selection change ([selectCard],
  * [cyclePane], [setPaneSelection]).
  */
-private fun applyFidelity() {
+internal fun applyFidelity() {
     ovCards.forEachIndexed { i, card ->
         val front = i == ovSelected
         card.tiles.forEachIndexed { ti, tile ->
             val term = tile.contentKind == TileKind.TERMINAL
-            // Only live registry terms (real geometry) render at full fidelity;
+            // Any live registry term (real pane geometry) renders at full colored
+            // fidelity, in whatever style and whichever tab it belongs to; only
             // mirror fallbacks (fixed 120×40) stay on the cheap thumbnail.
-            val full = front && term && tile.source?.live == true
+            val full = term && tile.source?.live == true
             tile.view.fullFidelity = full
             tile.view.paneActive = tile.paneId == card.focusedPaneId
             tile.view.paneSelected = front && ti == ovPaneSelected
@@ -1608,7 +1743,7 @@ private fun applyFidelity() {
  *
  * @param delta +1 = next pane (↓ / Tab), -1 = previous (↑ / Shift+Tab).
  */
-private fun cyclePane(delta: Int) {
+internal fun cyclePane(delta: Int) {
     val card = ovCards.getOrNull(ovSelected) ?: return
     val n = card.tiles.size
     if (n == 0) return
@@ -1628,7 +1763,7 @@ private fun cyclePane(delta: Int) {
  *
  * @param index tile index into the front card's tiles, or `-1`.
  */
-private fun setPaneSelection(index: Int) {
+internal fun setPaneSelection(index: Int) {
     if (index == ovPaneSelected) return
     ovPaneSelected = index
     updateTitleReadout()
@@ -1641,14 +1776,14 @@ private fun setPaneSelection(index: Int) {
  *
  * @return the highlighted pane id, or `null`.
  */
-private fun selectedPaneId(): String? =
+internal fun selectedPaneId(): String? =
     ovCards.getOrNull(ovSelected)?.tiles?.getOrNull(ovPaneSelected)?.paneId
 
 /**
  * Mirrors the selection into the overlay readout: the tab title alone, or
  * `Tab › Pane` when a specific pane is highlighted.
  */
-private fun updateTitleReadout() {
+internal fun updateTitleReadout() {
     val card = ovCards.getOrNull(ovSelected)
     if (card == null) { ovTitleEl?.textContent = ""; return }
     val tile = card.tiles.getOrNull(ovPaneSelected)
@@ -1665,7 +1800,7 @@ private fun updateTitleReadout() {
  * @param paneId specific pane to focus and raise (a clicked pane tile), or
  *   `null` to activate the tab with its focus unchanged.
  */
-private fun beginDive(paneId: String?) {
+internal fun beginDive(paneId: String?) {
     val card = ovCards.getOrNull(ovSelected) ?: return
     if (!ovDiveStart.isNaN()) return
     launchCmd(WindowCommand.SetActiveTab(card.tabId))
@@ -1680,24 +1815,19 @@ private fun beginDive(paneId: String?) {
 }
 
 /**
- * Raycasts the current pointer position against the pickable meshes: every
- * card, plus the pane tiles of the selected card once it has split. Returns
- * the nearest hit's `userData` payload (`index` always present, `paneId`
- * only on tiles).
+ * Raycasts the current pointer position ([ovPointerNdc]) against [meshes] and
+ * returns the nearest hit's `userData` payload (`index` always present, `paneId`
+ * only on tiles), or `null` over empty space. The style decides *which* meshes
+ * are pickable via [Overview3DStyle.pickables]; this is the shared ray logic.
  *
- * @return the hit payload, or `null` when the pointer is over empty space.
+ * @param meshes candidate meshes to intersect (cards, tiles, …).
+ * @return the nearest hit's `userData`, or `null`.
  */
-private fun pickUserData(): dynamic {
+internal fun raycastPointer(meshes: Array<dynamic>): dynamic {
     val camera = ovCamera ?: return null
-    if (ovCards.isEmpty()) return null
+    if (meshes.isEmpty()) return null
     ovRaycaster.setFromCamera(ovPointerNdc, camera)
-    val meshes = mutableListOf<dynamic>()
-    for (card in ovCards) meshes.add(card.mesh.asDynamic())
-    val sel = ovCards.getOrNull(ovSelected)
-    if (sel != null && sel.split > 0.5) {
-        for (tile in sel.tiles) meshes.add(tile.mesh.asDynamic())
-    }
-    val hits = ovRaycaster.intersectObjects(meshes.toTypedArray(), false)
+    val hits = ovRaycaster.intersectObjects(meshes, false)
     if (hits.isEmpty()) return null
     // NOTE: hits[0] is already `dynamic` — do NOT call .asDynamic() on it.
     // On a dynamic receiver that compiles to a literal JS `.asDynamic()`
@@ -1720,128 +1850,34 @@ private fun layoutRenderer() {
     camera.updateProjectionMatrix()
 }
 
-/** Smoothstep ease used by the split and dive animations. */
-private fun ease(p: Double): Double = p * p * (3.0 - 2.0 * p)
+/** Smoothstep ease shared by the styles' split / dive / zoom animations. */
+internal fun ease(p: Double): Double = p * p * (3.0 - 2.0 * p)
 
 /**
- * Starts the per-frame animation loop: eases the ring toward the selected
- * card (shortest way around), bobs the cards, animates the front card's
- * split-into-panes, decays the activity glows, applies hover scaling,
- * advances the dive-in camera, and renders.
+ * Starts the per-frame animation loop. Each frame delegates all layout/motion
+ * to the active [Overview3DStyle.tick] (ring easing + split for the carousel,
+ * cylinder spin for the rotunda, zoom for the exposé), then the core handles
+ * the uniform parts: completing a dive-in ([ovDiveStart]) after [DIVE_MS] by
+ * closing the overview, and rendering.
  *
- * Each frame's body runs inside a try/catch: a per-frame error is logged
- * and the loop keeps running — a single bad frame must never freeze the
- * overview (which is exactly what the [pickUserData] TypeError used to do).
+ * Each frame's body runs inside a try/catch: a per-frame error is logged and
+ * the loop keeps running — a single bad frame must never freeze the overview
+ * (which is exactly what the [raycastPointer] TypeError used to do).
  *
  * @param renderer the cached renderer.
  * @param scene the cached scene.
  * @param camera the cached camera.
  */
 private fun startRenderLoop(renderer: WebGLRenderer, scene: Scene, camera: PerspectiveCamera) {
-    val step = if (ovCards.isNotEmpty()) 2.0 * PI / ovCards.size else 0.0
-
     fun tick(now: Double) {
-        // Ease the ring toward the selected card along the shortest arc.
-        val target = -ovSelected * step
-        val delta = atan2(sin(target - ovRingAngle), cos(target - ovRingAngle))
-        ovRingAngle += delta * 0.16
-        val ring = ovRing
-        if (ring != null) ring.rotation.y = ovRingAngle
-        val settled = abs(delta) < 0.03
+        ovActiveStyle?.tick(now, camera)
 
-        // Hover pick (skipped mid-dive so the pop doesn't fight the zoom).
-        // Hovering a front-card pane tile drives the same pane highlight the
-        // keyboard uses, so mouse and ↑/↓ agree on the selection.
-        val hoverUd = if (ovDiveStart.isNaN()) pickUserData() else null
-        val hoverIndex = if (hoverUd == null) null else (hoverUd.index as? Int)
-        if (ovPointerMoved && hoverUd != null && hoverIndex == ovSelected) {
-            val hpid = hoverUd.paneId as? String
-            if (hpid != null) {
-                val ti = ovCards[ovSelected].tiles.indexOfFirst { it.paneId == hpid }
-                if (ti >= 0) setPaneSelection(ti)
-            }
-        }
-        ovPointerMoved = false
-
-        ovCards.forEachIndexed { i, card ->
-            // Gentle idle float so the scene never feels frozen. Biased upward
-            // (and shallower) so even at the bottom of the bob the front card's
-            // lowest split panes stay clear of the lower viewport edge.
-            card.mesh.position.y = 0.05 + sin(now * 0.0012 + i * 1.3) * 0.03
-
-            // Glow = decaying PTY-activity breathing on *background* tabs only.
-            // The front tab gets no glow: it's already obvious (forward + about
-            // to split), and a big card-sized accent halo there just flashed a
-            // stray rectangle on every tab switch and behind the split panes.
-            val activity = max(0.0, 1.0 - (now - card.latestActivity()) / GLOW_FADE_MS)
-            val glowTarget = if (i == ovSelected) 0.0 else activity * 0.45
-            card.glowMaterial.opacity += (glowTarget - card.glowMaterial.opacity) * 0.12
-
-            val scaleTarget = if (i == hoverIndex) 1.05 else 1.0
-            val s = (card.mesh.scale.x as Double) + (scaleTarget - (card.mesh.scale.x as Double)) * 0.2
-            card.mesh.scale.set(s, s, 1.0)
-
-            val isFront = i == ovSelected
-
-            // Reveal: dissolve the selected card from its flat whole-tab
-            // thumbnail into its (bordered, accent-headed) pane tiles as it
-            // rotates to dead-center — driven by the ring delta, NOT the split
-            // (see [REVEAL_ARC]). Easing toward the target smooths the handoff
-            // when the selection changes, so the outgoing card melts back to a
-            // flat card and the incoming one grows its panes + chrome as one
-            // unit with the turn, never popping the border/header in afterward.
-            val revealTarget = if (isFront) (1.0 - abs(delta) / REVEAL_ARC).coerceIn(0.0, 1.0) else 0.0
-            card.reveal += (revealTarget - card.reveal) * 0.2
-            val r = ease(card.reveal.coerceIn(0.0, 1.0))
-            card.cardMaterial.opacity = 1.0 - r
-
-            // Split-into-panes: once the front card is fully revealed and
-            // settled, its pane tiles ease apart from their assembled (flush)
-            // layout, lifting toward the camera. Opacity is the reveal above;
-            // the split only drives position/curvature, so the panes are
-            // already solid (with chrome) before they spread.
-            val splitTarget = if (isFront && settled) 1.0 else 0.0
-            card.split += (splitTarget - card.split) * 0.14
-            val e = ease(card.split.coerceIn(0.0, 1.0))
-            card.tiles.forEachIndexed { ti, tile ->
-                tile.material.opacity = r
-                tile.mesh.visible = r > 0.02
-                tile.mesh.position.set(
-                    tile.homeX + (tile.splitX - tile.homeX) * e,
-                    tile.homeY + (tile.splitY - tile.homeY) * e,
-                    tile.homeZ + (tile.splitZ - tile.homeZ) * e,
-                )
-                // Outward curve: each tile tilts so its *outer* edges bow away
-                // from the camera (top-left corner furthest back), complementing
-                // the per-pane dish geometry so the exploded panes read as a
-                // curved wall wrapping the viewer. Scaled by the split factor so
-                // they lie flat when assembled.
-                val yaw = (CURVE_K * tile.splitX).coerceIn(-CURVE_MAX_RAD, CURVE_MAX_RAD) * e
-                val pitch = (-CURVE_K * tile.splitY).coerceIn(-CURVE_MAX_RAD, CURVE_MAX_RAD) * e
-                tile.mesh.rotation.set(pitch, yaw, 0.0)
-                // The active-pane ring and keyboard-selection highlight are
-                // drawn into the tile canvas (see [ThumbView.drawPaneBorder]),
-                // set by [applyFidelity]; here we only add a slight pop to the
-                // selected pane.
-                val selected = isFront && ti == ovPaneSelected
-                val tScaleTarget = if (selected) 1.05 else 1.0
-                val ts = (tile.mesh.scale.x as Double) + (tScaleTarget - (tile.mesh.scale.x as Double)) * 0.2
-                tile.mesh.scale.set(ts, ts, 1.0)
-            }
-        }
-
-        // Dive-in: fly the camera into the front card while the CSS fade
-        // runs; land on the real tab when both complete.
-        if (!ovDiveStart.isNaN()) {
-            val p = ((now - ovDiveStart) / DIVE_MS).coerceIn(0.0, 1.0)
-            val ez = ease(p)
-            val baseZ = ovRadius + CAMERA_DISTANCE
-            val targetZ = ovRadius + 0.9
-            camera.position.set(0.0, CAMERA_Y * (1.0 - ez), baseZ - (baseZ - targetZ) * ez)
-            if (p >= 1.0) {
-                closeOverview3d()
-                return
-            }
+        // Dive-in completion is uniform across styles: once the fade window has
+        // elapsed, land on the real tab (the command already dispatched in
+        // [beginDive]). Styles may animate a camera during the same window.
+        if (!ovDiveStart.isNaN() && (now - ovDiveStart) >= DIVE_MS) {
+            closeOverview3d()
+            return
         }
 
         renderer.render(scene, camera)
@@ -1882,13 +1918,16 @@ internal fun closeOverview3d() {
     ovResizeHandler = null
     onPaneContentUpdated = null
 
+    // Let the style remove its own scene objects (groups, decorations) before
+    // the shared card / tile GPU resources are disposed below.
+    ovScene?.let { scene -> ovActiveStyle?.teardown(scene) }
+    ovActiveStyle = null
+
     for (source in ovSources.values) source.dispose()
     ovSources.clear()
     ovPalette = null
     for (card in ovCards) card.dispose()
     ovCards.clear()
-    ovRing?.let { ring -> ovScene?.remove(ring) }
-    ovRing = null
     ovCardGeometry?.dispose()
     ovCardGeometry = null
     ovGlowGeometry?.dispose()

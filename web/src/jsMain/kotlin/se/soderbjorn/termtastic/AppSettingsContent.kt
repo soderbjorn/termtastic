@@ -38,6 +38,9 @@
  * `/api/ui-settings`:
  *   - `experimentalFileBrowser` (Boolean, default false)
  *   - `experimentalGitView` (Boolean, default false)
+ *   - `experimental3dSwitcher` (Boolean, default false)
+ *   - `experimental3dSwitcherStyle` (String, default "carousel") — which 3D
+ *     switcher style the picker selects; only shown while the switcher is on.
  *   - `terminalProgramTitle` (Boolean, default false)
  *
  * Reads consult [toolkitSettingsSnapshot] (already mirrored from the
@@ -74,6 +77,22 @@ private const val KEY_EXPERIMENTAL_GIT_VIEW = "experimentalGitView"
 
 /** Persistence key for the experimental 3D tab/pane switcher flag. */
 private const val KEY_EXPERIMENTAL_OVERVIEW_3D = "experimental3dSwitcher"
+
+/**
+ * Persistence key for which 3D-switcher *style* is active (carousel ring,
+ * rotunda, or exposé zoom). Only consulted while [KEY_EXPERIMENTAL_OVERVIEW_3D]
+ * is on. Read at open time by [openOverview3d]; see [experimental3dSwitcherStyle].
+ */
+private const val KEY_EXPERIMENTAL_OVERVIEW_3D_STYLE = "experimental3dSwitcherStyle"
+
+/** Persisted value for the original carousel-ring style (the default). */
+internal const val OVERVIEW_3D_STYLE_CAROUSEL = "carousel"
+
+/** Persisted value for the rotunda (inside-a-cylinder) style. */
+internal const val OVERVIEW_3D_STYLE_ROTUNDA = "rotunda"
+
+/** Persisted value for the exposé-zoom (real-layout → grid) style. */
+internal const val OVERVIEW_3D_STYLE_EXPOSE = "expose"
 
 // The opt-in "use program-set terminal titles" flag persists under
 // TERMINAL_PROGRAM_TITLE_KEY from the shared clientServer module — the server
@@ -191,6 +210,34 @@ fun isExperimental3dSwitcherEnabled(): Boolean =
     snapshotBoolean(KEY_EXPERIMENTAL_OVERVIEW_3D)
 
 /**
+ * Read a String value from the in-memory server-settings snapshot, falling
+ * back to [default] when the key is missing or isn't a JSON string. Mirrors
+ * [snapshotBoolean] for string-valued settings (e.g. the 3D-switcher style).
+ *
+ * @param key the top-level key in [toolkitSettingsSnapshot].
+ * @param default returned when the key is absent or not a string primitive.
+ * @return the stored string, or [default].
+ */
+private fun snapshotString(key: String, default: String): String {
+    val element = toolkitSettingsSnapshot[key] ?: return default
+    val primitive = (element as? JsonPrimitive) ?: return default
+    return if (primitive.isString) primitive.content else default
+}
+
+/**
+ * The user's chosen 3D-switcher style, one of [OVERVIEW_3D_STYLE_CAROUSEL]
+ * (the default), [OVERVIEW_3D_STYLE_ROTUNDA], or [OVERVIEW_3D_STYLE_EXPOSE].
+ * Consulted by [openOverview3d] each time the overview opens, so changing the
+ * dropdown takes effect on the next open without a reload. Only meaningful
+ * while [isExperimental3dSwitcherEnabled] is true.
+ *
+ * @return the persisted style id, defaulting to the carousel ring.
+ * @see KEY_EXPERIMENTAL_OVERVIEW_3D_STYLE
+ */
+fun experimental3dSwitcherStyle(): String =
+    snapshotString(KEY_EXPERIMENTAL_OVERVIEW_3D_STYLE, OVERVIEW_3D_STYLE_CAROUSEL)
+
+/**
  * Whether panes should take the title the running program sets (OSC 0/2).
  * Read only to seed the toggle's initial state in
  * [buildExperimentalSection]; the actual feature logic lives server-side
@@ -228,6 +275,38 @@ private fun updateSnapshotBoolean(key: String, value: Boolean) {
  */
 @OptIn(DelicateCoroutinesApi::class)
 private fun putJsonBoolean(key: String, value: Boolean) {
+    GlobalScope.launch {
+        webSettingsPersister.putJsonSettings(buildJsonObject {
+            put(key, JsonPrimitive(value))
+        })
+    }
+}
+
+/**
+ * Mirror a single string key into [toolkitSettingsSnapshot] synchronously, so
+ * a subsequent read (e.g. [experimental3dSwitcherStyle]) sees the new value
+ * without waiting for the server echo. String counterpart of
+ * [updateSnapshotBoolean].
+ *
+ * @param key   the top-level key to update.
+ * @param value the new string value.
+ */
+private fun updateSnapshotString(key: String, value: String) {
+    val merged = toolkitSettingsSnapshot.toMutableMap()
+    merged[key] = JsonPrimitive(value)
+    toolkitSettingsSnapshot = JsonObject(merged)
+}
+
+/**
+ * Persist a single string key through the same `putJsonSettings` REST bridge
+ * [putJsonBoolean] uses, so the value lands on the server as a real JSON
+ * string. String counterpart of [putJsonBoolean].
+ *
+ * @param key   the top-level key to write.
+ * @param value the string value to persist.
+ */
+@OptIn(DelicateCoroutinesApi::class)
+private fun putJsonString(key: String, value: String) {
     GlobalScope.launch {
         webSettingsPersister.putJsonSettings(buildJsonObject {
             put(key, JsonPrimitive(value))
@@ -424,18 +503,39 @@ private fun buildExperimentalSection(): HTMLElement {
             putJsonBoolean(KEY_EXPERIMENTAL_GIT_VIEW, v)
         },
     ))
+    // The style dropdown only makes sense while the switcher is on, so it is
+    // built up-front (to capture its onChange) but shown/hidden in lock-step
+    // with the enable toggle below.
+    val styleRow = buildChoiceRow(
+        labelText = "3D app switcher style",
+        options = listOf(
+            "Carousel ring" to OVERVIEW_3D_STYLE_CAROUSEL,
+            "Rotunda" to OVERVIEW_3D_STYLE_ROTUNDA,
+            "Exposé zoom" to OVERVIEW_3D_STYLE_EXPOSE,
+        ),
+        initialValue = experimental3dSwitcherStyle(),
+        onChange = { v ->
+            updateSnapshotString(KEY_EXPERIMENTAL_OVERVIEW_3D_STYLE, v)
+            putJsonString(KEY_EXPERIMENTAL_OVERVIEW_3D_STYLE, v)
+        },
+    )
+    styleRow.style.display = if (isExperimental3dSwitcherEnabled()) "" else "none"
+
     section.appendChild(buildToggleRow(
         labelText = "Enable 3D app switcher",
         initialValue = isExperimental3dSwitcherEnabled(),
         onChange = { v ->
             updateSnapshotBoolean(KEY_EXPERIMENTAL_OVERVIEW_3D, v)
             putJsonBoolean(KEY_EXPERIMENTAL_OVERVIEW_3D, v)
+            // Reveal the style picker in step with the toggle.
+            styleRow.style.display = if (v) "" else "none"
             // Show/hide the topbar globe button live; the ⌥⌘→ hotkey gates
             // itself through the toggleOverview3d chokepoint, so it needs no
             // work here.
             applyOverview3dChromeVisibility()
         },
     ))
+    section.appendChild(styleRow)
     section.appendChild(buildToggleRow(
         labelText = "Use program-set terminal titles",
         initialValue = isTerminalProgramTitleEnabled(),
@@ -508,6 +608,63 @@ private fun buildToggleRow(
 
     val buttons = mutableListOf<HTMLElement>()
     for ((btnLabel, value) in listOf("On" to true, "Off" to false)) {
+        val btn = document.createElement("button") as HTMLElement
+        (btn.asDynamic()).type = "button"
+        btn.className = "dt-settings-choice-btn" + if (value == initialValue) " dt-selected" else ""
+        btn.textContent = btnLabel
+        btn.addEventListener("click", { _: Event ->
+            buttons.forEach { it.classList.remove("dt-selected") }
+            btn.classList.add("dt-selected")
+            onChange(value)
+        })
+        buttons.add(btn)
+        btnRow.appendChild(btn)
+    }
+    row.appendChild(btnRow)
+
+    return row
+}
+
+/**
+ * A single labelled multiple-choice button row, the string-valued sibling of
+ * [buildToggleRow]. Renders [labelText] above a `.dt-settings-button-row` of
+ * pill buttons (one per entry of [options]); the button whose value equals the
+ * current selection carries the toolkit's `dt-selected` highlight. Selection is
+ * updated optimistically in the DOM on click so the highlight moves immediately,
+ * regardless of the async persistence in [onChange].
+ *
+ * Used for the 3D-switcher **style** picker (carousel / rotunda / exposé), which
+ * needs three options rather than the On/Off pair [buildToggleRow] hard-codes.
+ *
+ * @param labelText    the visible label shown above the buttons.
+ * @param options      `(button label, persisted value)` pairs, left to right.
+ * @param initialValue the value whose button starts selected.
+ * @param onChange     invoked with the newly-picked value on each change.
+ * @return the freshly-built row element.
+ * @see buildToggleRow
+ */
+private fun buildChoiceRow(
+    labelText: String,
+    options: List<Pair<String, String>>,
+    initialValue: String,
+    onChange: (String) -> Unit,
+): HTMLElement {
+    val row = document.createElement("div") as HTMLElement
+    row.className = "termtastic-app-settings-toggle-row"
+
+    val header = document.createElement("div") as HTMLElement
+    header.className = "termtastic-app-settings-toggle-header"
+    val labelEl = document.createElement("span") as HTMLElement
+    labelEl.className = "termtastic-app-settings-toggle-label"
+    labelEl.textContent = labelText
+    header.appendChild(labelEl)
+    row.appendChild(header)
+
+    val btnRow = document.createElement("div") as HTMLElement
+    btnRow.className = "dt-settings-button-row"
+
+    val buttons = mutableListOf<HTMLElement>()
+    for ((btnLabel, value) in options) {
         val btn = document.createElement("button") as HTMLElement
         (btn.asDynamic()).type = "button"
         btn.className = "dt-settings-choice-btn" + if (value == initialValue) " dt-selected" else ""
