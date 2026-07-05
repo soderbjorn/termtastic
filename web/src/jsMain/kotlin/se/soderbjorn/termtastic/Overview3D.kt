@@ -1965,6 +1965,14 @@ internal fun closeOverview3d() {
         it.classList.remove("overview3d-closing")
         it.style.display = "none"
     }
+
+    // The overlay grabbed keyboard focus while open (see [openOverview3d]'s
+    // `overlay.focus()`), and the commands a dive sends (SetActiveTab /
+    // SetFocusedPane) frequently produce no config change — so nothing else
+    // would hand focus back to the selected pane. Restore it explicitly, now
+    // that the overlay is hidden, so the picked pane's cursor is focused
+    // rather than merely active.
+    focusActivePaneNow()
 }
 
 /* ---------------------------------------------------------------------- */

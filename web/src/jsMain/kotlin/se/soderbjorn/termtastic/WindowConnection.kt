@@ -225,14 +225,36 @@ private fun refocusActivePane(config: dynamic) {
     val tabsArr = config.tabs as? Array<dynamic> ?: return
     val activeTab = tabsArr.firstOrNull { (it.id as? String) == activeTabId } ?: return
     if ((activeTab.focusedPaneId as? String) == null) return
+    focusActivePaneNow()
+}
+
+/**
+ * Focus the xterm textarea of the active tab's server-remembered focused
+ * pane on the next frame, reading [currentConfig] fresh at frame time.
+ *
+ * The frame body of [refocusActivePane], split out so callers that need to
+ * restore focus *unconditionally* — i.e. not gated on a config push having
+ * changed anything — can share the exact same restoration logic. The 3D app
+ * switcher is the motivating caller: closing the overlay ([closeOverview3d])
+ * must hand keyboard focus back to the selected pane's terminal, but the
+ * commands it sends (`SetActiveTab` / `SetFocusedPane`) frequently produce no
+ * config change (the picked tab was already active, or its focused pane was
+ * already the target), so nothing would drive [refocusActivePane]. The
+ * overlay itself grabbed focus while open, so without an explicit restore the
+ * cursor is left stranded in `<body>` after the overlay hides.
+ *
+ * Re-resolves the target from [currentConfig] at frame time rather than
+ * capturing it: config pushes can arrive faster than frames, and a captured
+ * target would focus a pane the server has already moved on from, churning
+ * DOM focus between two stale values. With the fresh read, a burst of pushes
+ * (or an overlay close racing a push) converges on a single focus of the
+ * latest pane.
+ *
+ * @see refocusActivePane
+ * @see closeOverview3d
+ */
+internal fun focusActivePaneNow() {
     kotlinx.browser.window.requestAnimationFrame {
-        // Re-resolve the target from [currentConfig] at frame time
-        // rather than capturing it from the config that scheduled this
-        // callback. Config pushes can arrive faster than frames; a
-        // captured target would focus a pane the server has already
-        // moved on from, churning DOM focus between two stale values.
-        // With the fresh read, a burst of pushes converges on a single
-        // focus of the latest pane.
         val cfg: dynamic = currentConfig ?: return@requestAnimationFrame
         val tabs = cfg.tabs as? Array<dynamic> ?: return@requestAnimationFrame
         val nowActiveId = cfg.activeTabId as? String ?: return@requestAnimationFrame
