@@ -183,8 +183,12 @@ fun updateOobOverlay(entry: TerminalEntry) {
         return el
     }
 
-    val screen = entry.term.asDynamic().element
-        ?.asDynamic()?.querySelector(".xterm-screen") as? HTMLElement
+    // NB: `?.asDynamic()` on an already-dynamic receiver compiles to a *real*
+    // `.asDynamic()` method call on the JS object (a TypeError at runtime) — cast
+    // to a static type first. This threw on every call with a live element,
+    // aborting each caller mid-resize (e.g. inside xterm's synchronous onResize).
+    val screen = (entry.term.asDynamic().element as? HTMLElement)
+        ?.querySelector(".xterm-screen") as? HTMLElement
     if (screen == null) {
         entry.oobOverlayRight?.style?.display = "none"
         entry.oobOverlayBottom?.style?.display = "none"
@@ -199,14 +203,31 @@ fun updateOobOverlay(entry: TerminalEntry) {
     val containerHeight = (containerRect.height as? Number)?.toDouble() ?: 0.0
     val screenLeft = ((screenRect.left as? Number)?.toDouble() ?: 0.0) - containerLeft
     val screenTop = ((screenRect.top as? Number)?.toDouble() ?: 0.0) - containerTop
-    val screenWidth = (screenRect.width as? Number)?.toDouble() ?: 0.0
-    val screenHeight = (screenRect.height as? Number)?.toDouble() ?: 0.0
+    // Size the *used* area arithmetically from the live grid (cols × cellWidth),
+    // not from the screen's DOM rect: xterm repaints its DOM asynchronously, so
+    // right after a resize/reformat the rect still reports the old size — the
+    // overlay would recompute against stale geometry and never clear. The DOM
+    // rect is used only as a fallback until the renderer has cell dimensions.
+    val oobCell = entry.term.asDynamic()._core?._renderService?.dimensions?.css?.cell
+    val cellW = (oobCell?.width as? Number)?.toDouble()?.takeIf { it > 1.0 }
+    val cellH = (oobCell?.height as? Number)?.toDouble()?.takeIf { it > 1.0 }
+    val screenWidth =
+        if (cellW != null) entry.term.cols * cellW
+        else (screenRect.width as? Number)?.toDouble() ?: 0.0
+    val screenHeight =
+        if (cellH != null) entry.term.rows * cellH
+        else (screenRect.height as? Number)?.toDouble() ?: 0.0
 
     val gapRight = containerWidth - (screenLeft + screenWidth)
     val gapBottom = containerHeight - (screenTop + screenHeight)
-    val minGap = 4.0
+    // Only flag gaps of at least one full cell: a perfectly fitted terminal always
+    // leaves a sub-cell remainder (you can't fill a box with a fraction of a cell),
+    // and that sliver must not read as "unused space". Falls back to generous
+    // estimates when the renderer hasn't produced cell dimensions yet.
+    val minGapX = maxOf(4.0, cellW ?: 10.0)
+    val minGapY = maxOf(4.0, cellH ?: 20.0)
 
-    if (gapRight > minGap && screenHeight > 0) {
+    if (gapRight > minGapX && screenHeight > 0) {
         val right = ensure("right")
         right.style.display = "block"
         right.style.left = "${screenLeft + screenWidth}px"
@@ -217,7 +238,7 @@ fun updateOobOverlay(entry: TerminalEntry) {
         entry.oobOverlayRight?.style?.display = "none"
     }
 
-    if (gapBottom > minGap && containerWidth > 0) {
+    if (gapBottom > minGapY && containerWidth > 0) {
         val bottom = ensure("bottom")
         bottom.style.display = "block"
         bottom.style.left = "${screenLeft}px"

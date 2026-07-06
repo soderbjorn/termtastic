@@ -125,20 +125,30 @@ fun connectPane(entry: TerminalEntry) {
         entry.connected = true
         connectionState[entry.sessionId] = "connected"
         updateAggregateStatus()
-        // Reassert the grid size to the PTY on every fresh socket open
-        // — covers cold startup (panes restored from the server with a
-        // stale PTY cols/rows) and reconnects after network blips.
-        // Runs SYNCHRONOUSLY (not via setTimeout) because the server can
-        // push a `PtyServerMessage.Size` immediately after the socket
-        // opens; `applyServerSize` would resize the local term to the
-        // old PTY value, and a deferred forceReassert would then send
-        // those stale dims back as the "forced" size — locking the PTY
-        // at its pre-restore geometry. Sampling `term.cols/rows`
-        // inside `onopen` happens before any `onmessage` can fire.
-        // For panes whose container isn't on-screen yet (inactive tabs
-        // at startup), defer to the hidden→visible edge in the
-        // ResizeObserver and keep the existing soft `sendResize` as a
-        // best-effort ping while detached.
+        // Fit to our container and cast a *soft* size vote on every fresh
+        // socket open — covers cold startup (panes restored from the server
+        // with a stale PTY cols/rows) and reconnects after network blips.
+        // The fit runs SYNCHRONOUSLY (not via setTimeout) because the server
+        // can push a `PtyServerMessage.Size` immediately after the socket
+        // opens; `applyServerSize` would resize the local term to the old PTY
+        // value, and a deferred fit would then sample those stale dims.
+        // `sendResize` captures `term.cols/rows` at call time, so the vote
+        // carries the freshly fitted grid even though the send is debounced.
+        //
+        // Deliberately a soft vote, NOT `forceReassert`: a ForceResize evicts
+        // every other client's size vote, so each reconnecting client
+        // (another window, a phone, a headless probe) bulldozed the shared
+        // PTY to its own grid — last connector wins, and a small background
+        // viewer could pin an interactive session tiny with no way to win it
+        // back. A soft vote fixes the cold-startup case just as well (min()
+        // over a single client's vote is exactly that client's size) while
+        // preserving the multi-client min semantics. The manual Reformat
+        // button keeps force semantics — that one is an explicit user action.
+        //
+        // For panes whose container isn't on-screen yet (inactive tabs at
+        // startup), defer to the hidden→visible edge in the ResizeObserver
+        // and keep the existing soft `sendResize` as a best-effort ping while
+        // detached.
         //
         // Skipped entirely when this pane has automatic reflow turned off:
         // the user has frozen its size, so we leave the PTY at whatever the
@@ -146,7 +156,8 @@ fun connectPane(entry: TerminalEntry) {
         // (`sendResize` would self-gate too, but bail early for clarity.)
         if (entry.autoReflow) {
             if (entry.container.offsetParent != null) {
-                try { forceReassert(entry) } catch (_: Throwable) {}
+                try { fitPreservingScroll(entry.term, entry.fit) } catch (_: Throwable) {}
+                sendResize()
             } else {
                 window.setTimeout({ sendResize() }, 0)
             }

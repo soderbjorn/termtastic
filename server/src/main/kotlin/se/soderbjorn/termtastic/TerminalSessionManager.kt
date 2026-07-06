@@ -469,9 +469,16 @@ class TerminalSession private constructor(
     /**
      * "Reformat" handler: evict every other client's entry, pin this
      * client's cols/rows, and apply immediately.
+     *
+     * The dims are clamped to a usable floor ([MIN_FORCE_COLS]×[MIN_FORCE_ROWS]),
+     * not just ≥1: a forced size is broadcast to and obeyed by **every** attached
+     * client, so a degenerate value from an unmeasured/hidden view (e.g. a 3D
+     * preview mid-layout proposing ~1×1) would collapse all of them at once.
+     * Regular [setClientSize] votes keep the ≥1 clamp — min() across clients
+     * already bounds their effect.
      */
     override fun forceClientSize(clientId: String, cols: Int, rows: Int) {
-        val only = Pair(max(1, cols), max(1, rows))
+        val only = Pair(max(MIN_FORCE_COLS, cols), max(MIN_FORCE_ROWS, rows))
         clientSizes.clear()
         clientSizes[clientId] = only
         applyEffectiveSize()
@@ -581,6 +588,17 @@ class TerminalSession private constructor(
                 .toByteArray(Charsets.US_ASCII)
 
         private val SHOW_CURSOR_SUFFIX = "[?25h".toByteArray(Charsets.US_ASCII)
+
+        /**
+         * Floor for a **forced** resize ([forceClientSize]) — the smallest grid a
+         * single client may pin the shared PTY (and thereby every other attached
+         * client) to. Generous enough for any real view, small enough to never
+         * fight a legitimately tiny pane. Regular per-client votes
+         * ([setClientSize]) are not floored beyond ≥1: they only ever *lower*
+         * the effective size via min() and never evict anyone.
+         */
+        private const val MIN_FORCE_COLS = 20
+        private const val MIN_FORCE_ROWS = 5
 
         fun create(initialCwd: String? = null, initialScrollback: ByteArray? = null): TerminalSession {
             val shell = System.getenv("SHELL") ?: "/bin/bash"
