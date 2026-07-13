@@ -177,7 +177,11 @@ internal fun tickPhaser(camera: PerspectiveCamera) {
 
     // --- Dispose the panes whose implosion just finished, then re-reconcile once. ---
     if (completed.isNotEmpty()) {
+        var blasted = false
         for (p in completed) {
+            // Burst a space explosion at the kill site *before* wiping the pane, while its
+            // CSS3D object is still in the scene to project — the payoff to the barrage.
+            if (EXPLOSION_ON_KILL) { spawnPaneExplosion(p, camera); blasted = true }
             p.phaserPhase = -1.0
             p.phaserRecoil = 0.0
             p.phaserTint?.let { runCatching { it.remove() } }
@@ -192,7 +196,15 @@ internal fun tickPhaser(camera: PerspectiveCamera) {
             p.dying = true
         }
         spikePhaserBolts.removeAll { b -> completed.any { it.paneId == b.paneId } }
-        reconcileRing()
+        // Reconciling is what renumbers the survivors and lets them slide into the freed
+        // slot. Hold that off for a beat when a blast is playing so the explosion reads
+        // first and the neighbour then glides in through the settling debris; otherwise
+        // (flag off) close the gap at once, as before. @see spawnPaneExplosion
+        if (blasted) {
+            window.setTimeout({ reconcileRing() }, EXPLOSION_PRE_SLIDE_MS)
+        } else {
+            reconcileRing()
+        }
     }
 }
 

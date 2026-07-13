@@ -1006,6 +1006,38 @@ internal const val PHASER_RECOIL_SCALE = 0.05 // scale punch per unit recoil
 internal const val PHASER_IMPLODE = 1.6 // inward bulge (× FLEX_BULGE) at full collapse
 
 /**
+ * **Feature flag** (no UI) for the **space explosion** that bursts at the kill site the
+ * instant a phaser-fire close finishes its implosion — the payoff to the barrage. When
+ * `true`, [tickPhaser]'s completion handoff calls [spawnPaneExplosion] at the dead pane's
+ * last screen position: a white-hot flash, an expanding cooling fireball, a thin
+ * shockwave ring and a spray of glowing debris/sparks flung radially outward (no gravity —
+ * this is space, so they only drag to a stop), all drawn additively in screen space by
+ * [tickExplosion]. The survivors' slide into the freed slot is then held back by
+ * [EXPLOSION_PRE_SLIDE_MS] so the blast reads *before* the ring closes the gap. Off →
+ * the old behaviour (implode, then immediately reconcile/slide).
+ *
+ * Sizes are fractions of the viewport's shorter edge so the blast scales with resolution:
+ * the fireball eases out to [EXPLOSION_FIREBALL_MAX_FRAC], the shockwave to
+ * [EXPLOSION_SHOCK_MAX_FRAC]. The core/fireball live [EXPLOSION_LIFE_FRAMES] frames (the
+ * first [EXPLOSION_FLASH_FRAMES] being the blue-white flash), the shockwave
+ * [EXPLOSION_SHOCK_FRAMES]. [EXPLOSION_DEBRIS_COUNT] sparks are seeded, each flung at up
+ * to [EXPLOSION_DEBRIS_SPEED] px/frame, slowed by [EXPLOSION_DEBRIS_DRAG]/frame and living
+ * up to [EXPLOSION_DEBRIS_LIFE] frames.
+ * @see spawnPaneExplosion @see tickExplosion @see tickPhaser
+ */
+internal const val EXPLOSION_ON_KILL = true
+internal const val EXPLOSION_PRE_SLIDE_MS = 240 // hold the survivors' slide this long so the blast lands first
+internal const val EXPLOSION_LIFE_FRAMES = 46.0 // ~0.77 s core/fireball lifetime
+internal const val EXPLOSION_FLASH_FRAMES = 7.0 // opening blue-white flash duration
+internal const val EXPLOSION_FIREBALL_MAX_FRAC = 0.24 // peak fireball radius (× min(w,h))
+internal const val EXPLOSION_SHOCK_FRAMES = 26.0 // shockwave-ring lifetime
+internal const val EXPLOSION_SHOCK_MAX_FRAC = 0.42 // peak shockwave radius (× min(w,h))
+internal const val EXPLOSION_DEBRIS_COUNT = 38 // sparks/chunks flung out
+internal const val EXPLOSION_DEBRIS_SPEED = 15.0 // peak initial spark speed (px/frame)
+internal const val EXPLOSION_DEBRIS_DRAG = 0.90 // per-frame velocity retention (space: drag only, no gravity)
+internal const val EXPLOSION_DEBRIS_LIFE = 44.0 // max spark lifetime in frames
+
+/**
  * **Feature flag** (no UI) for the **wormhole pane spawn** — the birth-effect
  * counterpart to the [PHASER_CLOSE_ENABLED] phaser-fire close. When `true`, a pane
  * created while the 3D world is open does *not* simply grow in at its ring slot;

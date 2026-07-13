@@ -898,6 +898,10 @@ internal fun startSpikeLoop() {
                 // rendered scene, so the camera matrices its projection uses are current.
                 // Inside the try so a throw here can never break the RAF chain and freeze the world.
                 tickPhaser(camera)
+                // Space explosion (feature-flagged): the fireball/shockwave/debris burst a
+                // phaser-killed pane leaves behind, drawn additively in screen space right
+                // after the phaser pass so it composites over the same freshly rendered scene.
+                tickExplosion()
                 // Warp-core (runtime-toggled): discharge blooms, thruster plumes, sonar pings
                 // and the reactor-load HUD, all in screen space over the rendered scene — so
                 // its projection uses current camera matrices, exactly like the phaser pass.

@@ -869,6 +869,10 @@ internal fun closeWorld3dSpike() {
     // so just drop the references and any bolts still in flight.
     spikePhaserBolts.clear()
     spikePhaserCanvas = null
+    // Space explosion: same story — canvas is an overlay child removed wholesale below, so
+    // just drop the reference and any blasts still blooming so a re-open starts cold.
+    spikeExplosions.clear()
+    spikeExplosionCanvas = null
     // Wormhole spawn: the portals are children of the CSS3D layer (removed wholesale
     // below), so just drop the registry (any mid-birth pane dies with the pane sweep above).
     clearWormholes()
