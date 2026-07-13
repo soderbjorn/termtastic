@@ -35,7 +35,7 @@ import kotlin.math.roundToInt
  * painted: a live PTY transcript, a fetched file-browser listing, a fetched
  * git status, or a static placeholder.
  */
-internal enum class TileKind { TERMINAL, FILE_BROWSER, GIT, OTHER }
+internal enum class TileKind { TERMINAL, FILE_BROWSER, GIT, WEB_BROWSER, OTHER }
 
 /**
  * A pane's fractional rectangle within its tab (0..1 of the tab area) plus

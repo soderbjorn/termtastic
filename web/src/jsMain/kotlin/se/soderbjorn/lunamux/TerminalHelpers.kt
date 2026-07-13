@@ -422,30 +422,24 @@ fun forceReassert(entry: TerminalEntry) {
     // would lock the PTY at the size it just told us it has, defeating
     // the purpose of the reassert (forcing the PTY to match our grid).
     if (entry.applyingServerSize) return
-    // Stand down while the pane rides a 3D-world plane: there the container is
-    // *derived from* the grid, so fitting the grid back to it is circular — the
-    // fit proposes container-minus-padding, i.e. slightly smaller, and every
-    // automatic reassert (window resize via onGeometryChanged, fonts-loaded,
-    // tab-activation visibility edge, the ⌃⌥R hotkey) ratchets the shared PTY
-    // down one step per event. The world has its own resize/reformat commands
-    // (setPaneGrid sends ForceResize directly); the world-close 2D restore
-    // still works because `spikeOpen` is cleared before its deferred reassert.
-    if (isRidingSpikePlane(entry)) return
-    // Fight detector: reaching this point with the 3D world open means the
-    // stand-down above did NOT recognize this entry (isRidingSpikePlane matches
-    // by object identity, so a 2D layout rebuild that minted a fresh
-    // TerminalEntry for a pane the ring still holds slips past it). The refit
-    // below then squeezes the grid back to the 2D box and reasserts the PTY —
-    // which visually reverts any 3D grid resize. Log loudly so the console
-    // shows exactly which side undid the user's grid key.
-    if (spikeOpen) {
-        console.warn(
-            "[world3d-spike] 2D forceReassert firing WHILE WORLD OPEN for pane ${entry.paneId} " +
-                "(session ${entry.sessionId}, grid ${entry.term.cols}x${entry.term.rows}): entry not " +
-                "recognized by the ring (stale entry after a 2D layout rebuild?) — refitting to the " +
-                "2D box and reasserting the PTY; this reverts 3D grid resizes"
-        )
-    }
+    // Stand down while the 3D world is open — for ANY pane, not just one the ring
+    // currently holds. While the world is up it is the sole size authority
+    // (setPaneGrid sends its own ForceResize) and the 2D shell is hidden, so every
+    // 2D-driven reassert here fits the grid to a hidden/transitional container and
+    // force-resizes the shared PTY, reverting the 3D grid.
+    //
+    // The old guard bailed only for panes *currently in the ring*
+    // ([isRidingSpikePlane] = `spikeOpen && paneId in spikePanes`). But a **world
+    // switch** (⌥⌘O, or the 2D world switcher) briefly drops the departing/arriving
+    // world's panes out of the ring while the toolkit rebuilds the 2D shell and
+    // fires `maybeReapplyPreset` → this `forceReassert` on them (see the console
+    // stack). Those slipped past the ring check and force-resized the PTY out from
+    // under the still-mounted 3D term — leaving the pane blank on return, curable
+    // only by a real 2D re-fit (a 2D world switch) after close. Guarding on
+    // `spikeOpen` alone closes that window. The world-close 2D restore still runs:
+    // [closeWorld3dSpike] clears `spikeOpen` before its deferred reassert.
+    // @see isRidingSpikePlane @see maybeReapplyPreset
+    if (spikeOpen) return
     try { fitPreservingScroll(entry.term, entry.fit) } catch (_: Throwable) {}
     sendForceResize(socket, entry.term)
 }
@@ -471,6 +465,35 @@ fun sendForceResize(socket: WebSocket, term: Terminal) {
         socket.send(
             windowJson.encodeToString<PtyControl>(
                 PtyControl.ForceResize(cols = term.cols, rows = term.rows)
+            )
+        )
+    }
+}
+
+/**
+ * Sends a soft [PtyControl.Resize] size **vote** for an explicit [cols]×[rows]
+ * grid at the given [priority] tier over [socket] (a no-op if the socket is not
+ * open). Unlike [sendForceResize] this evicts nobody — it just registers this
+ * client's vote, letting the server's tiered aggregation decide (see
+ * [se.soderbjorn.lunamux.SizePriority]).
+ *
+ * This is the 3D world's channel for asserting a pane's [Pane.grid3d] override:
+ * it votes at [SizePriority.THREE_D], which outranks the 2D clients' NORMAL
+ * votes without clobbering them, so the override takes effect while the world is
+ * open and is dropped automatically when the socket closes. Reverting a pane to
+ * native instead votes at [SizePriority.NORMAL].
+ *
+ * @param socket the PTY WebSocket to send the vote over.
+ * @param cols target column count. @param rows target row count.
+ * @param priority the tier this vote competes in.
+ * @see sendForceResize @see se.soderbjorn.lunamux.setPaneGrid
+ */
+fun sendResizeVote(socket: WebSocket, cols: Int, rows: Int, priority: SizePriority) {
+    if (socket.readyState.toInt() != WebSocket.OPEN.toInt()) return
+    runCatching {
+        socket.send(
+            windowJson.encodeToString<PtyControl>(
+                PtyControl.Resize(cols = cols, rows = rows, priority = priority)
             )
         )
     }

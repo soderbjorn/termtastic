@@ -299,12 +299,17 @@ internal fun buildPaneTile(
         source != null -> TileKind.TERMINAL
         content is FileBrowserContent -> TileKind.FILE_BROWSER
         content is GitContent -> TileKind.GIT
+        content is WebBrowserContent -> TileKind.WEB_BROWSER
         else -> TileKind.OTHER
     }
     val placeholder = when (kind) {
         TileKind.TERMINAL -> null
         TileKind.FILE_BROWSER -> "file browser"
         TileKind.GIT -> "git"
+        // Prefer the stored page title/URL as the tile caption; fall back to a
+        // generic label when the pane has never navigated.
+        TileKind.WEB_BROWSER ->
+            (content as? WebBrowserContent)?.let { it.title ?: it.url } ?: "web browser"
         TileKind.OTHER -> "no terminal"
     }
     // File-browser / git thumbnails read top-down (a listing), unlike the

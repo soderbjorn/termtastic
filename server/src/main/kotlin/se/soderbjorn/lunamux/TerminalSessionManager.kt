@@ -71,6 +71,30 @@ import kotlin.time.Duration.Companion.milliseconds
  * @see TerminalSession
  * @see TerminalSessions
  */
+/** One client's size vote: its grid plus the [SizePriority] tier it competes in. */
+internal data class SizeVote(val cols: Int, val rows: Int, val priority: SizePriority)
+
+/**
+ * Reduce a set of client size votes to the effective PTY grid: **highest tier
+ * wins, `min()` within it**. Pick the greatest [SizePriority] present, then the
+ * smallest cols/rows among the votes at that tier, so a higher tier fully
+ * overrides lower ones instead of being clamped by them (see [SizeVote] /
+ * [SizePriority]). An all-[SizePriority.NORMAL] set reduces to the classic
+ * "smallest attached viewport wins".
+ *
+ * Pure and side-effect free so the tiering is unit-testable in isolation;
+ * `TerminalSession.applyEffectiveSize` calls it with the live votes.
+ *
+ * @param votes the live per-client votes (may be empty).
+ * @return the effective `(cols, rows)`, or `null` when there are no votes.
+ */
+internal fun pickEffectiveSize(votes: Collection<SizeVote>): Pair<Int, Int>? {
+    if (votes.isEmpty()) return null
+    val topTier = votes.maxOf { it.priority }
+    val top = votes.filter { it.priority == topTier }
+    return top.minOf { it.cols } to top.minOf { it.rows }
+}
+
 interface TermSession {
     /** Broadcast stream of output bytes for attached clients. */
     val output: kotlinx.coroutines.flow.SharedFlow<ByteArray>
@@ -96,11 +120,30 @@ interface TermSession {
     /** Tear the session down and release all resources. */
     fun shutdown()
 
-    /** Register [clientId]'s viewport size (min() across clients wins). */
-    fun setClientSize(clientId: String, cols: Int, rows: Int)
+    /**
+     * Register [clientId]'s viewport size vote at the given [priority] tier.
+     * The effective grid is the `min()` within the single highest tier present
+     * across all clients (see [SizePriority]); an all-[SizePriority.NORMAL] set
+     * of votes reduces to the classic "smallest attached viewport wins".
+     */
+    fun setClientSize(
+        clientId: String,
+        cols: Int,
+        rows: Int,
+        priority: SizePriority = SizePriority.NORMAL,
+    )
 
-    /** Force the grid to [clientId]'s size, evicting other clients' votes. */
-    fun forceClientSize(clientId: String, cols: Int, rows: Int)
+    /**
+     * Force the grid to [clientId]'s size, evicting other clients' votes. The
+     * pinned entry keeps [priority] so a later higher-tier vote (e.g. a mobile
+     * client) can still take over.
+     */
+    fun forceClientSize(
+        clientId: String,
+        cols: Int,
+        rows: Int,
+        priority: SizePriority = SizePriority.NORMAL,
+    )
 
     /** Drop [clientId]'s size vote when its socket disconnects. */
     fun removeClient(clientId: String)
@@ -456,29 +499,29 @@ class TerminalSession private constructor(
         scope.cancel()
     }
 
-    private val clientSizes = ConcurrentHashMap<String, Pair<Int, Int>>()
+    private val clientSizes = ConcurrentHashMap<String, SizeVote>()
     private val _sizeEvents = MutableStateFlow(Pair(120, 32))
     override val sizeEvents: StateFlow<Pair<Int, Int>> = _sizeEvents.asStateFlow()
 
-    /** Register the declared terminal size for [clientId]. */
-    override fun setClientSize(clientId: String, cols: Int, rows: Int) {
-        clientSizes[clientId] = Pair(max(1, cols), max(1, rows))
+    /** Register the declared terminal size for [clientId] at [priority]. */
+    override fun setClientSize(clientId: String, cols: Int, rows: Int, priority: SizePriority) {
+        clientSizes[clientId] = SizeVote(max(1, cols), max(1, rows), priority)
         applyEffectiveSize()
     }
 
     /**
      * "Reformat" handler: evict every other client's entry, pin this
-     * client's cols/rows, and apply immediately.
+     * client's cols/rows (at [priority]), and apply immediately.
      *
      * The dims are clamped to a usable floor ([MIN_FORCE_COLS]×[MIN_FORCE_ROWS]),
      * not just ≥1: a forced size is broadcast to and obeyed by **every** attached
      * client, so a degenerate value from an unmeasured/hidden view (e.g. a 3D
      * preview mid-layout proposing ~1×1) would collapse all of them at once.
-     * Regular [setClientSize] votes keep the ≥1 clamp — min() across clients
-     * already bounds their effect.
+     * Regular [setClientSize] votes keep the ≥1 clamp — the tiered min() across
+     * clients already bounds their effect.
      */
-    override fun forceClientSize(clientId: String, cols: Int, rows: Int) {
-        val only = Pair(max(MIN_FORCE_COLS, cols), max(MIN_FORCE_ROWS, rows))
+    override fun forceClientSize(clientId: String, cols: Int, rows: Int, priority: SizePriority) {
+        val only = SizeVote(max(MIN_FORCE_COLS, cols), max(MIN_FORCE_ROWS, rows), priority)
         clientSizes.clear()
         clientSizes[clientId] = only
         applyEffectiveSize()
@@ -489,11 +532,21 @@ class TerminalSession private constructor(
         if (clientSizes.remove(clientId) != null) applyEffectiveSize()
     }
 
+    /**
+     * Recompute and apply the effective PTY grid from the live client votes.
+     *
+     * The rule is **highest tier wins, `min()` within it**: pick the single
+     * greatest [SizePriority] present among all live votes, then take the
+     * smallest cols/rows among the votes at that tier. A higher tier therefore
+     * fully overrides lower ones instead of being clamped by them — this is
+     * what lets the 3D world enlarge a pane ([SizePriority.THREE_D]) past a
+     * smaller 2D viewport ([SizePriority.NORMAL]), while a connected mobile
+     * client ([SizePriority.MOBILE]) still overrides even that. Because every
+     * vote is tied to a live socket, a closed/crashed view drops out here with
+     * no explicit teardown and the tier below takes over automatically.
+     */
     private fun applyEffectiveSize() {
-        val sizes = clientSizes.values
-        if (sizes.isEmpty()) return
-        val c = sizes.minOf { it.first }
-        val r = sizes.minOf { it.second }
+        val (c, r) = pickEffectiveSize(clientSizes.values) ?: return
         try {
             pty.winSize = WinSize(c, r)
         } catch (_: Throwable) {

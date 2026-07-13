@@ -73,11 +73,12 @@ internal fun buildRingChrome(overlay: HTMLElement) {
     spikeConfirmBadge = confirm
 
     // "Now showing" pane-name label — fades in on navigation, fades out fast.
-    // Anchored top-left, pushed down below the traffic lights *and* clear of the warp-core
-    // status banner (top:16px, ~33px tall) that now sits at the top-left corner.
+    // Anchored top-*right*, tucked just under the ✕ close button (top:14px, 34px tall), and
+    // right-aligned — so it lives in the opposite corner from the top-left per-world status
+    // boxes and the two never collide as the viewer cycles panes/tabs in the command center.
     val nav = document.createElement("div") as HTMLElement
-    nav.style.cssText = "position:absolute;top:82px;left:22px;z-index:4;pointer-events:none;" +
-        "text-align:left;opacity:0;transition:opacity 150ms ease;"
+    nav.style.cssText = "position:absolute;top:58px;right:16px;z-index:4;pointer-events:none;" +
+        "text-align:right;opacity:0;transition:opacity 150ms ease;"
     overlay.appendChild(nav)
     spikeNavLabel = nav
 
@@ -174,6 +175,7 @@ internal val SPIKE_SHORTCUT_SECTIONS: List<SpikeShortcutSection> = listOf(
     SpikeShortcutSection("NAVIGATE", listOf(
         SpikeShortcut("pane", "← →", "Switch window"),
         SpikeShortcut("tabs", "↑ ↓", "Go around tabs"),
+        SpikeShortcut("other-world", "⌥ ⌘ O", "Fly to next world"),
     )),
     SpikeShortcutSection("ARRANGE", listOf(
         SpikeShortcut("new-tab", "t", "New tab"),
@@ -192,6 +194,7 @@ internal val SPIKE_SHORTCUT_SECTIONS: List<SpikeShortcutSection> = listOf(
         SpikeShortcut("zoom-preset", "⇧+ ⇧− ⇧0", "Zoom: fit screen / min / 1:1"),
         SpikeShortcut("grid-w", ", .", "Grid width (cols)"),
         SpikeShortcut("grid-h", "< >", "Grid height (rows)"),
+        SpikeShortcut("grid-native", "/", "Restore native (2D) grid"),
         SpikeShortcut("reformat", "r", "Reformat window"),
     )),
     SpikeShortcutSection("CAMERA", listOf(
@@ -209,7 +212,6 @@ internal val SPIKE_SHORTCUT_SECTIONS: List<SpikeShortcutSection> = listOf(
     )),
     SpikeShortcutSection("SYSTEM", listOf(
         SpikeShortcut("selection", "⌥ ⌘ S", "Selection mode"),
-        SpikeShortcut("signal", "w", "Cycle signal: off → working → needs-input"),
         SpikeShortcut("screenshot", "P", "Screenshot to Desktop"),
         SpikeShortcut("recording", "⌥R", "Record to Desktop (toggle)"),
         SpikeShortcut("settings", "⌥ ⌘ ,", "3D settings"),
@@ -254,9 +256,11 @@ internal val SPIKE_FLY_SHORTCUT_SECTIONS: List<SpikeShortcutSection> = listOf(
         SpikeShortcut("zoom-reset", "0", "Reset zoom"),
         SpikeShortcut("grid-w", ", .", "Grid width (cols)"),
         SpikeShortcut("grid-h", "< >", "Grid height (rows)"),
+        SpikeShortcut("grid-native", "/", "Restore native (2D) grid"),
         SpikeShortcut("reformat", "r", "Reformat window"),
     )),
     SpikeShortcutSection("SYSTEM", listOf(
+        SpikeShortcut("other-world", "⌥ ⌘ O", "Fly to next world"),
         SpikeShortcut("screenshot", "P", "Screenshot to Desktop"),
         SpikeShortcut("recording", "⌥R", "Record to Desktop (toggle)"),
         SpikeShortcut("settings", "⌥ ⌘ ,", "3D settings"),
@@ -305,12 +309,12 @@ internal fun flyShortcutIdForCode(code: String): String? = when (code) {
  * [spikeLegendHidden] flag).
  *
  * In the **web demo** — demo mode in a plain browser ([isDemoClient] without
- * [isElectronClient]), i.e. the marketing site's embedded iframe — the same
- * bottom-left column also carries the big **"Play demo tour" button**
- * ([buildDemoTourButton]) stacked above whichever legend is visible. The
- * Electron demo launch keeps the tour reachable through the secret ⌥⌘M chord
- * only, and outside demo mode the tour has no simulated sessions to drive,
- * so no button is built in either case.
+ * [isElectronClient]), i.e. the marketing site's embedded iframe — a small
+ * **"Play demo tour" button** ([buildDemoTourButton]) is anchored to the
+ * overlay's upper-right, just left of the ✕ close button (not in this
+ * bottom-left legend column). The Electron demo launch keeps the tour reachable
+ * through the secret ⌥⌘M chord only, and outside demo mode the tour has no
+ * simulated sessions to drive, so no button is built in either case.
  *
  * @param overlay the spike overlay to append the legends to.
  */
@@ -353,7 +357,9 @@ internal fun buildShortcutsLegend(overlay: HTMLElement) {
     column.style.cssText = "position:absolute;left:16px;bottom:14px;z-index:3;pointer-events:none;" +
         "display:flex;flex-direction:column;align-items:flex-start;gap:10px;"
     overlay.appendChild(column)
-    if (isDemoClient && !isElectronClient) buildDemoTourButton(column)
+    // The tour button anchors to the overlay's upper-right (left of the ✕
+    // close button), not this bottom-left legend column.
+    if (isDemoClient && !isElectronClient) buildDemoTourButton(overlay)
     spikeLegendPanel = buildLegendPanel(
         column, "COMMAND CENTER", hostVisibleSections(SPIKE_SHORTCUT_SECTIONS), spikeLegendRows, spikeLegendSectionRows,
     )
@@ -420,18 +426,18 @@ private const val PLAY_TOUR_LABEL = "▶ Play demo tour"
 private const val STOP_TOUR_LABEL = "■ Stop demo tour"
 
 /**
- * Builds the big **"Play demo tour"** button above the shortcuts legend — the
- * clickable twin of the secret ⌥⌘M chord, wired straight to [toggleDemoMovie].
- * Web demo only ([isDemoClient] and not [isElectronClient], checked by the
- * caller [buildShortcutsLegend]) — in the Electron demo the tour stays a
- * hotkey-only secret.
+ * Builds the small **"Play demo tour"** button in the overlay's upper-right
+ * corner, just left of the ✕ close button — the clickable twin of the secret
+ * ⌥⌘M chord, wired straight to [toggleDemoMovie]. Web demo only ([isDemoClient]
+ * and not [isElectronClient], checked by the caller [buildShortcutsLegend]) —
+ * in the Electron demo the tour stays a hotkey-only secret.
  * For its first ~15 s the button pulses gently (a slow scale + accent-glow
  * swell) to draw the visitor's eye, then holds still
  * ([spikeDemoTourPulseTimer]); starting the tour ends the pulse early
- * ([updateDemoTourButton]). A small dim line under the button notes the tour
- * is optional — the legend keys are live for the visitor's own hands.
+ * ([updateDemoTourButton]).
  *
- * @param parent the bottom-left chrome column to append the button to.
+ * @param parent the spike overlay to append the button to (it positions itself
+ *   absolutely at top-right).
  */
 private fun buildDemoTourButton(parent: HTMLElement) {
     // Wear the current theme's accent (matching the rest of the ring chrome —
@@ -441,19 +447,23 @@ private fun buildDemoTourButton(parent: HTMLElement) {
 
     // The attention pulse needs @keyframes, which inline `style=` cannot
     // declare — so the keyframes ride in a <style> that lives and dies with
-    // the chrome column.
-    // A slow, gentle swell — attention-drawing without being disruptive.
+    // the chrome overlay. A slow, gentle swell — attention-drawing without
+    // being disruptive. (Scale about the top-right so the button doesn't drift
+    // into the close button as it swells.)
     val pulse = document.createElement("style") as HTMLElement
     pulse.textContent = "@keyframes tt-demo-tour-pulse{" +
-        "0%,100%{transform:scale(1);box-shadow:0 6px 24px rgba(0,0,0,0.45);}" +
-        "50%{transform:scale(1.04);box-shadow:0 0 14px $accent,0 6px 24px rgba(0,0,0,0.45);}}"
+        "0%,100%{transform:scale(1);box-shadow:0 4px 16px rgba(0,0,0,0.45);}" +
+        "50%{transform:scale(1.04);box-shadow:0 0 12px $accent,0 4px 16px rgba(0,0,0,0.45);}}"
     parent.appendChild(pulse)
 
+    // Anchored top-right, left of the ✕ close button (top:14px right:16px,
+    // 34px wide → occupies the rightmost ~50px), with a small gap.
     val btn = document.createElement("button") as HTMLElement
     btn.textContent = PLAY_TOUR_LABEL
-    btn.style.cssText = "pointer-events:auto;cursor:pointer;padding:12px 22px;border-radius:12px;" +
+    btn.style.cssText = "position:absolute;top:14px;right:60px;z-index:3;transform-origin:top right;" +
+        "pointer-events:auto;cursor:pointer;padding:0 12px;height:34px;border-radius:8px;" +
         "border:1px solid $accent;background:#0d1420e6;color:$accent;" +
-        "font:700 15px ui-monospace,Menlo,monospace;box-shadow:0 6px 24px rgba(0,0,0,0.45);" +
+        "font:700 12px ui-monospace,Menlo,monospace;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,0.45);" +
         "animation:tt-demo-tour-pulse 3s ease-in-out infinite;"
     btn.addEventListener("click", {
         // Drop focus so the button can't be re-activated by a later keypress.
@@ -462,15 +472,6 @@ private fun buildDemoTourButton(parent: HTMLElement) {
     })
     parent.appendChild(btn)
     spikeDemoTourButton = btn
-
-    // Small reassurance under the button: the tour is optional, the keys in
-    // the legend below are live for the visitor's own hands.
-    val hint = document.createElement("div") as HTMLElement
-    hint.textContent = "or explore yourself — the keys below all work"
-    hint.style.cssText = "pointer-events:none;margin-top:-4px;" +
-        "font:400 10px ui-monospace,Menlo,monospace;color:#6d80a0;"
-    parent.appendChild(hint)
-    spikeDemoTourHint = hint
 
     spikeDemoTourPulseTimer = window.setTimeout({ stopDemoTourPulse() }, 15_000)
 }
@@ -498,9 +499,6 @@ internal fun updateDemoTourButton() {
     val btn = spikeDemoTourButton ?: return
     val running = spikeMovieJob != null
     btn.textContent = if (running) STOP_TOUR_LABEL else PLAY_TOUR_LABEL
-    // The "explore yourself" line promises live keys — false while the tour
-    // has them locked out, so it hides for the duration.
-    spikeDemoTourHint?.style?.display = if (running) "none" else ""
     if (running) stopDemoTourPulse()
 }
 

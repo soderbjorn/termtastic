@@ -72,7 +72,9 @@ import se.soderbjorn.lunamux.PaneGeometry
 import se.soderbjorn.lunamux.TabConfig
 import se.soderbjorn.lunamux.TerminalContent
 import se.soderbjorn.lunamux.WindowConfig
+import se.soderbjorn.lunamux.WorldThemeSelection
 import se.soderbjorn.lunamux.db.LunamuxDatabase
+import kotlinx.serialization.json.JsonElement
 import se.soderbjorn.lunamux.windowJson
 import java.io.File
 
@@ -137,35 +139,74 @@ class SettingsRepository(dbFile: File) {
      * @see saveWindowConfig
      */
     fun loadWindowConfig(): WindowConfig? {
-        // Prefer v3 (current format).
+        // Prefer v4 (worlds container — current format).
+        val v4 = database.settingsQueries
+            .selectByKey(WINDOW_CONFIG_KEY_V4)
+            .executeAsOneOrNull()
+        if (v4 != null) {
+            return decodeOrQuarantine(v4, WINDOW_CONFIG_KEY_V4)
+        }
+        // Fall back to v3 (flat tabs, no worlds). Wrap into one default world
+        // and re-persist under v4.
         val v3 = database.settingsQueries
             .selectByKey(WINDOW_CONFIG_KEY_V3)
             .executeAsOneOrNull()
         if (v3 != null) {
-            return decodeOrQuarantine(v3, WINDOW_CONFIG_KEY_V3)
+            val flat = decodeOrQuarantine(v3, WINDOW_CONFIG_KEY_V3) ?: return null
+            val migrated = migrateV3ToV4(flat)
+            persistAsV4(migrated)
+            database.settingsQueries.deleteByKey(WINDOW_CONFIG_KEY_V3)
+            return migrated
         }
-        // Fall back to v2 (split tree). Flatten and re-persist under v3.
+        // Fall back to v2 (split tree). Flatten to v3 shape, then wrap to v4.
         val v2 = database.settingsQueries
             .selectByKey(WINDOW_CONFIG_KEY_V2)
             .executeAsOneOrNull()
         if (v2 != null) {
-            val migrated = migrateV2ToV3(v2) ?: return null
-            val encoded = windowJson.encodeToString(WindowConfig.serializer(), migrated)
-            database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V3, encoded)
+            val migrated = migrateV3ToV4(migrateV2ToV3(v2) ?: return null)
+            persistAsV4(migrated)
             database.settingsQueries.deleteByKey(WINDOW_CONFIG_KEY_V2)
             return migrated
         }
-        // Fall back to v1 (pre-file-browser). Rename discriminator, then flatten.
+        // Fall back to v1 (pre-file-browser). Rename discriminator, flatten, wrap.
         val v1 = database.settingsQueries
             .selectByKey(WINDOW_CONFIG_KEY_V1)
             .executeAsOneOrNull()
             ?: return null
         val v1Migrated = v1.replace("\"kind\":\"markdown\"", "\"kind\":\"fileBrowser\"")
-        val flattened = migrateV2ToV3(v1Migrated) ?: return null
-        val encoded = windowJson.encodeToString(WindowConfig.serializer(), flattened)
-        database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V3, encoded)
+        val migrated = migrateV3ToV4(migrateV2ToV3(v1Migrated) ?: return null)
+        persistAsV4(migrated)
         database.settingsQueries.deleteByKey(WINDOW_CONFIG_KEY_V1)
-        return flattened
+        return migrated
+    }
+
+    /** Encode + upsert [cfg] under the current v4 key. */
+    private fun persistAsV4(cfg: WindowConfig) {
+        val encoded = windowJson.encodeToString(WindowConfig.serializer(), cfg)
+        database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V4, encoded)
+    }
+
+    /**
+     * V3→V4 migration: wrap a flat [WindowConfig] (tabs at top level, no
+     * worlds) into one default world named [DEFAULT_WORLD_NAME], seeding its
+     * theme pair from the current global selection. The legacy top-level
+     * `tabs`/`activeTabId` are kept mirroring the default world so pre-1.9
+     * clients still read them. A config that already carries worlds (a v4
+     * blob that arrived here defensively) is returned unchanged.
+     *
+     * @param flat the pre-worlds config to wrap.
+     * @return the worlds-shaped config.
+     */
+    internal fun migrateV3ToV4(flat: WindowConfig): WindowConfig {
+        if (flat.worlds.isNotEmpty()) return flat
+        val world = se.soderbjorn.lunamux.WorldConfig(
+            id = DEFAULT_WORLD_ID,
+            name = DEFAULT_WORLD_NAME,
+            tabs = flat.tabs,
+            activeTabId = flat.activeTabId,
+            themeSelection = currentThemePair(),
+        )
+        return flat.copy(worlds = listOf(world), activeWorldId = DEFAULT_WORLD_ID)
     }
 
     /**
@@ -279,7 +320,7 @@ class SettingsRepository(dbFile: File) {
      */
     suspend fun saveWindowConfig(config: WindowConfig) = withContext(Dispatchers.IO) {
         val json = windowJson.encodeToString(WindowConfig.serializer(), config)
-        database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V3, json)
+        database.settingsQueries.upsert(WINDOW_CONFIG_KEY_V4, json)
     }
 
     /**
@@ -537,6 +578,66 @@ class SettingsRepository(dbFile: File) {
      */
     fun getUiSettingsWithLegacy(): JsonObject = withLegacyCompat(_uiSettings.value)
 
+    // ── Per-world theme ↔ legacy global selection bridge (B6) ─────────
+
+    /**
+     * Parse a `THEME_V2_SELECTION` element (a JSON object, or a
+     * JSON-string-encoded object) into a per-world theme **pair**. Appearance
+     * is dropped — it is global, not per-world.
+     *
+     * @param el the selection element (object or string), or null.
+     * @return the dark+light pair, or null when unparseable / absent.
+     */
+    fun themePairFromSelection(el: JsonElement?): WorldThemeSelection? {
+        if (el == null) return null
+        val obj: JsonObject? = when (el) {
+            is JsonObject -> el
+            is JsonPrimitive -> if (el.isString) {
+                runCatching { Json.parseToJsonElement(el.content) as? JsonObject }.getOrNull()
+            } else null
+            else -> null
+        }
+        obj ?: return null
+        val snap = ThemeSnapshotV2.fromParts(selection = obj, customArray = null)
+        return WorldThemeSelection(snap.darkThemeName, snap.lightThemeName)
+    }
+
+    /**
+     * The current global theme pair from `THEME_V2_SELECTION`, used to seed a
+     * newly-created world's pair. Never null in practice (defaults apply).
+     *
+     * @return the current dark+light pair.
+     */
+    fun currentThemePair(): WorldThemeSelection? {
+        val raw = (_uiSettings.value[PersistKeys.THEME_V2_SELECTION] as? JsonPrimitive)
+            ?.takeIf { it.isString }?.content
+        val snap = ThemeSnapshotV2.fromStrings(selectionJson = raw, customThemesJson = null)
+        return WorldThemeSelection(snap.darkThemeName, snap.lightThemeName)
+    }
+
+    /**
+     * Mirror the **default** world's theme [pair] into the legacy global
+     * `THEME_V2_SELECTION`, preserving the current global appearance (which
+     * is global, not per-world). Runs through [mergeUiSettings] so the change
+     * persists and pushes a `UiSettings` envelope to old clients.
+     *
+     * @param pair the default world's new dark+light pair.
+     */
+    fun mirrorDefaultWorldThemePair(pair: WorldThemeSelection) {
+        val current = (_uiSettings.value[PersistKeys.THEME_V2_SELECTION] as? JsonPrimitive)
+            ?.takeIf { it.isString }?.content
+        val existing = ThemeSnapshotV2.fromStrings(selectionJson = current, customThemesJson = null)
+        val updated = existing.copy(
+            darkThemeName = pair.darkThemeName,
+            lightThemeName = pair.lightThemeName,
+        )
+        mergeUiSettings(
+            buildJsonObject {
+                put(PersistKeys.THEME_V2_SELECTION, JsonPrimitive(updated.selectionJson()))
+            },
+        )
+    }
+
     /**
      * Merge the synthesized legacy compat keys onto [stored]. v2 keys are kept;
      * the legacy keys are added on top.
@@ -722,8 +823,13 @@ class SettingsRepository(dbFile: File) {
         internal const val WINDOW_CONFIG_KEY_V1 = "window.config.v1"
         internal const val WINDOW_CONFIG_KEY_V2 = "window.config.v2"
         internal const val WINDOW_CONFIG_KEY_V3 = "window.config.v3"
+        /** v4 wraps the flat v3 `tabs` into one default "worlds" world. */
+        internal const val WINDOW_CONFIG_KEY_V4 = "window.config.v4"
         /** Current write key. Updated whenever the persisted schema rev bumps. */
-        const val WINDOW_CONFIG_KEY = WINDOW_CONFIG_KEY_V3
+        const val WINDOW_CONFIG_KEY = WINDOW_CONFIG_KEY_V4
+        /** Migration id for the single default world (see [migrateV3ToV4]). */
+        internal const val DEFAULT_WORLD_ID = "w1"
+        internal const val DEFAULT_WORLD_NAME = "Home"
         private const val ALLOW_REMOTE_KEY = "network.allow_remote.v1"
         private const val CLAUDE_USAGE_POLL_KEY = "claude.usage_poll.v1"
         /** Key holding the global MCP kill switch (see [isMcpEnabled]). */

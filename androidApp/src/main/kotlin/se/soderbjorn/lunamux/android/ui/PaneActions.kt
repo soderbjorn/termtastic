@@ -2,7 +2,8 @@
  * Tab/pane mutation dialogs for the Lunamux Android app.
  *
  * Provides the UI flows for mutating the server's window layout:
- * - [TabNameDialog] -- name a new tab, launched from the "+" action.
+ * - [TabNameDialog] -- name a new tab, launched from the "+" create sheet.
+ * - [WorldNameDialog] -- name a new world, launched from the "+" create sheet.
  * - [RenameDialog] -- rename a tab or pane from a row's menu.
  * - [ConfirmCloseDialog] -- destructive confirmation before closing a tab
  *   or pane (both end live sessions).
@@ -52,6 +53,57 @@ fun TabNameDialog(
                 value = name,
                 onValueChange = { name = it },
                 label = { Text("Tab name") },
+                singleLine = true,
+                colors = themedTextFieldColors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name) },
+                enabled = name.isNotBlank(),
+                colors = ButtonDefaults.textButtonColors(contentColor = SidebarAccent),
+            ) { Text("Create") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(contentColor = SidebarTextSecondary),
+            ) { Text("Cancel") }
+        },
+    )
+}
+
+/**
+ * Prompts the user to enter a name for a new world, launched from the tree
+ * screen's "+" create sheet ([CreateSheet]).
+ *
+ * World creation moved out of the world-switcher dropdown into the create
+ * sheet, so this is the sole entry point for naming a new world on Android.
+ * The name is required (the server rejects blank world names), mirroring
+ * [TabNameDialog].
+ *
+ * @param onDismiss callback to close the dialog without creating.
+ * @param onConfirm callback invoked with the entered (untrimmed) world name.
+ * @see CreateSheet
+ */
+@Composable
+fun WorldNameDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (name: String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SidebarSurface,
+        titleContentColor = SidebarTextPrimary,
+        textContentColor = SidebarTextSecondary,
+        title = { Text("New workspace") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Workspace name") },
                 singleLine = true,
                 colors = themedTextFieldColors(),
                 modifier = Modifier.fillMaxWidth(),

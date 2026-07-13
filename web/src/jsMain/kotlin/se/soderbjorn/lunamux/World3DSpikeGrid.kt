@@ -234,6 +234,9 @@ internal fun growGridAxis(dCols: Int, dRows: Int) {
         return
     }
     if (spikeSelectionMode) exitSelectionMode()
+    // Remember the pane's native (2D) grid before the first override this session,
+    // so the "restore native grid" hotkey and world-close revert have a target.
+    captureNativeGrid(p.paneId, term)
     val cols = (term.cols + dCols).coerceIn(GRID_MIN_COLS, GRID_MAX_COLS)
     val rows = (term.rows + dRows).coerceIn(GRID_MIN_ROWS, GRID_MAX_ROWS)
     if (cols == term.cols && rows == term.rows) {
@@ -244,6 +247,7 @@ internal fun growGridAxis(dCols: Int, dRows: Int) {
         return
     }
     console.log("[world3d-spike] grid key: pane ${p.paneId} ${term.cols}x${term.rows} -> ${cols}x$rows")
+    rememberGrid3dOverride(p.paneId, cols, rows)
     setPaneGrid(p, cols, rows, reassert = true)
 }
 
@@ -310,9 +314,11 @@ private fun gridNearestAxis(dCols: Int, dRows: Int) {
         return
     }
     if (spikeSelectionMode) exitSelectionMode()
+    captureNativeGrid(p.paneId, term)
     val cols = (term.cols + dCols).coerceIn(GRID_MIN_COLS, GRID_MAX_COLS)
     val rows = (term.rows + dRows).coerceIn(GRID_MIN_ROWS, GRID_MAX_ROWS)
     if (cols == term.cols && rows == term.rows) return
+    rememberGrid3dOverride(p.paneId, cols, rows)
     setPaneGrid(p, cols, rows, reassert = true)
 }
 

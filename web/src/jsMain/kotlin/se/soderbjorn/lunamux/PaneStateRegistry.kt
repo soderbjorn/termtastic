@@ -54,3 +54,14 @@ internal var onPaneContentUpdated: ((String) -> Unit)? = null
 
 /** Git DOM handles per pane (file list, diff pane, search bar). */
 internal val gitPaneViews = HashMap<String, GitPaneView>()
+
+/**
+ * Live web-browser cells per pane (chrome bar + `<webview>` guest). Cached so
+ * [mountPaneContent] returns the same element across re-renders instead of
+ * rebuilding the webview (which would reload the page), and so the 3D world can
+ * reparent the exact same cell onto the front plane on engage.
+ *
+ * @see WebBrowserPaneView
+ * @see buildWebBrowserView
+ */
+internal val webBrowserPaneViews = HashMap<String, WebBrowserPaneView>()

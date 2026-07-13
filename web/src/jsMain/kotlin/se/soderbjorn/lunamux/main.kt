@@ -112,7 +112,10 @@ internal fun refreshAndApplyActiveTheme() {
     // at mount. The topbar appearance-cycle button persists from that stale
     // snapshot — re-emitting the default slot names and clobbering the
     // light/dark theme the user picked. See [AppShellHandle.setThemeSnapshot].
-    appShellHandle?.setThemeSnapshot(s.toThemeSnapshot())
+    // Push the EFFECTIVE snapshot (global selection with the active world's
+    // theme pair overlaid, if any) so the toolkit chrome repaints in the
+    // active world's theme too.
+    appShellHandle?.setThemeSnapshot(effectiveThemeSnapshot())
 }
 
 /**
@@ -260,7 +263,11 @@ private fun start() {
         }
 
         override suspend fun putSetting(key: String, value: String) {
-            if (key == se.soderbjorn.darkness.core.PersistKeys.LAYOUT_STATE) {
+            // Serialize *every* layout key (flat default-world LAYOUT_STATE and
+            // per-world `LAYOUT_STATE.world.<id>` keys alike) through one chain
+            // so a burst of layout writes lands in order — see
+            // [layoutStatePostChain].
+            if (key.startsWith(se.soderbjorn.darkness.core.PersistKeys.LAYOUT_STATE)) {
                 // Serialize layout-state posts — see [layoutStatePostChain].
                 val chain = layoutStatePostChain
                 layoutStatePostChain = if (chain == null) {
@@ -647,6 +654,26 @@ private fun start() {
     // `show-hotkeys` IPC.
     if (electronApi?.onShowHotkeys != null) {
         electronApi.onShowHotkeys({ openHotkeysSidebar() })
+    }
+
+    // 3D world → leave engage mode from inside a web pane. A `<webview>`
+    // guest swallows its own keydowns, so the world's ⌥⌘X disengage chord
+    // never reaches the host key handler while the page holds focus. The
+    // Electron main process intercepts the chord via `before-input-event`
+    // and forwards it here. We blur the guest (handing keyboard control back
+    // to the host so navigate-mode chords work again), then disengage.
+    if (electronApi?.onWebPaneDisengage != null) {
+        electronApi.onWebPaneDisengage({
+            if (spikeEngaged) {
+                // disengage() blurs the focused element inside the engaged
+                // spike pane (here, the <webview>) and refocuses the overlay.
+                disengage()
+            } else {
+                // Flat 2D layout: no engage state to leave, but still release
+                // the guest's focus grab so global app keys work again.
+                (document.activeElement as? HTMLElement)?.blur()
+            }
+        })
     }
 
     // macOS Debug menu → per-pane state override (Working / Waiting /

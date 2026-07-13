@@ -171,6 +171,25 @@ enum Palette {
             return UIColor(Color(argb: resolved(isDark: isDark).text))
         }
     }
+
+    /// Dynamic `UIColor` for the brightest text (the `textBright` token),
+    /// suitable for the navigation bar's large-title text attributes so the
+    /// "Sessions" / "Hosts" headline reads as a crisp title against the themed
+    /// bar. Re-resolves against the current trait collection like the others.
+    ///
+    /// Used by ``View/themedNavigationBar(generation:)`` — SwiftUI's
+    /// `.toolbarColorScheme` recolours only the collapsed inline title, so the
+    /// expanded large title (drawn by UIKit over a transparent bar) otherwise
+    /// falls back to the system `label` colour and can render near-white on a
+    /// light theme while the device is in dark mode (issue #49).
+    ///
+    /// - SeeAlso: ``textBright``
+    static var textBrightUIColor: UIColor {
+        UIColor { traitCollection in
+            let isDark = traitCollection.userInterfaceStyle == .dark
+            return UIColor(Color(argb: resolved(isDark: isDark).textBright))
+        }
+    }
 }
 
 extension Color {

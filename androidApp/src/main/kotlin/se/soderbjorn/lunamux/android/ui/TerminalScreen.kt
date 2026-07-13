@@ -149,7 +149,11 @@ private class ScrollPauseState {
  */
 private fun findLeafTitle(config: WindowConfig?, sessionId: String): String? {
     if (config == null) return null
-    for (tab in config.tabs) {
+    // Search every world's tabs (worlds are the source of truth for >=1.9
+    // clients and the opened session may belong to any of them); fall back to
+    // the legacy flat tabs when the config carries no worlds (pre-1.9 server).
+    val tabs = config.worlds.flatMap { it.tabs }.ifEmpty { config.tabs }
+    for (tab in tabs) {
         tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf.title }
     }
     return null

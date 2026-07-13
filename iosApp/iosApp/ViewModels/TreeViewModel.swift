@@ -34,6 +34,18 @@ enum TreeRow: Identifiable {
     }
 }
 
+// MARK: - World switcher model
+
+/// A single world entry for the toolbar's globe switcher menu: its stable
+/// server id and the display name shown in the menu. Built from
+/// `WindowConfig.worlds` by `TreeViewModel` and consumed by `TreeView`'s
+/// world switcher. Kept as a lightweight value type so the SwiftUI layer never
+/// holds a bridged `Client.WorldConfig`.
+struct WorldMenuItem: Identifiable, Equatable {
+    let id: String
+    let name: String
+}
+
 // MARK: - ViewModel
 
 /// Observes the KMP `WindowSocket`'s config and states flows via
@@ -43,6 +55,18 @@ enum TreeRow: Identifiable {
 final class TreeViewModel {
     var rows: [TreeRow] = []
     var states: [String: String] = [:]
+
+    /// The worlds offered by the toolbar switcher (id + name), refreshed on
+    /// every config push. Empty on legacy single-world servers (`worlds` empty),
+    /// in which case `TreeView` hides the switcher entirely and the app renders
+    /// the legacy top-level `config.tabs`. Read by `TreeView`'s globe menu.
+    var worlds: [WorldMenuItem] = []
+
+    /// The resolved active world's id — the one checkmarked in the switcher —
+    /// or `nil` before the first config arrives / on legacy servers. Resolved
+    /// the same way the tab list is (`activeWorldId`, else the first world), so
+    /// the checkmark always matches the tabs currently shown.
+    var activeWorldId: String? = nil
 
     /// Whether the sidebar-hidden tabs are currently revealed in the list
     /// (issue #52). Seeded from the process-wide, memory-only
@@ -65,6 +89,12 @@ final class TreeViewModel {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.latestConfig = value as? Client.WindowConfig
+                // Repaint in the active world's theme pair before flattening the
+                // rows so the whole screen adopts the new world's colours the
+                // moment its config lands. Only the config flow carries the
+                // per-world theme, so this is not duplicated in the other two
+                // observers below.
+                self.applyActiveWorldTheme()
                 self.rebuild()
             }
         }
@@ -98,10 +128,37 @@ final class TreeViewModel {
         }
     }
 
-    /// Number of tabs in the current layout. Used to disable "Close Tab"
+    // MARK: - Active-world resolution
+
+    /// The active world for a world-aware (>=1.9) server: the world whose id
+    /// matches `config.activeWorldId`, falling back to the first world. `nil`
+    /// on a legacy server whose `worlds` list is empty — callers then fall back
+    /// to the legacy top-level `config.tabs`. Mirrors the web client's
+    /// `config.activeWorldOrNull()`.
+    private var activeWorld: Client.WorldConfig? {
+        guard let config = latestConfig, !config.worlds.isEmpty else { return nil }
+        return config.worlds.first { $0.id == config.activeWorldId } ?? config.worlds.first
+    }
+
+    /// The tabs the UI should render: the active world's tabs on a world-aware
+    /// server, or the legacy top-level `config.tabs` when no worlds exist. Every
+    /// tab-derived accessor (`rebuild`, `tabCount`, the hidden-state lookups)
+    /// reads through here so the whole screen tracks the active world.
+    private var activeTabs: [Client.TabConfig] {
+        if let world = activeWorld { return world.tabs }
+        return latestConfig?.tabs ?? []
+    }
+
+    /// Number of tabs in the active world's layout. Used to disable "Close Tab"
     /// on the last remaining tab (the server refuses to close it anyway).
     var tabCount: Int {
-        latestConfig?.tabs.count ?? 0
+        activeTabs.count
+    }
+
+    /// Number of worlds on the server; the switcher disables "Close World" on
+    /// the last one (the server refuses to close it anyway).
+    var worldCount: Int {
+        latestConfig?.worlds.count ?? 0
     }
 
     func addTab(name: String) {
@@ -168,13 +225,13 @@ final class TreeViewModel {
     /// Whether the tab is hidden ("unlisted") from the tab strip, straight off
     /// the latest config. Labels the tab menu's hide/show-in-tab-bar item.
     func isTabHidden(tabId: String) -> Bool {
-        latestConfig?.tabs.first { $0.id == tabId }?.isHidden ?? false
+        activeTabs.first { $0.id == tabId }?.isHidden ?? false
     }
 
     /// Whether the tab is hidden from the sidebar tab tree (and this list,
     /// which mirrors it). Labels the tab menu's hide/show-in-sidebar item.
     func isTabHiddenFromSidebar(tabId: String) -> Bool {
-        latestConfig?.tabs.first { $0.id == tabId }?.isHiddenFromSidebar ?? false
+        activeTabs.first { $0.id == tabId }?.isHiddenFromSidebar ?? false
     }
 
     /// Hide or reveal a tab in the tab strip ("unlist"/"list" it). A hidden
@@ -217,6 +274,64 @@ final class TreeViewModel {
         rebuild()
     }
 
+    // MARK: - World commands
+
+    /// Switch the active world server-side. Sends a
+    /// `WindowCommand.SetActiveWorld`; the change syncs back to every client via
+    /// the broadcast config echo, which re-resolves `activeTabs` and repaints in
+    /// the new world's theme. Backs the switcher menu's world rows.
+    func setActiveWorld(worldId: String) {
+        guard let socket = ConnectionHolder.shared.windowSocket else { return }
+        Task {
+            try? await socket.send(command: Client.WindowCommand.SetActiveWorld(worldId: worldId))
+        }
+    }
+
+    /// Create a new world named `name`. The server mints its id, seeds an empty
+    /// tab, and copies the current default/global theme pair into it. Backs the
+    /// switcher menu's "New World…" action.
+    func addWorld(name: String) {
+        guard let socket = ConnectionHolder.shared.windowSocket else { return }
+        Task {
+            try? await socket.send(command: Client.WindowCommand.AddWorld(name: name))
+        }
+    }
+
+    /// Rename the world `worldId` to `name`. Backs the switcher menu's
+    /// "Rename World…" action; the caller validates a non-blank name.
+    func renameWorld(worldId: String, name: String) {
+        guard let socket = ConnectionHolder.shared.windowSocket else { return }
+        Task {
+            try? await socket.send(command: Client.WindowCommand.RenameWorld(worldId: worldId, name: name))
+        }
+    }
+
+    /// Close the world `worldId`, cascading to every tab and PTY session inside
+    /// it. The server refuses to close the last remaining world, so the switcher
+    /// disables the action when only one world exists. Backs the switcher menu's
+    /// "Close World…" confirmation.
+    func closeWorld(worldId: String) {
+        guard let socket = ConnectionHolder.shared.windowSocket else { return }
+        Task {
+            try? await socket.send(command: Client.WindowCommand.CloseWorld(worldId: worldId))
+        }
+    }
+
+    // MARK: - Per-world theme
+
+    /// Overlay the active world's theme **pair** (its dark + light slot names)
+    /// onto the global theme via `ThemeStore`, so switching worlds repaints the
+    /// whole app in that world's colours. The global appearance mode
+    /// (Auto/Dark/Light), custom themes and favourites stay shared — only the
+    /// two slot names are per-world. Passing `nil` (a world with no pair of its
+    /// own) clears the override so it follows the global selection. The override
+    /// is a paint-only client concern and is never persisted, mirroring the web
+    /// client's `applyActiveWorldTheme`. Called from the config observer on every
+    /// push (cheap: `ThemeStore` bails when nothing changed for the palette).
+    private func applyActiveWorldTheme() {
+        ThemeStore.shared.applyWorldTheme(activeWorld?.themeSelection)
+    }
+
     deinit {
         flowObserver.clear()
     }
@@ -226,16 +341,26 @@ final class TreeViewModel {
     private func rebuild() {
         guard let config = latestConfig else {
             rows = []
+            worlds = []
+            activeWorldId = nil
             return
         }
+        // Refresh the switcher's world list + active id off the latest config.
+        // Empty on legacy servers, in which case `TreeView` hides the switcher.
+        worlds = config.worlds.map { WorldMenuItem(id: $0.id, name: $0.name) }
+        activeWorldId = activeWorld?.id
+        // Render the ACTIVE world's tabs (falling back to the legacy top-level
+        // `config.tabs` when no worlds exist) rather than the legacy mirror, so
+        // switching worlds shows that world's own tab list.
+        let tabs = activeTabs
         // Tabs the user hid from the sidebar are excluded from the list by
         // default (issue #52): when any exist, a single "Show hidden tabs"
         // toggle row is appended instead, keeping the primary list decluttered
         // like the web sidebar (which omits them). When `showHiddenTabs` is set,
         // they are revealed at the bottom under a "Hidden" header and the toggle
         // reads "Hide hidden tabs". Mirrors Android's flatten().
-        let visibleTabs = config.tabs.filter { !$0.isHiddenFromSidebar }
-        let hiddenTabs = config.tabs.filter { $0.isHiddenFromSidebar }
+        let visibleTabs = tabs.filter { !$0.isHiddenFromSidebar }
+        let hiddenTabs = tabs.filter { $0.isHiddenFromSidebar }
 
         var result: [TreeRow] = []
         for tab in visibleTabs {

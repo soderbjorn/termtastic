@@ -74,6 +74,11 @@ import se.soderbjorn.lunamux.three.Scene
  */
 private fun layoutStateJson(): String? {
     appShellHandle?.let { h -> runCatching { h.currentLayoutStateJson() }.getOrNull()?.let { return it } }
+    // Fallback (shell not mounted): read the ACTIVE world's layout blob, not
+    // the flat rawLayoutState — which now holds only the default world.
+    latestWindowConfig?.activeWorldId?.let { world ->
+        runCatching { worldLayoutBlob(world) }.getOrNull()?.let { return it }
+    }
     val raw = runCatching { lunamuxClient.windowState.rawLayoutState.value }.getOrNull() ?: return null
     return when {
         raw is JsonObject -> raw.toString()
@@ -81,6 +86,19 @@ private fun layoutStateJson(): String? {
         else -> null
     }
 }
+
+/**
+ * The server settings key the 3D spike must write pane-layout mutations to:
+ * the **active** world's key (the default world aliases back onto flat
+ * LAYOUT_STATE). The spike always operates on the active world (its
+ * [layoutStateJson] reads `currentLayoutStateJson()` = active world), so a
+ * stash/reorder must persist to that world's key — writing the fixed
+ * LAYOUT_STATE key would corrupt the default world while a non-default world
+ * is active. @see serverLayoutKeyForWorld
+ */
+private fun activeWorldLayoutKey(): String =
+    latestWindowConfig?.activeWorldId?.let { serverLayoutKeyForWorld(it) }
+        ?: se.soderbjorn.darkness.core.PersistKeys.LAYOUT_STATE
 
 /**
  * The ids of every pane currently **minimized (docked)** in the 2D layout, read from
@@ -158,7 +176,7 @@ internal fun persistPaneMinimized(paneId: String, minimized: Boolean) {
     val persistBlob = appShellHandle?.let { runCatching { it.currentLayoutStateJson() }.getOrNull() } ?: newBlob
     GlobalScope.launch {
         runCatching {
-            webSettingsPersister.putSetting(se.soderbjorn.darkness.core.PersistKeys.LAYOUT_STATE, persistBlob)
+            webSettingsPersister.putSetting(activeWorldLayoutKey(), persistBlob)
         }
     }
 }
@@ -206,7 +224,7 @@ internal fun persistPaneOrder(tabId: String, order: List<String>) {
     val persistBlob = appShellHandle?.let { runCatching { it.currentLayoutStateJson() }.getOrNull() } ?: newBlob
     GlobalScope.launch {
         runCatching {
-            webSettingsPersister.putSetting(se.soderbjorn.darkness.core.PersistKeys.LAYOUT_STATE, persistBlob)
+            webSettingsPersister.putSetting(activeWorldLayoutKey(), persistBlob)
         }
     }
 }
@@ -413,6 +431,16 @@ internal fun toggleStashView() {
     // Name the framed item at the dock, matching the command center's "now showing" cue.
     centerPane?.let { showNavLabelFor(it) }
     centerBundle?.let { showNavLabelForBundle(it) }
+    // Fancy animations off, and flying **up** from the command center: snap straight to the
+    // dock rest pose — a hard cut, no fly-up. A press while already at the dock (a re-centre)
+    // keeps its brief animated move, so this only shortcuts the long climb.
+    if (!spikeFancyAnimations && !cameraAtShelf()) {
+        snapCamToPose(
+            if (stationBuilt()) stationChaseRestPose(centerSlot)
+            else shelfArrivalPose(centerSlot, paneHalfH),
+        )
+        return
+    }
     if (stationBuilt()) {
         // A camera-only visit still flies in through the bay door (no pane to follow), but
         // it lands at the **same close, centred pose a stash chase rests on**
@@ -483,6 +511,15 @@ internal fun stashPane(p: RingPane) {
     // Keep the ring's fronted slot valid: hop selection to the nearest pane still on
     // the ring in this pane's tab (the shelved pane's ring slot is left as an empty gap).
     selectNearestUnstashedInTab(p.tabOrd, p.paneOrdInTab)
+
+    // Fancy animations off: the pane just vanishes to the cargo ship. Snap its stash
+    // progress straight to the shelf (the render loop holds it there) and leave the camera
+    // where it is — no fly-up chase, so we never see the journey up to the dock.
+    if (!spikeFancyAnimations) {
+        p.stashProg = 1.0
+        spikeSettledIndex = -1
+        return
+    }
 
     // Fly up alongside the pane, tracking it the whole way so it stays centred, and
     // park *close* in front of the slot it lands on ([STASH_CAM_LAND_DIST] — the pane
@@ -576,6 +613,19 @@ internal fun unstashPane(p: RingPane) {
 
     spikeSettledIndex = -1
     spikeShelfIndex = -1 // slots shift after removal and we're leaving — drop the browse cursor
+    // Fancy animations off: the pane just drops back onto the ring and we're instantly back at
+    // the command center — snap its stash progress home (the render loop keeps it seated) and
+    // cut the camera to the pristine pose (a single stashed pane keeps a valid tab slot, so it
+    // reappears in place; its tab was only minimized, never unlisted).
+    if (!spikeFancyAnimations) {
+        p.stashProg = 0.0
+        spikeStashChase = null
+        spikeShelfPanTargetX = null
+        spikeCamReturning = false
+        spikeCamFlown = false
+        showNavLabel()
+        return
+    }
     // Fly home the reverse of the stash trip (negative sway, so the return isn't a mirrored
     // replay). The gaze rides the COMMAND CENTER sign over the home beacon through the
     // descent — so you're flying *into* the command center with its banner leading you in —

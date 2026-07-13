@@ -56,7 +56,6 @@ import se.soderbjorn.lunamux.client.viewmodel.LUNAMUX_TERMS_URL
  */
 @Composable
 fun AboutMenu() {
-    val uriHandler = LocalUriHandler.current
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -70,69 +69,97 @@ fun AboutMenu() {
             expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
-            DropdownMenuItem(
-                text = { Text("Support Forum") },
-                leadingIcon = {
-                    Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null)
-                },
-                onClick = {
-                    expanded = false
-                    uriHandler.openUri(LUNAMUX_DISCUSSIONS_URL)
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Website") },
-                leadingIcon = {
-                    Icon(Icons.Outlined.Public, contentDescription = null)
-                },
-                onClick = {
-                    expanded = false
-                    uriHandler.openUri(LUNAMUX_SITE_URL)
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Star on GitHub") },
-                leadingIcon = {
-                    Icon(Icons.Outlined.Star, contentDescription = null)
-                },
-                onClick = {
-                    expanded = false
-                    uriHandler.openUri(LUNAMUX_GITHUB_URL)
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Rate on Google Play") },
-                leadingIcon = {
-                    Icon(Icons.Outlined.ThumbUp, contentDescription = null)
-                },
-                onClick = {
-                    expanded = false
-                    uriHandler.openUri(LUNAMUX_PLAY_STORE_URL)
-                },
-            )
-            // Separate the actionable/engagement links above from the legal
-            // boilerplate below.
-            HorizontalDivider()
-            DropdownMenuItem(
-                text = { Text("Privacy Policy") },
-                leadingIcon = {
-                    Icon(Icons.Outlined.Lock, contentDescription = null)
-                },
-                onClick = {
-                    expanded = false
-                    uriHandler.openUri(LUNAMUX_PRIVACY_URL)
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Terms") },
-                leadingIcon = {
-                    Icon(Icons.Outlined.Description, contentDescription = null)
-                },
-                onClick = {
-                    expanded = false
-                    uriHandler.openUri(LUNAMUX_TERMS_URL)
-                },
-            )
+            AboutMenuItems(onItemSelected = { expanded = false })
         }
     }
+}
+
+/**
+ * Emits the app's external-link [DropdownMenuItem]s (support forum, website,
+ * GitHub, Play Store, and the legal pages) into the enclosing [DropdownMenu].
+ *
+ * Factored out of [AboutMenu] so the same link list can be reused inside a
+ * *host* menu without duplication — the Sessions ([TreeScreen]) top bar folds
+ * these links into its combined overflow ("⋮") menu rather than exposing a
+ * separate info button, while [AboutMenu] still wraps them in a standalone
+ * info-button-plus-dropdown for the Hosts ([HostsScreen]) bar. Keeping the
+ * items in one composable means the two entry points can never drift on which
+ * links they offer.
+ *
+ * Must be called from within a [DropdownMenu] (or another `ColumnScope` menu
+ * container). Selecting an item opens its URL via [LocalUriHandler] and then
+ * invokes [onItemSelected] so the caller can dismiss its own menu.
+ *
+ * @param onItemSelected called when any link is tapped, before/after the URL is
+ *   opened, so the caller can close the surrounding menu (e.g. flip its
+ *   `expanded` state to `false`).
+ * @see AboutMenu
+ * @see TreeScreen
+ */
+@Composable
+fun AboutMenuItems(onItemSelected: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
+    DropdownMenuItem(
+        text = { Text("Support Forum") },
+        leadingIcon = {
+            Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null)
+        },
+        onClick = {
+            onItemSelected()
+            uriHandler.openUri(LUNAMUX_DISCUSSIONS_URL)
+        },
+    )
+    DropdownMenuItem(
+        text = { Text("Website") },
+        leadingIcon = {
+            Icon(Icons.Outlined.Public, contentDescription = null)
+        },
+        onClick = {
+            onItemSelected()
+            uriHandler.openUri(LUNAMUX_SITE_URL)
+        },
+    )
+    DropdownMenuItem(
+        text = { Text("Star on GitHub") },
+        leadingIcon = {
+            Icon(Icons.Outlined.Star, contentDescription = null)
+        },
+        onClick = {
+            onItemSelected()
+            uriHandler.openUri(LUNAMUX_GITHUB_URL)
+        },
+    )
+    DropdownMenuItem(
+        text = { Text("Rate on Google Play") },
+        leadingIcon = {
+            Icon(Icons.Outlined.ThumbUp, contentDescription = null)
+        },
+        onClick = {
+            onItemSelected()
+            uriHandler.openUri(LUNAMUX_PLAY_STORE_URL)
+        },
+    )
+    // Separate the actionable/engagement links above from the legal
+    // boilerplate below.
+    HorizontalDivider()
+    DropdownMenuItem(
+        text = { Text("Privacy Policy") },
+        leadingIcon = {
+            Icon(Icons.Outlined.Lock, contentDescription = null)
+        },
+        onClick = {
+            onItemSelected()
+            uriHandler.openUri(LUNAMUX_PRIVACY_URL)
+        },
+    )
+    DropdownMenuItem(
+        text = { Text("Terms") },
+        leadingIcon = {
+            Icon(Icons.Outlined.Description, contentDescription = null)
+        },
+        onClick = {
+            onItemSelected()
+            uriHandler.openUri(LUNAMUX_TERMS_URL)
+        },
+    )
 }

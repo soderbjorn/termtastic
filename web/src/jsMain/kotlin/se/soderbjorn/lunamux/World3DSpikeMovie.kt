@@ -15,9 +15,16 @@
  *  6. **stash a whole tab** to the shelf (⌃Space) and fly up to fetch it back
  *     (`v`, then ⌃Space at the dock);
  *  7. **grow a new window** through its wormhole (`n`);
- *  8. **overview → free flight** — frame the whole world (`m`), drop into free
- *     flight (`f`), glide behind a finished Claude window and type into it from
- *     behind, "through the glass".
+ *  8. **travel to another world** — fly the camera *through* a wormhole to the
+ *     next world (⌥⌘O); the whole rest of the tour plays out over there, in the
+ *     DarknessIRC workspace's own tabs, panes and agents;
+ *  9. **tour the new world's live windows** — walk the ring across a few of the
+ *     DarknessIRC channels (#commodore, #kotlin-multiplatform, #amiga), resting a couple
+ *     of seconds on each so the viewer reads that they are live IRC panes before
+ *     the camera work begins;
+ * 10. **overview → free flight** — frame the (new) world (`m`), drop into free
+ *     flight (`f`), glide behind that world's *idle* Claude agent (`dirc-p9`,
+ *     "claude: reconnect") and type into it from behind, "through the glass".
  *
  * **How it drives the app:** every beat that has a keyboard shortcut is played
  * as a *synthetic `KeyboardEvent` dispatched on `window`*, so it runs through
@@ -33,11 +40,13 @@
  *    directly to park behind a specific pane on another tab floor — there is
  *    no single-key "fly behind *that* window" shortcut.
  *
- * **Only ever types into a *finished* Claude** ([DemoFixtures] `demo-s6`
- * greets, `demo-s8` logo, `demo-s9` copper): the working panes (`demo-s1`,
- * `demo-s7`) and the waiting one (`demo-s4` plasma) are shown but never typed
- * into, so the tour never puts words in a busy agent's mouth. Each finished
- * pane is woken at most once (a second message would land on it mid-burst).
+ * **Only ever types into a *finished* Claude** — in the home world the greets
+ * pane ([DemoFixtures] `demo-s6`), and in the DarknessIRC world the idle
+ * "claude: reconnect" agent (`dirc-s7`): the working panes (`demo-s1`,
+ * `demo-s7`, `dirc-s4`) and the waiting ones (`demo-s4` plasma, `dirc-s6`) are
+ * shown but never typed into, so the tour never puts words in a busy agent's
+ * mouth. Each finished pane is woken at most once (a second message would land
+ * on it mid-burst).
  *
  * **Timing:** beats use fixed pauses only for dramatic dwell; every camera
  * journey and ring settle is *awaited* ([movieAwait] on [spikeCamReturning] /
@@ -69,6 +78,15 @@ import org.w3c.dom.events.KeyboardEventInit
 /** The running movie coroutine, or `null` when no tour is playing. */
 internal var spikeMovieJob: Job? = null
 
+/**
+ * The user's [spikeLegendHidden] setting captured the instant the tour started,
+ * so [movieCleanup] can put the shortcuts legend back exactly as it was — the
+ * tour force-hides the legend while it plays (a clean stage for the recording),
+ * regardless of whether the viewer had it showing. `null` outside a tour.
+ * @see toggleDemoMovie @see movieCleanup
+ */
+private var spikeMovieLegendWasHidden: Boolean? = null
+
 /** The small top-centre Lunamux branding pill shown while the movie plays, or `null`. */
 internal var spikeMovieBadge: HTMLElement? = null
 
@@ -89,6 +107,12 @@ internal fun toggleDemoMovie() {
         return
     }
     if (!isDemoClient || !spikeOpen) return
+    // Remember the viewer's shortcuts-legend choice, then force it hidden for the
+    // duration of the tour so the recording plays against a clean stage;
+    // movieCleanup restores it on every stop path.
+    spikeMovieLegendWasHidden = spikeLegendHidden
+    spikeLegendHidden = true
+    updateLegendVisibility()
     spikeMovieJob = GlobalScope.launch {
         try {
             showMovieBadge()
@@ -115,6 +139,13 @@ private fun movieCleanup() {
     spikeMovieSubtitle?.remove()
     spikeMovieSubtitle = null
     spikeMovieJob = null
+    // Restore the shortcuts legend to whatever the viewer had before the tour
+    // force-hid it. Guarded so a stray cleanup with no saved state is a no-op.
+    spikeMovieLegendWasHidden?.let {
+        spikeLegendHidden = it
+        spikeMovieLegendWasHidden = null
+        updateLegendVisibility()
+    }
     updateDemoTourButton()
 }
 
@@ -138,7 +169,7 @@ private fun showMovieBadge() {
     // alpha hex on the accent, exactly as the beacons do.
     val accent = spikeChrome().accent
     val pill = document.createElement("div") as HTMLElement
-    pill.textContent = "● Lunamux · multiplexing terminal server for Mac with Android and iOS " +
+    pill.textContent = "● lunamux · multiplexing terminal server for Mac with Android and iOS " +
         "apps · 2D and 3D always in sync · www.lunamux.dev"
     pill.style.cssText = "position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:5;" +
         "pointer-events:none;padding:6px 16px;border-radius:10px;border:1px solid $accent;" +
@@ -148,27 +179,47 @@ private fun showMovieBadge() {
     spikeMovieBadge = pill
 
     val narration = document.createElement("div") as HTMLElement
+    // Each beat slides in from the right and the outgoing line slides off to the
+    // left ([movieNarrate]); both opacity and transform are transitioned so the
+    // captions read like a conveyor of cards rather than a plain cross-fade.
+    // Starts parked off to the right, invisible, until the first beat animates it in.
     narration.style.cssText = "position:absolute;right:30px;bottom:26px;z-index:5;pointer-events:none;" +
         "font:700 26px ui-monospace,Menlo,monospace;color:#eef3fb;letter-spacing:0.5px;white-space:nowrap;" +
-        "text-align:right;text-shadow:0 2px 20px rgba(0,0,0,0.9);transition:opacity 250ms ease;opacity:0;"
+        "text-align:right;text-shadow:0 2px 20px rgba(0,0,0,0.9);" +
+        "transition:opacity 250ms ease,transform 250ms ease;opacity:0;transform:translateX(160px);"
     overlay.appendChild(narration)
     spikeMovieSubtitle = narration
 }
 
+/** The transition applied to the narration row while it animates (kept off during the snap-back). */
+private const val MOVIE_NARRATION_TRANSITION = "opacity 250ms ease,transform 250ms ease"
+
 /**
  * Rewrites the lower-right narration row to [text] — the per-beat, viewer-facing
- * "what the tour is doing" line — with a quick fade so the change registers.
- * Called by [playDemoMovie] at the start of every beat; safe when the movie
- * chrome is already gone.
+ * "what the tour is doing" line. The outgoing line slides off to the left and
+ * fades; the new line then snaps (transition-less) to just off the right edge and
+ * slides in, so beats read like a conveyor of cards. Called by [playDemoMovie] at
+ * the start of every beat; safe when the movie chrome is already gone.
  *
  * @param text what the tour is doing right now, viewer-facing.
  */
 private fun movieNarrate(text: String) {
     val sub = spikeMovieSubtitle ?: return
+    // Slide the current line out toward the left edge and fade it.
     sub.style.opacity = "0"
+    sub.style.transform = "translateX(-160px)"
     window.setTimeout({
         sub.textContent = text
+        // Snap (no transition) to just off the right edge, then re-enable the
+        // transition and slide in — a reflow read between the two commits the
+        // parked position so the browser animates from there rather than the left.
+        sub.style.transition = "none"
+        sub.style.transform = "translateX(160px)"
+        @Suppress("UNUSED_VARIABLE")
+        val reflow = sub.clientWidth // force layout so the snap-back isn't coalesced
+        sub.style.transition = MOVIE_NARRATION_TRANSITION
         sub.style.opacity = "1"
+        sub.style.transform = "translateX(0)"
         // If we're recording, log this beat against the recording clock (measured at
         // the moment the caption becomes visible) so finalizeRecording can write a
         // timeline .txt whose stamps line up with the video.
@@ -317,6 +368,26 @@ private suspend fun movieAwaitWormhole() {
     movieAwait(16_000) { spikeWormholes.isEmpty() } // …then until it tears down
     movieAwaitCamera() // the follow-the-pane return flight lands
     movieAwaitSettled() // the ring finishes seating the newborn
+}
+
+/**
+ * Waits for a **world transit** (the ⌥⌘O fly-through-the-wormhole to the next world) to run
+ * its full four-leg course. [enterOrExitOtherWorld] arms [spikeWorldTransit] synchronously
+ * from the key press, so this first holds until it is non-null (armed), then until
+ * [clearWorldTransit] tears it down at the far end (open→approach→tunnel→arrive ≈ 12–15 s,
+ * which a fixed delay can't cover), then lets the camera hand-back settle. If the warp never
+ * arms (fewer than two worlds, or the feature flag is off) it returns after the short wait
+ * rather than stalling the tour. By the time it returns the [WindowCommand.SetActiveWorld]
+ * fired at the tunnel midpoint has round-tripped, so the ring already holds the new world's
+ * panes.
+ *
+ * @see enterOrExitOtherWorld @see tickWorldTransit @see clearWorldTransit
+ */
+private suspend fun movieAwaitWorldTransit() {
+    movieAwait(4_000) { spikeWorldTransit != null } // hold until the warp arms
+    if (spikeWorldTransit == null) return // it never fired — don't stall the tour
+    movieAwait(24_000) { spikeWorldTransit == null } // …then until the fly-through completes
+    movieAwaitCamera() // the arrival hand-back to the command center settles
 }
 
 /**
@@ -577,12 +648,40 @@ private suspend fun playDemoMovie() {
     moviePress("n", "KeyN")
     movieAwaitWormhole(); delay(900) // hold through the whole vortex, then a beat to read it
 
-    // ══ 8. Overview → free flight → type from behind: frame the whole world with
-    //       `m`, drop into free flight with `f`, glide behind the `~/code/lastlight`
-    //       shell and type into it from behind. Front that pane in command center
-    //       first (by live state — its floor moved when Trackmo was stashed) so
-    //       [playFlyBehindAndType] and the `Enter` engage resolve to it.
-    movieNavigateToPane("demo-p2") // → ~/code/lastlight (shell)
+    // ══ 8. Travel to another world: ⌥⌘O flies the camera *through* a wormhole to the
+    //       next world (here the DarknessIRC workspace). The whole rest of the tour
+    //       plays out over there — a different set of tabs, panes and agents — so the
+    //       viewer sees that a world is a self-contained place you fly between, not
+    //       just a theme swap. By the time the transit lands the ring already holds
+    //       the new world's windows (the SetActiveWorld sent mid-tunnel round-trips).
+    movieNarrate("Fly through a wormhole to another world")
+    delay(700)
+    moviePress("o", "KeyO", alt = true, meta = true) // ⌥⌘O → world transit
+    movieAwaitWorldTransit()
+    // Don't move on until the new world's ring has actually seated its panes (the
+    // config round-trip + reconcileRing that build them can lag the camera landing).
+    // Wait on dirc-p1 specifically — the first channel the beat-9 tour visits.
+    movieAwait(6_000) { spikePanes.any { it.paneId == "dirc-p1" && !it.dying } }
+    delay(1_400) // read the new world
+
+    // ══ 9. Tour the new world's *live* windows before the fancy camera work: walk the
+    //       ring across a few of the DarknessIRC channels (#commodore, #kotlin-multiplatform,
+    //       #amiga — the "channels" tab), resting a couple of seconds on each so the
+    //       viewer reads that these are real, live IRC panes (their names flash in the
+    //       "now showing" label as we land on each), not a frozen backdrop.
+    movieNarrate("This world has different tabs and windows and another color theme")
+    for (channelPane in listOf("dirc-p1", "dirc-p2", "dirc-p3")) {
+        movieNavigateToPane(channelPane)
+        movieAwaitSettled(); delay(2_400) // hold on each window long enough to read it
+    }
+
+    // ══ 10. Overview → free flight → type from behind, now in the other world: frame
+    //       the DarknessIRC world with `m`, drop into free flight with `f`, glide
+    //       behind its *idle* Claude agent (`dirc-p9`, "claude: reconnect" — a finished
+    //       session, safe to type into) and give it a follow-up through the glass. Front
+    //       that pane in command center first so [playFlyBehindAndType] and the `Enter`
+    //       engage resolve to it.
+    movieNavigateToPane("dirc-p9") // → the idle "claude: reconnect" agent (other world)
     delay(500)
     movieNarrate("Go around to see all the windows")
     moviePress("m", "KeyM")
@@ -590,7 +689,7 @@ private suspend fun playDemoMovie() {
 
     movieNarrate("Free flight: the camera becomes a spaceship")
     moviePress("f", "KeyF"); delay(800)
-    playFlyBehindAndType("ls")
+    playFlyBehindAndType("dedupe the replayed history by line id")
 
     // ── Finale: disengage, fly home, land back in command center, rest.
     moviePress("x", "KeyX", alt = true, meta = true); delay(600) // ⌥⌘X disengage

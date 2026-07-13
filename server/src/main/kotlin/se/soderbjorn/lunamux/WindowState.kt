@@ -43,6 +43,7 @@ object WindowState {
 
     private val nodeIdCounter = AtomicLong(0)
     private val tabIdCounter = AtomicLong(0)
+    private val worldIdCounter = AtomicLong(0)
 
     /**
      * Per-database nonce suffixed onto every newly minted tab / pane id
@@ -66,9 +67,99 @@ object WindowState {
 
     private fun newNodeId(): String = mintId("n", nodeIdCounter)
     private fun newTabId(): String = mintId("t", tabIdCounter)
+    private fun newWorldId(): String = mintId("w", worldIdCounter)
 
-    private val _config: MutableStateFlow<WindowConfig> = MutableStateFlow(WindowConfig(emptyList()))
+    /** Default name for the first world (mirrors the toolkit's `DEFAULT_WORLD_NAME`). */
+    private const val DEFAULT_WORLD_NAME = "Home"
+
+    private val _config: MutableStateFlow<WindowConfig> = MutableStateFlow(WindowConfig())
     val config: StateFlow<WindowConfig> = _config.asStateFlow()
+
+    // ── World plumbing ───────────────────────────────────────────────
+    // `worlds` is the single source of truth. The top-level
+    // `tabs`/`activeTabId` are a continuously-maintained mirror of the
+    // *default* (first) world, kept only so pre-1.9 ("world-unaware")
+    // clients and legacy persistence paths keep working. Every mutation
+    // resolves the world that owns the referenced id, transforms a
+    // per-world *view* WindowConfig through the existing stateless
+    // TabManager/PaneManager, then splices the result back into that world
+    // and re-syncs the legacy mirror.
+
+    /** Every tab across every world — used by id lookups spanning worlds. */
+    private fun allTabs(cfg: WindowConfig): List<TabConfig> = cfg.worlds.flatMap { it.tabs }
+
+    /**
+     * Guarantee [cfg] carries at least one world. If it is world-less
+     * (only possible before [initialize], e.g. in unit tests) wrap any
+     * existing top-level tabs into a default "Home" world. Returns [cfg]
+     * unchanged when it already has worlds.
+     */
+    private fun ensureWorlds(cfg: WindowConfig): WindowConfig {
+        if (cfg.worlds.isNotEmpty()) return cfg
+        val worldId = newWorldId()
+        val world = WorldConfig(
+            id = worldId,
+            name = DEFAULT_WORLD_NAME,
+            tabs = cfg.tabs,
+            activeTabId = cfg.activeTabId,
+        )
+        return syncLegacyMirror(cfg.copy(worlds = listOf(world), activeWorldId = worldId))
+    }
+
+    /** The default (first) world's id, or `null` when there are no worlds. */
+    fun defaultWorldId(): String? = _config.value.worlds.firstOrNull()?.id
+
+    /** The default (first) world's theme pair, or `null` if it follows global. */
+    fun defaultWorldTheme(): WorldThemeSelection? =
+        _config.value.worlds.firstOrNull()?.themeSelection
+
+    /** The active world's id (falls back to the default world). */
+    fun activeWorldId(): String? {
+        val cfg = _config.value
+        return cfg.activeWorldId?.takeIf { id -> cfg.worlds.any { it.id == id } }
+            ?: cfg.worlds.firstOrNull()?.id
+    }
+
+    /** A single world exposed as a flat [WindowConfig] the stateless
+     *  TabManager/PaneManager transforms can operate on. */
+    private fun viewOf(world: WorldConfig): WindowConfig =
+        WindowConfig(tabs = world.tabs, activeTabId = world.activeTabId)
+
+    /** The world owning [tabId], or `null` if no world contains it. */
+    private fun worldOfTab(cfg: WindowConfig, tabId: String): WorldConfig? =
+        cfg.worlds.firstOrNull { w -> w.tabs.any { it.id == tabId } }
+
+    /** The world owning the pane [paneId], or `null`. */
+    private fun worldOfPane(cfg: WindowConfig, paneId: String): WorldConfig? =
+        cfg.worlds.firstOrNull { w -> w.tabs.any { t -> t.panes.any { it.leaf.id == paneId } } }
+
+    /** The world owning a pane backed by [sessionId], or `null`. */
+    private fun worldOfSession(cfg: WindowConfig, sessionId: String): WorldConfig? =
+        cfg.worlds.firstOrNull { w -> w.tabs.any { t -> t.panes.any { it.leaf.sessionId == sessionId } } }
+
+    /**
+     * Splice a transformed per-world [newView] back into [worldId] and
+     * re-sync the legacy default-world mirror. Returns the new top-level
+     * config (not yet published).
+     */
+    private fun writeBackWorld(cfg: WindowConfig, worldId: String, newView: WindowConfig): WindowConfig {
+        val newWorlds = cfg.worlds.map { w ->
+            if (w.id == worldId) w.copy(tabs = newView.tabs, activeTabId = newView.activeTabId) else w
+        }
+        return syncLegacyMirror(cfg.copy(worlds = newWorlds))
+    }
+
+    /** Keep top-level `tabs`/`activeTabId` equal to the default world's. */
+    private fun syncLegacyMirror(cfg: WindowConfig): WindowConfig {
+        val first = cfg.worlds.firstOrNull()
+        val active = cfg.activeWorldId?.takeIf { id -> cfg.worlds.any { it.id == id } }
+            ?: first?.id
+        return cfg.copy(
+            tabs = first?.tabs ?: emptyList(),
+            activeTabId = first?.activeTabId,
+            activeWorldId = active,
+        )
+    }
 
     @Volatile
     private var initialized: Boolean = false
@@ -154,8 +245,9 @@ object WindowState {
         val layout = activeLayoutByTab[tabId] ?: return
         val primary = paneOrderByTab[tabId]?.firstOrNull()
         val cfg = _config.value
-        val newCfg = PaneManager.applyLayout(cfg, tabId, layout, primary) ?: return
-        _config.value = newCfg
+        val world = worldOfTab(cfg, tabId) ?: return
+        val newView = PaneManager.applyLayout(viewOf(world), tabId, layout, primary) ?: return
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -177,7 +269,7 @@ object WindowState {
         TerminalSessions.idNonce = idNonce
 
         val loaded = repo.loadWindowConfig()
-        val cfg = if (loaded != null && loaded.tabs.isNotEmpty()) {
+        val cfg = if (loaded != null && loaded.worlds.any { it.tabs.isNotEmpty() }) {
             try {
                 rehydrate(loaded, repo)
             } catch (t: Throwable) {
@@ -189,12 +281,14 @@ object WindowState {
         }
         _config.value = cfg
 
+        val everyTab = allTabs(cfg)
+
         // Re-engage persisted layout presets so subsequent pane
         // add/remove/focus events fire auto re-tile (or any other
         // preset-driven layout) without the user re-picking from the
         // dropdown. Custom is treated as "no preset is driving" and
-        // skipped.
-        for (tab in cfg.tabs) {
+        // skipped. Spans every world's tabs.
+        for (tab in everyTab) {
             val key = tab.layoutPreset ?: continue
             if (key == "custom") continue
             activeLayoutByTab[tab.id] = key
@@ -203,7 +297,7 @@ object WindowState {
         // Seed paneOrderByTab from the persisted focus so the head of
         // each tab's importance order matches what the client will
         // restore. Subsequent focus events bubble new entries.
-        for (tab in cfg.tabs) {
+        for (tab in everyTab) {
             val focused = tab.focusedPaneId
             if (focused != null && tab.panes.any { it.leaf.id == focused }) {
                 paneOrderByTab[tab.id] = mutableListOf(focused)
@@ -212,7 +306,7 @@ object WindowState {
 
         runCatching {
             val live = HashSet<String>()
-            for (tab in cfg.tabs) {
+            for (tab in everyTab) {
                 tab.panes.forEach { live.add(it.leaf.id) }
             }
             for (stale in repo.allScrollbackLeafIds() - live) {
@@ -224,6 +318,7 @@ object WindowState {
     private fun rehydrate(loaded: WindowConfig, repo: SettingsRepository): WindowConfig {
         var maxNodeId = 0L
         var maxTabId = 0L
+        var maxWorldId = 0L
 
         fun trackNodeId(id: String) {
             // Ids may carry a `-nonce` suffix (post-#86 shape) — the counter
@@ -236,7 +331,11 @@ object WindowState {
         fun rebuildLeaf(leaf: LeafNode): LeafNode? {
             trackNodeId(leaf.id)
             return when (leaf.content) {
-                is FileBrowserContent, is GitContent -> leaf.copy(sessionId = "")
+                // PTY-less panes carry no session; their content (the git
+                // selection, file-browser tree, or web pane's last URL) is
+                // restored verbatim so the pane reopens where it left off.
+                is FileBrowserContent, is GitContent, is WebBrowserContent ->
+                    leaf.copy(sessionId = "")
                 // Agent consoles are ephemeral: a PTY-less virtual session
                 // cannot be reattached after a restart (the driving MCP
                 // client is gone), so a persisted agent pane is dropped.
@@ -249,11 +348,10 @@ object WindowState {
             }
         }
 
-        val rebuiltTabs = loaded.tabs.map { tab ->
+        fun rebuildTab(tab: TabConfig): TabConfig {
             // Same nonce-aware numeric extraction as [trackNodeId].
             tab.id.removePrefix("t").substringBefore('-').toLongOrNull()
                 ?.let { if (it > maxTabId) maxTabId = it }
-
             val rebuiltPanes = tab.panes.mapNotNull { p ->
                 val rebuilt = rebuildLeaf(p.leaf) ?: return@mapNotNull null
                 val box = PaneGeometry.normalize(p.x, p.y, p.width, p.height)
@@ -262,23 +360,57 @@ object WindowState {
                     x = box.x, y = box.y, width = box.width, height = box.height,
                 )
             }
-            tab.copy(panes = rebuiltPanes)
+            val livePaneIds = rebuiltPanes.mapTo(HashSet()) { it.leaf.id }
+            val keepFocus = tab.focusedPaneId?.takeIf { it in livePaneIds }
+            val activeMatchesPanes = keepFocus == tab.focusedPaneId
+            return if (rebuiltPanes == tab.panes && activeMatchesPanes) tab
+            else tab.copy(panes = rebuiltPanes, focusedPaneId = keepFocus)
+        }
+
+        val rebuiltWorlds = loaded.worlds.map { world ->
+            world.id.removePrefix("w").substringBefore('-').toLongOrNull()
+                ?.let { if (it > maxWorldId) maxWorldId = it }
+            val rebuiltTabs = world.tabs.map { rebuildTab(it) }
+            val tabIdSet = rebuiltTabs.mapTo(HashSet()) { it.id }
+            world.copy(
+                tabs = rebuiltTabs,
+                activeTabId = world.activeTabId?.takeIf { it in tabIdSet },
+            )
         }
 
         nodeIdCounter.set(maxNodeId)
         tabIdCounter.set(maxTabId)
+        worldIdCounter.set(maxWorldId)
 
-        val tabIdSet = rebuiltTabs.map { it.id }.toSet()
-        val validatedActive = loaded.activeTabId?.takeIf { it in tabIdSet }
-        val sanitizedTabs = rebuiltTabs.map { tab ->
-            val livePaneIds = tab.panes.mapTo(HashSet()) { it.leaf.id }
-            val keepFocus = tab.focusedPaneId?.takeIf { it in livePaneIds }
-            if (keepFocus == tab.focusedPaneId) tab else tab.copy(focusedPaneId = keepFocus)
-        }
-        return WindowConfig(tabs = sanitizedTabs, activeTabId = validatedActive)
+        val worldIdSet = rebuiltWorlds.mapTo(HashSet()) { it.id }
+        val validatedActiveWorld = loaded.activeWorldId?.takeIf { it in worldIdSet }
+            ?: rebuiltWorlds.firstOrNull()?.id
+        return syncLegacyMirror(
+            WindowConfig(worlds = rebuiltWorlds, activeWorldId = validatedActiveWorld),
+        )
     }
 
+    /**
+     * Build the default (cold-start) config: a single "Home" world holding
+     * one auto-tiled terminal tab.
+     */
     private fun buildDefault(): WindowConfig {
+        val worldId = newWorldId()
+        val tab1 = buildDefaultTab()
+        val world = WorldConfig(
+            id = worldId,
+            name = DEFAULT_WORLD_NAME,
+            tabs = listOf(tab1),
+            activeTabId = tab1.id,
+        )
+        return syncLegacyMirror(
+            WindowConfig(worlds = listOf(world), activeWorldId = worldId),
+        )
+    }
+
+    /** A fresh terminal tab (one full-bleed auto-tiled pane), for cold start
+     *  and for seeding a newly-created world. */
+    private fun buildDefaultTab(number: Int = 1): TabConfig {
         val s1 = TerminalSessions.create()
         val leaf = LeafNode(
             id = newNodeId(),
@@ -286,9 +418,9 @@ object WindowState {
             title = "Session ${TerminalSessions.displayNumber(s1)}",
             content = TerminalContent(s1),
         )
-        val tab1 = TabConfig(
+        return TabConfig(
             id = newTabId(),
-            title = "Tab 1",
+            title = "Tab $number",
             panes = listOf(
                 Pane(
                     leaf = leaf,
@@ -299,20 +431,14 @@ object WindowState {
                     width = 1.0,
                     height = 1.0,
                     z = 1L,
-                )
+                ),
             ),
             // Without this the toolkit's tab snapshot has activePaneId=null
             // and the lone pane stays unrendered until the user clicks it.
             focusedPaneId = leaf.id,
-            // Default the cold-start tab to auto-tiling too (issue #86), so
-            // every tab in the app shares the same default layout. Re-engaged
-            // into activeLayoutByTab by the persisted-preset loop in initialize().
+            // Default the cold-start tab to auto-tiling too (issue #86).
             layoutPreset = LayoutPreset.Auto.key,
         )
-        // Without an explicit activeTabId the toolkit doesn't visually
-        // select any tab on cold start, so the lone tab/pane both look
-        // inactive until the user clicks the tab.
-        return WindowConfig(listOf(tab1), activeTabId = tab1.id)
     }
 
     // ── Tab dispatch ─────────────────────────────────────────────────
@@ -323,18 +449,26 @@ object WindowState {
      *  @return the newly minted tab id (used by the MCP `create_tab` tool
      *    to report the created tab; the `/window` command path ignores it).
      */
-    fun addTab(): String = synchronized(this) {
-        val cfg = _config.value
+    fun addTab(worldId: String? = null): String = synchronized(this) {
+        // Bootstrap a default world if the config is world-less (the
+        // pre-[initialize] path some unit tests exercise). Production always
+        // has at least the cold-start "Home" world from [buildDefault].
+        val cfg = ensureWorlds(_config.value).also { if (it !== _config.value) _config.value = it }
+        // Resolve the target world: explicit id, else the active world, else
+        // the first world. Callers (WindowRoutes) pass the first world's id
+        // for old-client commands so those always land in the default world.
+        val wid = worldId ?: cfg.activeWorldId ?: cfg.worlds.firstOrNull()?.id ?: return@synchronized ""
+        val world = cfg.worlds.firstOrNull { it.id == wid } ?: return@synchronized ""
         val sessionId = TerminalSessions.create()
         val tabId = newTabId()
         val nodeId = newNodeId()
-        val newCfg = TabManager.addTab(
-            cfg = cfg,
+        val newView = TabManager.addTab(
+            cfg = viewOf(world),
             newTabId = tabId,
             newNodeId = nodeId,
             sessionId = sessionId,
         )
-        _config.value = newCfg
+        _config.value = writeBackWorld(cfg, wid, newView)
         // Register the auto preset in the live map so pane add/remove/focus
         // events on this tab re-tile via maybeReapplyLayout without waiting
         // for a server restart to re-engage the persisted layoutPreset.
@@ -353,31 +487,35 @@ object WindowState {
     /** Close [tabId], destroying any PTY sessions no longer referenced. */
     fun closeTab(tabId: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = TabManager.closeTab(cfg, tabId) ?: return@synchronized
-        commitWithSessionGc(cfg, newCfg)
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized
+        val newView = TabManager.closeTab(viewOf(world), tabId) ?: return@synchronized
+        commitWithSessionGc(cfg, writeBackWorld(cfg, world.id, newView))
     }
 
-    /** Mark [tabId] as the currently-selected tab. */
+    /** Mark [tabId] as the currently-selected tab (within its own world). */
     fun setActiveTab(tabId: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = TabManager.setActiveTab(cfg, tabId) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized
+        val newView = TabManager.setActiveTab(viewOf(world), tabId) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /** Record the user's focus on [paneId] in [tabId]. */
     fun setFocusedPane(tabId: String, paneId: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = TabManager.setFocusedPane(cfg, tabId, paneId) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized
+        val newView = TabManager.setFocusedPane(viewOf(world), tabId, paneId) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
         bubbleFocus(tabId, paneId)
         maybeReapplyLayout(tabId)
     }
 
-    /** Move [tabId] before or after [targetTabId]. */
+    /** Move [tabId] before or after [targetTabId] (within their world). */
     fun moveTab(tabId: String, targetTabId: String, before: Boolean) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = TabManager.moveTab(cfg, tabId, targetTabId, before) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized
+        val newView = TabManager.moveTab(viewOf(world), tabId, targetTabId, before) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -388,8 +526,9 @@ object WindowState {
      */
     fun setTabHidden(tabId: String, hidden: Boolean) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = TabManager.setTabHidden(cfg, tabId, hidden) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized
+        val newView = TabManager.setTabHidden(viewOf(world), tabId, hidden) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -400,39 +539,162 @@ object WindowState {
      */
     fun setTabHiddenFromSidebar(tabId: String, hidden: Boolean) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = TabManager.setTabHiddenFromSidebar(cfg, tabId, hidden) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized
+        val newView = TabManager.setTabHiddenFromSidebar(viewOf(world), tabId, hidden) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /** Set the display title of [tabId]. */
     fun renameTab(tabId: String, title: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = TabManager.renameTab(cfg, tabId, title) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized
+        val newView = TabManager.renameTab(viewOf(world), tabId, title) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
+    }
+
+    // ── World lifecycle ──────────────────────────────────────────────
+
+    /**
+     * Create a new world (with one auto-tiled terminal tab) and make it
+     * active. The new world's theme pair is seeded from [seedTheme] (the
+     * caller resolves this from the current default/global selection).
+     *
+     * @param name      the display name for the new world.
+     * @param seedTheme the initial theme pair, or `null` to follow global.
+     * @return the newly minted world id.
+     */
+    fun addWorld(name: String, seedTheme: WorldThemeSelection? = null): String = synchronized(this) {
+        val cfg = _config.value
+        val worldId = newWorldId()
+        val tab = buildDefaultTab()
+        val world = WorldConfig(
+            id = worldId,
+            name = name.trim().ifEmpty { "World" }.take(80),
+            tabs = listOf(tab),
+            activeTabId = tab.id,
+            themeSelection = seedTheme,
+        )
+        activeLayoutByTab[tab.id] = LayoutPreset.Auto.key
+        _config.value = syncLegacyMirror(
+            cfg.copy(worlds = cfg.worlds + world, activeWorldId = worldId),
+        )
+        worldId
+    }
+
+    /** Rename world [worldId]. No-op if unknown or unchanged. */
+    fun renameWorld(worldId: String, name: String) = synchronized(this) {
+        val cfg = _config.value
+        val sanitized = name.trim().take(80)
+        if (sanitized.isEmpty()) return@synchronized
+        val newWorlds = cfg.worlds.map { w ->
+            if (w.id == worldId && w.name != sanitized) w.copy(name = sanitized) else w
+        }
+        if (newWorlds == cfg.worlds) return@synchronized
+        _config.value = syncLegacyMirror(cfg.copy(worlds = newWorlds))
+    }
+
+    /**
+     * Switch the active world (world-aware clients only). Never touches the
+     * legacy default-world mirror old clients follow.
+     */
+    fun setActiveWorld(worldId: String) = synchronized(this) {
+        val cfg = _config.value
+        if (cfg.activeWorldId == worldId) return@synchronized
+        if (cfg.worlds.none { it.id == worldId }) return@synchronized
+        _config.value = syncLegacyMirror(cfg.copy(activeWorldId = worldId))
+    }
+
+    /** Set world [worldId]'s theme pair. The legacy `THEME_V2_SELECTION`
+     *  mirror (for the default world) is handled by WindowRoutes/B6. */
+    fun setWorldTheme(worldId: String, selection: WorldThemeSelection) = synchronized(this) {
+        val cfg = _config.value
+        val newWorlds = cfg.worlds.map { w ->
+            if (w.id == worldId && w.themeSelection != selection) w.copy(themeSelection = selection) else w
+        }
+        if (newWorlds == cfg.worlds) return@synchronized
+        _config.value = syncLegacyMirror(cfg.copy(worlds = newWorlds))
+    }
+
+    /**
+     * Close world [worldId], cascading to every tab + PTY session inside it.
+     * Refuses to close the last remaining world. When the closed world was
+     * active, the neighbour (or first) world becomes active.
+     */
+    fun closeWorld(worldId: String) = synchronized(this) {
+        val cfg = _config.value
+        if (cfg.worlds.size <= 1) return@synchronized
+        val idx = cfg.worlds.indexOfFirst { it.id == worldId }
+        if (idx < 0) return@synchronized
+        val remaining = cfg.worlds.filterNot { it.id == worldId }
+        val newActive = if (cfg.activeWorldId == worldId) {
+            remaining.getOrNull(idx.coerceAtMost(remaining.size - 1))?.id ?: remaining.first().id
+        } else {
+            cfg.activeWorldId
+        }
+        // Drop the closed world's tabs' bookkeeping so stale layout/order
+        // entries don't linger.
+        cfg.worlds[idx].tabs.forEach { tab ->
+            activeLayoutByTab.remove(tab.id)
+            paneOrderByTab.remove(tab.id)
+        }
+        val newCfg = syncLegacyMirror(cfg.copy(worlds = remaining, activeWorldId = newActive))
+        // GC any PTY sessions the closed world uniquely referenced.
+        commitWithSessionGc(cfg, newCfg)
+    }
+
+    /**
+     * Move tab [tabId] (with all its panes and their live PTY sessions) out of
+     * the world that owns it and into world [destWorldId], appending it to that
+     * world's tab list. No sessions are touched — only ownership changes. No-op
+     * when the tab or destination world is unknown, when the destination is the
+     * tab's current world, or when the tab is the last one in its source world
+     * (which would leave that world empty). If the moved tab was its source
+     * world's active tab, a surviving sibling is promoted to active there.
+     *
+     * @param tabId       the id of the tab to move.
+     * @param destWorldId the id of the destination world.
+     */
+    fun moveTabToWorld(tabId: String, destWorldId: String) = synchronized(this) {
+        val cfg = _config.value
+        val src = worldOfTab(cfg, tabId) ?: return@synchronized
+        if (src.id == destWorldId) return@synchronized
+        if (cfg.worlds.none { it.id == destWorldId }) return@synchronized
+        if (src.tabs.size <= 1) return@synchronized // don't strand the source world empty
+        val moving = src.tabs.first { it.id == tabId }
+        val srcRemaining = src.tabs.filterNot { it.id == tabId }
+        val srcActive = if (src.activeTabId == tabId) srcRemaining.first().id else src.activeTabId
+        val newWorlds = cfg.worlds.map { w ->
+            when (w.id) {
+                src.id -> w.copy(tabs = srcRemaining, activeTabId = srcActive)
+                destWorldId -> w.copy(tabs = w.tabs + moving)
+                else -> w
+            }
+        }
+        _config.value = syncLegacyMirror(cfg.copy(worlds = newWorlds))
     }
 
     // ── Lookups ──────────────────────────────────────────────────────
 
-    /** Find a leaf by id across all panes. */
+    /** Find a leaf by id across all panes in all worlds. */
     fun findLeaf(paneId: String): LeafNode? = synchronized(this) {
         val cfg = _config.value
-        for (tab in cfg.tabs) {
+        for (tab in allTabs(cfg)) {
             tab.panes.firstOrNull { it.leaf.id == paneId }?.let { return@synchronized it.leaf }
         }
         null
     }
 
-    /** Return the id of the tab that contains [paneId]. */
+    /** Return the id of the tab that contains [paneId] (across worlds). */
     fun tabIdOfPane(paneId: String): String? = synchronized(this) {
         val cfg = _config.value
-        for (tab in cfg.tabs) {
+        for (tab in allTabs(cfg)) {
             if (tab.panes.any { it.leaf.id == paneId }) return@synchronized tab.id
         }
         null
     }
 
     private fun findLeafBySession(cfg: WindowConfig, sessionId: String): LeafNode? {
-        for (tab in cfg.tabs) {
+        for (tab in allTabs(cfg)) {
             tab.panes.firstOrNull { it.leaf.sessionId == sessionId }?.let { return it.leaf }
         }
         return null
@@ -445,9 +707,10 @@ object WindowState {
         transform: (FileBrowserContent) -> FileBrowserContent,
     ): FileBrowserContent? = synchronized(this) {
         val cfg = _config.value
-        val (newCfg, newState) = PaneManager.updateFileBrowserContent(cfg, paneId, transform)
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized null
+        val (newView, newState) = PaneManager.updateFileBrowserContent(viewOf(world), paneId, transform)
             ?: return@synchronized null
-        _config.value = newCfg
+        _config.value = writeBackWorld(cfg, world.id, newView)
         newState
     }
 
@@ -501,9 +764,10 @@ object WindowState {
         transform: (TerminalContent) -> TerminalContent,
     ): TerminalContent? = synchronized(this) {
         val cfg = _config.value
-        val (newCfg, newState) = PaneManager.updateTerminalContent(cfg, paneId, transform)
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized null
+        val (newView, newState) = PaneManager.updateTerminalContent(viewOf(world), paneId, transform)
             ?: return@synchronized null
-        _config.value = newCfg
+        _config.value = writeBackWorld(cfg, world.id, newView)
         newState
     }
 
@@ -536,9 +800,10 @@ object WindowState {
         transform: (GitContent) -> GitContent,
     ): GitContent? = synchronized(this) {
         val cfg = _config.value
-        val (newCfg, newState) = PaneManager.updateGitContent(cfg, paneId, transform)
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized null
+        val (newView, newState) = PaneManager.updateGitContent(viewOf(world), paneId, transform)
             ?: return@synchronized null
-        _config.value = newCfg
+        _config.value = writeBackWorld(cfg, world.id, newView)
         newState
     }
 
@@ -564,16 +829,51 @@ object WindowState {
     fun setGitAutoRefresh(paneId: String, enabled: Boolean): GitContent? =
         mutateGit(paneId) { it.copy(autoRefresh = enabled) }
 
+    // ── Web-browser content dispatch ─────────────────────────────────
+
+    private fun mutateWebBrowser(
+        paneId: String,
+        transform: (WebBrowserContent) -> WebBrowserContent,
+    ): WebBrowserContent? = synchronized(this) {
+        val cfg = _config.value
+        // Resolve the world that owns the pane and mutate its tab view, so a web
+        // pane in a non-default world is found and written back correctly (the
+        // top-level `tabs` are only a mirror of the default world). Mirrors
+        // [mutateFileBrowser].
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized null
+        val (newView, newState) = PaneManager.updateWebBrowserContent(viewOf(world), paneId, transform)
+            ?: return@synchronized null
+        _config.value = writeBackWorld(cfg, world.id, newView)
+        newState
+    }
+
+    /**
+     * Persist a web pane's committed URL (and optionally page title). Called
+     * from [WindowRoutes] when the Electron webview reports a navigation via
+     * [WindowCommand.WebBrowserSetUrl]. Mutating `_config` re-broadcasts the
+     * layout and triggers the debounced persist, so the pane restores at this
+     * URL after a restart.
+     *
+     * @param paneId the web pane to update
+     * @param url the newly committed URL
+     * @param title the current page title, or null to leave it unchanged
+     * @return the new content, or null if [paneId] is not a web pane
+     * @see addWebBrowserToTab
+     */
+    fun setWebBrowserUrl(paneId: String, url: String, title: String? = null): WebBrowserContent? =
+        mutateWebBrowser(paneId) { it.copy(url = url, title = title ?: it.title) }
+
     // ── Pane CRUD dispatch ───────────────────────────────────────────
 
     /** Remove the pane [paneId] from its tab and destroy any orphan PTY. */
     fun closePane(paneId: String) = synchronized(this) {
         val cfg = _config.value
-        val tabId = cfg.tabs.firstOrNull { tab ->
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
+        val tabId = world.tabs.firstOrNull { tab ->
             tab.panes.any { it.leaf.id == paneId }
         }?.id
-        val newCfg = PaneManager.closePane(cfg, paneId) ?: return@synchronized
-        commitWithSessionGc(cfg, newCfg)
+        val newView = PaneManager.closePane(viewOf(world), paneId) ?: return@synchronized
+        commitWithSessionGc(cfg, writeBackWorld(cfg, world.id, newView))
         recordPaneRemoved(paneId)
         if (tabId != null) maybeReapplyLayout(tabId)
     }
@@ -581,22 +881,25 @@ object WindowState {
     /** Close every pane that references [sessionId] and destroy the PTY. */
     fun closeSession(sessionId: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.closeSession(cfg, sessionId) ?: return@synchronized
-        commitWithSessionGc(cfg, newCfg)
+        val world = worldOfSession(cfg, sessionId) ?: return@synchronized
+        val newView = PaneManager.closeSession(viewOf(world), sessionId) ?: return@synchronized
+        commitWithSessionGc(cfg, writeBackWorld(cfg, world.id, newView))
     }
 
     /** Rename pane [paneId]; an empty title clears the custom name. */
     fun renamePane(paneId: String, title: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.renamePane(cfg, paneId, title) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
+        val newView = PaneManager.renamePane(viewOf(world), paneId, title) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /** Push a freshly-detected cwd for the pane backed by [sessionId]. */
     fun updatePaneCwd(sessionId: String, cwd: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.updatePaneCwd(cfg, sessionId, cwd) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfSession(cfg, sessionId) ?: return@synchronized
+        val newView = PaneManager.updatePaneCwd(viewOf(world), sessionId, cwd) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -613,8 +916,9 @@ object WindowState {
      */
     fun applyProgramTitle(sessionId: String, rawTitle: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.applyProgramTitle(cfg, sessionId, rawTitle) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfSession(cfg, sessionId) ?: return@synchronized
+        val newView = PaneManager.applyProgramTitle(viewOf(world), sessionId, rawTitle) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -627,8 +931,17 @@ object WindowState {
      */
     fun clearProgramTitles() = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.clearProgramTitles(cfg) ?: return@synchronized
-        _config.value = newCfg
+        var changed = false
+        val newWorlds = cfg.worlds.map { world ->
+            val newView = PaneManager.clearProgramTitles(viewOf(world))
+            if (newView == null) world
+            else {
+                changed = true
+                world.copy(tabs = newView.tabs, activeTabId = newView.activeTabId)
+            }
+        }
+        if (!changed) return@synchronized
+        _config.value = syncLegacyMirror(cfg.copy(worlds = newWorlds))
     }
 
     /**
@@ -645,19 +958,22 @@ object WindowState {
         height: Double,
     ) = synchronized(this) {
         val cfg = _config.value
-        val tabId = cfg.tabs.firstOrNull { tab ->
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
+        val tabId = world.tabs.firstOrNull { tab ->
             tab.panes.any { it.leaf.id == paneId }
         }?.id
-        val newCfg = PaneManager.setPaneGeometry(cfg, paneId, x, y, width, height) ?: return@synchronized
-        _config.value = newCfg
+        val newView = PaneManager.setPaneGeometry(viewOf(world), paneId, x, y, width, height)
+            ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
         if (tabId != null) clearLayoutPresetForTab(tabId)
     }
 
     /** Bring [paneId] to the top of its tab's stacking order. */
     fun raisePane(paneId: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.raisePane(cfg, paneId) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
+        val newView = PaneManager.raisePane(viewOf(world), paneId) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -676,15 +992,39 @@ object WindowState {
      */
     fun setPaneZoom(paneId: String, zoom: Double) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.setPaneZoom(cfg, paneId, zoom) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
+        val newView = PaneManager.setPaneZoom(viewOf(world), paneId, zoom) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
+    }
+
+    /**
+     * Set (or clear) the persisted 3D-world grid override on [paneId].
+     *
+     * Called from the [WindowCommand.SetPaneGrid3d] dispatch in `WindowRoutes`
+     * when the 3D world grows/shrinks a pane's grid (or clears it via the
+     * "restore native grid" hotkey), so the override rides the normal config
+     * broadcast + debounced persistence path into the database. Like
+     * [setPaneZoom] this does **not** clear the tab's layout preset — the 3D
+     * grid override is a 3D-only value that never touches 2D tab geometry.
+     *
+     * @param paneId the pane whose 3D grid override to set.
+     * @param cols the override column count, or `null` to clear the override.
+     * @param rows the override row count, or `null` to clear the override.
+     * @see Pane.grid3d
+     */
+    fun setPaneGrid3d(paneId: String, cols: Int?, rows: Int?) = synchronized(this) {
+        val cfg = _config.value
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
+        val newView = PaneManager.setPaneGrid3d(viewOf(world), paneId, cols, rows) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /** Toggle the maximized flag on [paneId]. */
     fun toggleMaximized(paneId: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.toggleMaximized(cfg, paneId) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
+        val newView = PaneManager.toggleMaximized(viewOf(world), paneId) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -697,8 +1037,9 @@ object WindowState {
      */
     fun setMaximized(paneId: String, maximized: Boolean) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.setMaximized(cfg, paneId, maximized) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
+        val newView = PaneManager.setMaximized(viewOf(world), paneId, maximized) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -713,8 +1054,9 @@ object WindowState {
      */
     fun setAgentNote(paneId: String, note: String?) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.setAgentNote(cfg, paneId, note) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
+        val newView = PaneManager.setAgentNote(viewOf(world), paneId, note) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -727,17 +1069,19 @@ object WindowState {
      */
     fun applyLayout(tabId: String, layout: String, primaryPaneId: String?) = synchronized(this) {
         val cfg = _config.value
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized
         val effectivePrimary = if (layout == "auto") {
             paneOrderByTab[tabId]?.firstOrNull() ?: primaryPaneId
         } else {
             primaryPaneId
         }
-        val laidOut = PaneManager.applyLayout(cfg, tabId, layout, effectivePrimary) ?: return@synchronized
+        val laidOut = PaneManager.applyLayout(viewOf(world), tabId, layout, effectivePrimary)
+            ?: return@synchronized
         // Stamp the chosen preset onto the persisted TabConfig so a
         // server restart re-engages auto re-tile without the user
         // having to re-pick from the dropdown.
         val tabIdx = laidOut.tabs.indexOfFirst { it.id == tabId }
-        val newCfg = if (tabIdx >= 0) {
+        val newView = if (tabIdx >= 0) {
             val tab = laidOut.tabs[tabIdx]
             if (tab.layoutPreset == layout) laidOut
             else laidOut.copy(
@@ -746,7 +1090,7 @@ object WindowState {
                 },
             )
         } else laidOut
-        _config.value = newCfg
+        _config.value = writeBackWorld(cfg, world.id, newView)
         activeLayoutByTab[tabId] = layout
     }
 
@@ -759,15 +1103,17 @@ object WindowState {
     private fun clearLayoutPresetForTab(tabId: String) {
         activeLayoutByTab.remove(tabId)
         val cfg = _config.value
-        val tabIdx = cfg.tabs.indexOfFirst { it.id == tabId }
+        val world = worldOfTab(cfg, tabId) ?: return
+        val tabIdx = world.tabs.indexOfFirst { it.id == tabId }
         if (tabIdx < 0) return
-        val tab = cfg.tabs[tabIdx]
+        val tab = world.tabs[tabIdx]
         if (tab.layoutPreset == null) return
-        _config.value = cfg.copy(
-            tabs = cfg.tabs.toMutableList().also {
+        val newView = viewOf(world).copy(
+            tabs = world.tabs.toMutableList().also {
                 it[tabIdx] = tab.copy(layoutPreset = null)
             },
         )
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -795,9 +1141,10 @@ object WindowState {
      */
     fun addPaneToTab(tabId: String, initialCwd: String? = null): LeafNode? = synchronized(this) {
         val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized null
+        val idx = world.tabs.indexOfFirst { it.id == tabId }
         if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
+        val tab = world.tabs[idx]
         val parentPaneId = tab.focusedPaneId
         val effectiveCwd = sanitizeIncomingCwd(initialCwd)
         val sessionId = TerminalSessions.create(initialCwd = effectiveCwd)
@@ -817,11 +1164,12 @@ object WindowState {
             height = PaneGeometry.DEFAULT_SIZE,
             z = PaneManager.nextZ(tab),
         )
-        _config.value = PaneManager.appendPane(cfg, idx, newPane)
+        var newView = PaneManager.appendPane(viewOf(world), idx, newPane)
         // Promote the new pane to the tab's focused pane so the toolkit's
         // snapshot reports it as the active pane (the renderer then lands
         // the focus ring on it).
-        TabManager.setFocusedPane(_config.value, tabId, leaf.id)?.let { _config.value = it }
+        TabManager.setFocusedPane(newView, tabId, leaf.id)?.let { newView = it }
+        _config.value = writeBackWorld(cfg, world.id, newView)
         recordPaneCreated(tabId, leaf.id, parentPaneId)
         maybeReapplyLayout(tabId)
         leaf
@@ -830,9 +1178,10 @@ object WindowState {
     /** Add a file-browser pane to [tabId]. */
     fun addFileBrowserToTab(tabId: String, initialCwd: String? = null): LeafNode? = synchronized(this) {
         val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized null
+        val idx = world.tabs.indexOfFirst { it.id == tabId }
         if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
+        val tab = world.tabs[idx]
         val parentPaneId = tab.focusedPaneId
         val effectiveCwd = sanitizeIncomingCwd(initialCwd) ?: nonTerminalCwdFallback()
         val leaf = LeafNode(
@@ -850,8 +1199,9 @@ object WindowState {
             height = PaneGeometry.DEFAULT_SIZE,
             z = PaneManager.nextZ(tab),
         )
-        _config.value = PaneManager.appendPane(cfg, idx, newPane)
-        TabManager.setFocusedPane(_config.value, tabId, leaf.id)?.let { _config.value = it }
+        var newView = PaneManager.appendPane(viewOf(world), idx, newPane)
+        TabManager.setFocusedPane(newView, tabId, leaf.id)?.let { newView = it }
+        _config.value = writeBackWorld(cfg, world.id, newView)
         recordPaneCreated(tabId, leaf.id, parentPaneId)
         maybeReapplyLayout(tabId)
         leaf
@@ -860,9 +1210,10 @@ object WindowState {
     /** Add a git overview pane to [tabId]. */
     fun addGitToTab(tabId: String, initialCwd: String? = null): LeafNode? = synchronized(this) {
         val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized null
+        val idx = world.tabs.indexOfFirst { it.id == tabId }
         if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
+        val tab = world.tabs[idx]
         val parentPaneId = tab.focusedPaneId
         val effectiveCwd = sanitizeIncomingCwd(initialCwd) ?: nonTerminalCwdFallback()
         val leaf = LeafNode(
@@ -880,8 +1231,53 @@ object WindowState {
             height = PaneGeometry.DEFAULT_SIZE,
             z = PaneManager.nextZ(tab),
         )
-        _config.value = PaneManager.appendPane(cfg, idx, newPane)
-        TabManager.setFocusedPane(_config.value, tabId, leaf.id)?.let { _config.value = it }
+        var newView = PaneManager.appendPane(viewOf(world), idx, newPane)
+        TabManager.setFocusedPane(newView, tabId, leaf.id)?.let { newView = it }
+        _config.value = writeBackWorld(cfg, world.id, newView)
+        recordPaneCreated(tabId, leaf.id, parentPaneId)
+        maybeReapplyLayout(tabId)
+        leaf
+    }
+
+    /**
+     * Add a web-browser pane to [tabId].
+     *
+     * Mirrors [addGitToTab]: a PTY-less leaf with an empty session id whose
+     * content is a [WebBrowserContent]. No process is spawned and no cwd is
+     * needed — the pane is seeded only with [initialUrl] (null opens the
+     * client's blank start page). Called from the "New Web Browser" menu item
+     * via [WindowCommand.AddWebBrowserToTab].
+     *
+     * @param tabId the tab to add the web pane to
+     * @param initialUrl the URL to seed the pane with, or null for the start page
+     * @return the created leaf, or null when [tabId] doesn't exist
+     * @see addGitToTab
+     */
+    fun addWebBrowserToTab(tabId: String, initialUrl: String? = null): LeafNode? = synchronized(this) {
+        val cfg = _config.value
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized null
+        val idx = world.tabs.indexOfFirst { it.id == tabId }
+        if (idx < 0) return@synchronized null
+        val tab = world.tabs[idx]
+        val parentPaneId = tab.focusedPaneId
+        val leaf = LeafNode(
+            id = newNodeId(),
+            sessionId = "",
+            cwd = nonTerminalCwdFallback(),
+            title = computeLeafTitle(null, null, null, "Web"),
+            content = WebBrowserContent(url = initialUrl),
+        )
+        val (ox, oy) = PaneManager.randomSnappedOrigin()
+        val newPane = Pane(
+            leaf = leaf,
+            x = ox, y = oy,
+            width = PaneGeometry.DEFAULT_SIZE,
+            height = PaneGeometry.DEFAULT_SIZE,
+            z = PaneManager.nextZ(tab),
+        )
+        var newView = PaneManager.appendPane(viewOf(world), idx, newPane)
+        TabManager.setFocusedPane(newView, tabId, leaf.id)?.let { newView = it }
+        _config.value = writeBackWorld(cfg, world.id, newView)
         recordPaneCreated(tabId, leaf.id, parentPaneId)
         maybeReapplyLayout(tabId)
         leaf
@@ -911,9 +1307,10 @@ object WindowState {
         rows: Int? = null,
     ): LeafNode? = synchronized(this) {
         val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized null
+        val idx = world.tabs.indexOfFirst { it.id == tabId }
         if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
+        val tab = world.tabs[idx]
         val parentPaneId = tab.focusedPaneId
         val leaf = LeafNode(
             id = newNodeId(),
@@ -931,8 +1328,9 @@ object WindowState {
             height = PaneGeometry.DEFAULT_SIZE,
             z = PaneManager.nextZ(tab),
         )
-        _config.value = PaneManager.appendPane(cfg, idx, newPane)
-        TabManager.setFocusedPane(_config.value, tabId, leaf.id)?.let { _config.value = it }
+        var newView = PaneManager.appendPane(viewOf(world), idx, newPane)
+        TabManager.setFocusedPane(newView, tabId, leaf.id)?.let { newView = it }
+        _config.value = writeBackWorld(cfg, world.id, newView)
         recordPaneCreated(tabId, leaf.id, parentPaneId)
         maybeReapplyLayout(tabId)
         leaf
@@ -942,9 +1340,10 @@ object WindowState {
     fun addLinkToTab(tabId: String, targetSessionId: String): LeafNode? = synchronized(this) {
         if (TerminalSessions.get(targetSessionId) == null) return@synchronized null
         val cfg = _config.value
-        val idx = cfg.tabs.indexOfFirst { it.id == tabId }
+        val world = worldOfTab(cfg, tabId) ?: return@synchronized null
+        val idx = world.tabs.indexOfFirst { it.id == tabId }
         if (idx < 0) return@synchronized null
-        val tab = cfg.tabs[idx]
+        val tab = world.tabs[idx]
         val parentPaneId = tab.focusedPaneId
         val sourceTitle = findLeafBySession(cfg, targetSessionId)?.title ?: "Terminal"
         val leaf = LeafNode(
@@ -962,8 +1361,9 @@ object WindowState {
             height = PaneGeometry.DEFAULT_SIZE,
             z = PaneManager.nextZ(tab),
         )
-        _config.value = PaneManager.appendPane(cfg, idx, newPane)
-        TabManager.setFocusedPane(_config.value, tabId, leaf.id)?.let { _config.value = it }
+        var newView = PaneManager.appendPane(viewOf(world), idx, newPane)
+        TabManager.setFocusedPane(newView, tabId, leaf.id)?.let { newView = it }
+        _config.value = writeBackWorld(cfg, world.id, newView)
         recordPaneCreated(tabId, leaf.id, parentPaneId)
         maybeReapplyLayout(tabId)
         leaf
@@ -993,12 +1393,16 @@ object WindowState {
      */
     fun movePaneToTab(paneId: String, targetTabId: String) = synchronized(this) {
         val cfg = _config.value
+        // Panes can only move between tabs within the same world; the
+        // per-world view naturally enforces this (a target tab in another
+        // world isn't present in the view, so PaneManager returns null).
+        val world = worldOfPane(cfg, paneId) ?: return@synchronized
         // Resolve the source tab BEFORE the move so we can re-layout it after.
-        val sourceTabId = cfg.tabs.firstOrNull { tab ->
+        val sourceTabId = world.tabs.firstOrNull { tab ->
             tab.panes.any { it.leaf.id == paneId }
         }?.id
-        val newCfg = PaneManager.movePaneToTab(cfg, paneId, targetTabId) ?: return@synchronized
-        _config.value = newCfg
+        val newView = PaneManager.movePaneToTab(viewOf(world), paneId, targetTabId) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
         // Migrate the importance-order entry: drop it from the source tab's
         // order (and clear any parent linkage — the "created next to" pane
         // stays behind in the old tab), then insert it at the head of the
@@ -1013,8 +1417,9 @@ object WindowState {
     /** Swap the positions and sizes of two panes that share a tab. */
     fun swapPanes(aId: String, bId: String) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.swapPanes(cfg, aId, bId) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfPane(cfg, aId) ?: return@synchronized
+        val newView = PaneManager.swapPanes(viewOf(world), aId, bId) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
     }
 
     /**
@@ -1031,10 +1436,11 @@ object WindowState {
      */
     fun movePaneWithinTab(aId: String, bId: String, before: Boolean, retile: Boolean = true) = synchronized(this) {
         val cfg = _config.value
-        val newCfg = PaneManager.movePaneWithinTab(cfg, aId, bId, before) ?: return@synchronized
-        _config.value = newCfg
+        val world = worldOfPane(cfg, aId) ?: return@synchronized
+        val newView = PaneManager.movePaneWithinTab(viewOf(world), aId, bId, before) ?: return@synchronized
+        _config.value = writeBackWorld(cfg, world.id, newView)
         if (retile) {
-            val tabId = newCfg.tabs.firstOrNull { tab -> tab.panes.any { it.leaf.id == aId } }?.id
+            val tabId = newView.tabs.firstOrNull { tab -> tab.panes.any { it.leaf.id == aId } }?.id
             if (tabId != null) maybeReapplyLayout(tabId)
         }
     }
@@ -1047,7 +1453,7 @@ object WindowState {
 
     private fun collectSessionIds(cfg: WindowConfig): Set<String> {
         val out = HashSet<String>()
-        cfg.tabs.forEach { tab ->
+        allTabs(cfg).forEach { tab ->
             tab.panes.forEach { p ->
                 if (p.leaf.sessionId.isNotEmpty()) out.add(p.leaf.sessionId)
             }

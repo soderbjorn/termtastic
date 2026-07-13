@@ -174,10 +174,48 @@ internal fun flyCamTo(
 }
 
 /**
+ * **Instantly** places the camera at [pose] — the no-animation counterpart of a [flyCamTo]
+ * landing, used when fancy animations are off ([spikeFancyAnimations]) so reaching the dock
+ * with `v` is a hard cut rather than a flight. Cancels any in-flight tour / stash chase /
+ * dock dolly, marks the camera flown, and sets its position and orientation to the pose's
+ * stand-point and look-point (roof eased to +Y, Gram–Schmidt'd against the nose) exactly as
+ * the render loop leaves a flight parked at `s = 1`. Called by [toggleStashView].
+ *
+ * @param pose the camera stand-point + look-point to snap to. @see flyCamTo @see resetCamera
+ */
+internal fun snapCamToPose(pose: CamPose) {
+    clearFlyVelocity()
+    spikeStashChase = null
+    spikeShelfPanTargetX = null
+    spikeCamReturning = false
+    spikeCamTourThen = null
+    spikeCamTourFollowPaneId = null
+    spikeCamFlown = true
+
+    spikeCamX = pose.cx; spikeCamY = pose.cy; spikeCamZ = pose.cz
+    // Nose = normalize(look − pos); default to a −Z gaze if the two points coincide.
+    var fx = pose.lx - pose.cx
+    var fy = pose.ly - pose.cy
+    var fz = pose.lz - pose.cz
+    val fl = sqrt(fx * fx + fy * fy + fz * fz)
+    if (fl > 1e-6) { fx /= fl; fy /= fl; fz /= fl } else { fx = 0.0; fy = 0.0; fz = -1.0 }
+    spikeCamFx = fx; spikeCamFy = fy; spikeCamFz = fz
+    // Roof = +Y with the nose component removed (Gram–Schmidt), matching a level landing.
+    var ux = 0.0; var uy = 1.0; var uz = 0.0
+    val d = ux * fx + uy * fy + uz * fz
+    ux -= d * fx; uy -= d * fy; uz -= d * fz
+    val ul = sqrt(ux * ux + uy * uy + uz * uz)
+    if (ul > 1e-6) { spikeCamUx = ux / ul; spikeCamUy = uy / ul; spikeCamUz = uz / ul }
+    else { spikeCamUx = 0.0; spikeCamUy = 1.0; spikeCamUz = 0.0 }
+}
+
+/**
  * Kicks off the **cinematic `c` return** to the pristine 1:1 pose — a [flyCamTo] home
  * (target the home pose, face the origin, land pristine). No-op if the camera is
  * already home. Returning to the ring (camera low) is also what makes Space stash
- * again rather than unstash. @see cameraAtShelf @see CAM_RETURN_FRAMES
+ * again rather than unstash. When fancy animations are off ([spikeFancyAnimations]) the
+ * dock → command-center return is an instant cut instead of the flight.
+ * @see cameraAtShelf @see CAM_RETURN_FRAMES
  */
 internal fun resetCamera() {
     spikeStashChase = null // `c` cancels a stash chase and flies home
@@ -185,6 +223,13 @@ internal fun resetCamera() {
     if (!spikeCamFlown) return
     val homeZ = RING_R + perspDistance(window.innerHeight)
     if (cameraAtShelf()) {
+        // Fancy off: snap straight back to the pristine command-center pose — the render
+        // loop recomputes the 1:1 home framing whenever the camera is not flown.
+        if (!spikeFancyAnimations) {
+            spikeCamReturning = false
+            spikeCamFlown = false
+            return
+        }
         if (stationBuilt()) {
             // No-pane hangar return — a "backing out of the hangar" descent. The camera
             // keeps the whole glowing cargo ship framed the *entire* way: it noses out
@@ -729,15 +774,18 @@ internal fun resetFrontZoom() {
 
 /**
  * Re-reads the persisted 3D-world settings into the live runtime flags — window bobbing
- * ([spikeBobEnabled]) and status indication ([spikeStatusIndication]). Called once at
- * [openWorld3dSpike] to seed them, and again from the in-world settings panel (⌥⌘,) on
- * every change so an edit takes effect on the running world immediately (the render loop
- * reads both flags each frame). Bob is also cleared of any lingering reactor visuals when
- * the mode leaves REACTOR, so a pane can't freeze mid-glow.
- * @see isWindowBobbingEnabled @see world3dStatusIndication @see resetWarpCoreVisuals
+ * ([spikeBobEnabled]), fancy animations ([spikeFancyAnimations]) and status indication
+ * ([spikeStatusIndication]). Called once at [openWorld3dSpike] to seed them, and again from
+ * the in-world settings panel (⌥⌘,) on every change so an edit takes effect on the running
+ * world immediately (the render loop and the animation triggers read the flags live). Bob is
+ * also cleared of any lingering reactor visuals when the mode leaves REACTOR, so a pane can't
+ * freeze mid-glow.
+ * @see isWindowBobbingEnabled @see isFancyAnimationsEnabled @see world3dStatusIndication
+ * @see resetWarpCoreVisuals
  */
 internal fun syncWorld3dRuntimeFromSettings() {
     spikeBobEnabled = isWindowBobbingEnabled()
+    spikeFancyAnimations = isFancyAnimationsEnabled()
     val prev = spikeStatusIndication
     spikeStatusIndication = world3dStatusIndication()
     // Leaving the reactor mode: clear its lingering per-pane visuals so nothing freezes.
@@ -758,31 +806,83 @@ internal fun toggleLegend() {
 }
 
 /**
+ * One position in the [cycleSignalOverride] wheel, in press order.
+ *
+ * @property label the toast text shown when the override lands on this mode.
+ */
+private enum class SignalOverrideMode(val label: String) {
+    /** No override — the pane follows its real, live session state. */
+    AUTO("Signal: auto (live state)"),
+    /** Force the blue "working" look regardless of the live state. */
+    WORKING("Signal: working"),
+    /** Force the amber "waiting / needs input" look regardless of the live state. */
+    WAITING("Signal: waiting"),
+    /** Force the idle look — no working/waiting signal, even if the agent is live. */
+    CLEAR("Signal: clear (idle)"),
+}
+
+/**
  * **Cycles** the manual signal-state override on the settled front pane (the `w` key)
- * through the three states in order: **normal → working → needs-input → normal**. One
- * key walks all three so you can preview each look — the blue working dots, then the red
- * "needs input" halo, then off — without a live agent driving them. Works by writing both
- * [spikeWorkingOverride] and [spikeWaitingOverride] in lock-step; the render loop reads an
- * override in preference to the pane's real session state. Seeds the cycle from whatever
- * the pane shows *now* (override, else live state) so the first press advances from the
- * current look. No-op unless a front pane is settled.
+ * through four positions in order: **auto → working → waiting → clear → auto**. One key
+ * walks all four so you can preview each look — the live state, the blue working dots,
+ * the amber "needs input" halo, then a forced-idle — without a real agent driving them,
+ * and a [showSpikeToast] names the mode you land on.
+ *
+ * The two override maps are written in lock-step so the effective mode is always one of
+ * the four: **auto** removes both entries (the render loop and the 2D world-status footer
+ * fall back to the pane's real session state); **working** / **waiting** force exactly one
+ * signal; **clear** forces both off (an explicit idle that overrides a live agent). The
+ * cycle is seeded from the *current map entries* — not the effective look — so `auto` and
+ * `clear` stay distinct even when both render as idle.
+ *
+ * No-op unless a front pane is settled.
+ *
+ * @see spikeWorkingOverride
+ * @see spikeWaitingOverride
  */
 internal fun cycleSignalOverride() {
     val fi = frontIndex()
     if (spikeSettledIndex != fi || fi < 0) return
     val p = spikePanes.getOrNull(fi) ?: return
-    val states = runCatching { lunamuxClient.windowState.states.value }.getOrNull()
-    // Effective current look: an explicit override wins, else the live session state.
-    val working = spikeWorkingOverride[p.paneId] ?: (states?.get(p.sessionId) == "working")
-    val waiting = spikeWaitingOverride[p.paneId] ?: (states?.get(p.sessionId) == "waiting")
-    // Advance one step around normal → working → needs-input → normal.
-    val (nextWorking, nextWaiting) = when {
-        !working && !waiting -> true to false   // normal → working
-        working -> false to true                // working → needs-input
-        else -> false to false                  // needs-input → normal
+    val paneId = p.paneId
+    // Read the current mode from the map entries directly (not the effective look), so an
+    // explicit `clear` (both false) is distinguished from `auto` (no entry) even though
+    // both paint idle.
+    val current = when {
+        !spikeWorkingOverride.containsKey(paneId) && !spikeWaitingOverride.containsKey(paneId) ->
+            SignalOverrideMode.AUTO
+        spikeWorkingOverride[paneId] == true -> SignalOverrideMode.WORKING
+        spikeWaitingOverride[paneId] == true -> SignalOverrideMode.WAITING
+        else -> SignalOverrideMode.CLEAR
     }
-    spikeWorkingOverride[p.paneId] = nextWorking
-    spikeWaitingOverride[p.paneId] = nextWaiting
+    val next = when (current) {
+        SignalOverrideMode.AUTO -> SignalOverrideMode.WORKING
+        SignalOverrideMode.WORKING -> SignalOverrideMode.WAITING
+        SignalOverrideMode.WAITING -> SignalOverrideMode.CLEAR
+        SignalOverrideMode.CLEAR -> SignalOverrideMode.AUTO
+    }
+    when (next) {
+        SignalOverrideMode.AUTO -> {
+            spikeWorkingOverride.remove(paneId)
+            spikeWaitingOverride.remove(paneId)
+        }
+        SignalOverrideMode.WORKING -> {
+            spikeWorkingOverride[paneId] = true
+            spikeWaitingOverride[paneId] = false
+        }
+        SignalOverrideMode.WAITING -> {
+            spikeWorkingOverride[paneId] = false
+            spikeWaitingOverride[paneId] = true
+        }
+        SignalOverrideMode.CLEAR -> {
+            spikeWorkingOverride[paneId] = false
+            spikeWaitingOverride[paneId] = false
+        }
+    }
+    // Keep the 2D sidebar world-status footer consistent with the override immediately, so
+    // returning to 2D shows the same tally the 3D warp-core boxes do.
+    updateWorldStatusFooter()
+    showSpikeToast(next.label)
 }
 
 /**

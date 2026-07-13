@@ -226,12 +226,47 @@ internal var spikeZoomZeroCodes: Set<String> = setOf("Digit0", "Numpad0")
  * [seedZoomFromConfig] restores the persisted values into this map, which remains
  * the render loop's single read path. Local-first: a session entry is never
  * overwritten by a config broadcast.
- *
- * (Grid size needs no such memory: under the PTY-truth model — see
- * [presentPaneToGrid] — the PTY itself remembers each pane's cols/rows, and every
- * rebuilt pane follows it via the server's `Size` broadcast.)
  */
 internal val spikeZoomByPane = mutableMapOf<String, Double>()
+
+/**
+ * Per-pane **3D grid override** memory (paneId → (cols, rows)). A pane present
+ * here has been deliberately resized in the 3D world to a size distinct from
+ * its native 2D grid; an absent pane uses its native size. Mirrors
+ * [spikeZoomByPane]: it survives the overlay closing/reopening, and each change
+ * is written through to the server ([WindowCommand.SetPaneGrid3d] → [Pane.grid3d])
+ * so it persists across app restarts, restored on a fresh run by
+ * [seedGrid3dFromConfig]. Local-first, same as zoom.
+ *
+ * Unlike zoom this override *reflows* the PTY, but only while the world is open:
+ * the 3D world votes this size at [SizePriority.THREE_D] over the pane's socket
+ * (see [setPaneGrid]), which the server ranks above the 2D clients' NORMAL votes
+ * but below a mobile client's MOBILE floor. Cleared per pane by the "restore
+ * native grid" hotkey ([restoreFrontNativeGrid]).
+ *
+ * @see spikeNativeGridByPane @see spikeGrid3dApplied
+ */
+internal val spikeGrid3dByPane = mutableMapOf<String, Pair<Int, Int>>()
+
+/**
+ * Per-pane **native (2D) grid** memory (paneId → (cols, rows)), captured the
+ * first time each pane is presented in the current world session — before any
+ * [spikeGrid3dByPane] override is applied, so it holds the size the pane had in
+ * 2D. Read when reverting a pane to native: the "restore native grid" hotkey
+ * ([restoreFrontNativeGrid]) resizes back to this, and [closeWorld3dSpike] votes
+ * it at [SizePriority.NORMAL] so leaving the world drops the pane's 3D override.
+ *
+ * @see spikeGrid3dByPane @see ensureGrid3dApplied
+ */
+internal val spikeNativeGridByPane = mutableMapOf<String, Pair<Int, Int>>()
+
+/**
+ * Pane ids whose [spikeGrid3dByPane] override (if any) has already been applied
+ * during the *current* world open. Cleared on every [openWorld3dSpike] so each
+ * open re-captures each pane's native grid ([spikeNativeGridByPane]) and re-
+ * asserts its override exactly once — see [ensureGrid3dApplied]. Not persisted.
+ */
+internal val spikeGrid3dApplied = mutableSetOf<String>()
 
 /** Whether the front pane is in selection mode (snapped to 1:1 for drag-select). */
 internal var spikeSelectionMode = false
@@ -358,6 +393,38 @@ internal var spikeChaseFocus = 0.0
 internal val spikeWormholes: MutableList<WormholeSpawn> = mutableListOf()
 
 /**
+ * The **world theme preview** override — the [WorldThemeSelection] of the world a running
+ * transit is arriving in, or `null` when no transit is previewing a destination (the home /
+ * ordinary case). Set at the tunnel midpoint by [applyWorldPalette] (alongside firing
+ * [se.soderbjorn.lunamux.WindowCommand.SetActiveWorld]) so the 3D world's sky, pane chrome and
+ * terminal bodies re-skin to the destination *immediately*, before the server config round-trip
+ * lands; cleared at transit completion and on [openWorld3dSpike]/[closeWorld3dSpike]. Read by
+ * [currentWorldTheme] / [currentWorldSkyTheme] to pick the world currently on screen — when
+ * `null` they fall back to the live active theme (which already reflects the active world once the
+ * `SetActiveWorld` config push arrives). @see applyWorldPalette @see enterOrExitOtherWorld
+ */
+internal var spikeWorldThemePreview: se.soderbjorn.lunamux.WorldThemeSelection? = null
+
+/**
+ * The **world transit** currently in flight — the fly-through-the-wormhole cinematic
+ * that cycles the active world on to the next, or `null` when none is running (its presence
+ * also locks out input so keys can't fight the camera). Armed by [enterOrExitOtherWorld],
+ * advanced/drawn each frame by [tickWorldTransit], torn down by [clearWorldTransit].
+ * @see WorldTransit
+ */
+internal var spikeWorldTransit: WorldTransit? = null
+
+/**
+ * `true` only while a world transit is **inside the opaque light tunnel** — the leg where
+ * the full-screen tunnel canvas covers everything, so the ring, panes, beacons and cosmos
+ * behind it are invisible. The render loop ([startSpikeLoop]) skips the CSS3D scene render
+ * and the screen-space overlays while this is set, so the compositor isn't churning hundreds
+ * of hidden 3D-transformed layers mid-flight — the jerkiness that ride otherwise picked up.
+ * Set each frame by [tickWorldTransit]; cleared by [clearWorldTransit].
+ */
+internal var spikeWorldTransitOccluding: Boolean = false
+
+/**
  * The **shelf browse index** — which shelf slot the camera is parked in front of while
  * up at the stash shelf ([cameraAtShelf]). ←/→ in navigate mode glide the camera from
  * slot to slot ([shelfBrowse]) the way they walk panes around the ring down below;
@@ -372,6 +439,18 @@ internal var spikeShelfIndex = -1
  * [syncWorld3dRuntimeFromSettings] and live-updated by the in-world settings panel.
  */
 internal var spikeBobEnabled = true
+
+/**
+ * Whether the 3D world plays its **fancy cinematic animations** — the wormhole a new pane
+ * emerges from ([wormholeSpawnEligible]), the fly-through-the-wormhole world switch
+ * ([enterOrExitOtherWorld]), the phaser shoot-out that kills a pane ([confirmRemove]), and
+ * the camera chase up to the cargo-ship dock when a pane/tab is stashed ([stashPane] /
+ * [stashTab]). Persisted as the `world3dFancyAnimations` setting; seeded here at every open
+ * by [syncWorld3dRuntimeFromSettings] and live-updated by the in-world settings panel. When
+ * `false`, each of those effects is replaced by its plain instant fallback.
+ * @see isFancyAnimationsEnabled
+ */
+internal var spikeFancyAnimations = true
 
 /**
  * How working / waiting panes signal their state — the persisted **Status indication**
@@ -445,14 +524,6 @@ internal var spikeDemoTourButton: HTMLElement? = null
 internal var spikeDemoTourPulseTimer: Int? = null
 
 /**
- * The small "or explore yourself" reassurance line under the tour button —
- * hidden while the tour plays (the keys are locked out then, so the promise
- * would be false); `null` when closed or outside the web demo.
- * @see updateDemoTourButton
- */
-internal var spikeDemoTourHint: HTMLElement? = null
-
-/**
  * Whether the user hid the shortcut legends with `k`. One flag for **both**
  * legends — hiding shortcuts in navigate mode hides them in fly mode too.
  * Kept for the app run like the other spike memories, so reopening the
@@ -488,6 +559,14 @@ internal var spikeNavLabel: HTMLElement? = null
 
 /** Timer handle for the nav-label's auto fade-out (cancelled/restarted on each cycle). */
 internal var spikeNavLabelTimer: Int? = null
+
+/**
+ * Timer handle for the world-arrival banner's auto fade-out (the top-centre world-name
+ * plaque). Cancelled/restarted on each [updateWorldBanner] call so the banner shows for a
+ * few seconds after entering the 3D world or arriving in another world, then fades away —
+ * it is a transient "you are here" cue, not a permanent HUD element. @see updateWorldBanner
+ */
+internal var spikeWorldBannerTimer: Int? = null
 
 /**
  * The single **status toast** currently on screen (the "Screenshot saved to

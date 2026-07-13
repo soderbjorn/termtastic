@@ -121,6 +121,13 @@ internal fun collectPaneSpecs(): List<PaneSpec> {
                     specs.add(PaneSpec(leaf.id, tab.id, leaf.title, tab.title, leaf.sessionId, null, tabOrd, ord, PaneKind.FILE_BROWSER))
                     ord++
                 }
+                is WebBrowserContent -> {
+                    // Web panes carry a live <webview>, never a PTY. Shown in
+                    // the ring as a lightweight placeholder; the live cell is
+                    // promoted onto the front plane only on engage.
+                    specs.add(PaneSpec(leaf.id, tab.id, leaf.title, tab.title, leaf.sessionId, null, tabOrd, ord, PaneKind.WEB_BROWSER))
+                    ord++
+                }
                 else -> {
                     // Terminal (or agent-screen) panes: shown when mounted, or as a
                     // read-only mirror when the leaf has a session but no live entry.
@@ -159,14 +166,8 @@ internal fun collectTabs(): List<Pair<String, String>> {
  * @return the raw leaf `dynamic`, or `null` if no config or no such leaf.
  * @see buildRingPane
  */
-internal fun rawLeafFor(paneId: String): dynamic {
-    val cfg: dynamic = currentConfig ?: return null
-    val tabsArr = cfg.tabs as? Array<dynamic> ?: return null
-    for (tab in tabsArr) {
-        val panes = (tab.panes as? Array<dynamic>) ?: continue
-        for (p in panes) {
-            if ((p.leaf?.id as? String) == paneId) return p.leaf
-        }
-    }
-    return null
-}
+internal fun rawLeafFor(paneId: String): dynamic =
+    // Delegate to the shared world-aware scan so a ring preview reads exactly
+    // what the 2D mount would — including panes in non-default worlds, which
+    // the legacy top-level `cfg.tabs` mirror does not carry.
+    findLeafDynamic(paneId)

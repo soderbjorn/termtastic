@@ -36,6 +36,8 @@ import se.soderbjorn.lunamux.SyntaxHighlighter
 import se.soderbjorn.lunamux.TabConfig
 import se.soderbjorn.lunamux.TerminalContent
 import se.soderbjorn.lunamux.WindowConfig
+import se.soderbjorn.lunamux.WorldConfig
+import se.soderbjorn.lunamux.WorldThemeSelection
 
 /**
  * Rendered content for one file in the demo file browser, mirroring what the
@@ -75,8 +77,17 @@ internal object DemoFixtures {
     /** The demo user's home directory; used to prettify pane titles. */
     const val HOME = "/Users/demo"
 
-    /** Working directory of every fixture pane. */
+    /** Working directory of every lastlight (World 1) fixture pane. */
     const val CWD = "$HOME/code/lastlight"
+
+    /**
+     * Working directory of every DarknessIRC (World 2) fixture pane. Panes are
+     * routed to the DarknessIRC file/git fixtures by this cwd (see
+     * [DemoServer]'s `isDarknessPane`), so the two worlds' browsers/diffs stay
+     * separate even though they share the RPC handlers and request the same
+     * relative paths.
+     */
+    const val DARKNESS_CWD = "$HOME/code/darknessirc"
 
     /** Fixed timestamp base for file mtimes: 2026-06-10 around 21:00 CEST. */
     private const val MTIME = 1_781_204_400_000L
@@ -110,10 +121,24 @@ internal object DemoFixtures {
      *    split view, beside a *finished* Claude session that just mirrored the
      *    copper bars (resumes working when typed into).
      *
-     * @return the initial [WindowConfig] pushed to every demo client.
+     * The demo boots with **two worlds** (the headline of the Worlds feature):
+     *  - **World 1 — lastlight** (id `w-lastlight`, the default): the four
+     *    Amiga tabs above, following the global house-green theme
+     *    (`themeSelection = null`).
+     *  - **World 2 — DarknessIRC** (id `w-darknessirc`): the KMP IRC-client
+     *    project, carrying its own **Amber CRT** (dark) / **Sepia** (light)
+     *    theme pair. Both names are real builtin toolkit themes, so the pair
+     *    resolves directly (no fallback).
+     *
+     * The legacy top-level [WindowConfig.tabs]/[WindowConfig.activeTabId] mirror
+     * the default world (World 1) for any <1.9 client, exactly as the real
+     * server keeps them.
+     *
+     * @return the initial two-world [WindowConfig] pushed to every demo client.
+     * @see darknessTabs
      */
-    fun initialConfig(): WindowConfig = WindowConfig(
-        tabs = listOf(
+    fun initialConfig(): WindowConfig {
+        val lastlightTabs = listOf(
             TabConfig(
                 id = "demo-t1",
                 title = "Compo",
@@ -274,8 +299,159 @@ internal object DemoFixtures {
                 focusedPaneId = "demo-p3",
                 layoutPreset = "hero-left",
             ),
+        )
+        val lastlight = WorldConfig(
+            id = "w-lastlight",
+            name = "lastlight",
+            tabs = lastlightTabs,
+            activeTabId = "demo-t1",
+            themeSelection = null, // follows the global house-green theme
+        )
+        val darknessIrc = WorldConfig(
+            id = "w-darknessirc",
+            name = "darkness-irc",
+            tabs = darknessTabs(),
+            activeTabId = "dirc-t1",
+            // "Amber CRT" (dark) and "Sepia" (light) are both real builtin
+            // toolkit themes (se.soderbjorn.darkness.core BuiltinThemes), so this
+            // pair resolves directly; if either were renamed the resolver simply
+            // falls back to the global selection.
+            themeSelection = WorldThemeSelection(darkThemeName = "Amber CRT", lightThemeName = "Sepia"),
+        )
+        return WindowConfig(
+            // Legacy mirror = the default (first) world, for <1.9 clients.
+            tabs = lastlightTabs,
+            activeTabId = "demo-t1",
+            worlds = listOf(lastlight, darknessIrc),
+            activeWorldId = "w-lastlight",
+        )
+    }
+
+    /**
+     * The three tabs of the **DarknessIRC** world (World 2). Every pane is one
+     * moment of the same late-night session: building channel-scrollback
+     * persistence for a KMP IRC client (a "hub" server + native apps).
+     *
+     *  - **channels** (`dirc-t1`, columns): three interactive IRC TUI panes —
+     *    `#commodore`, `#amiga`, `#kotlin-multiplatform` — each a [DemoIrcSession].
+     *  - **hub** (`dirc-t2`, grid): the repo file browser + a git diff of
+     *    `hub/HubStore.kt` + a **running** Claude pane (the ring buffer) + the
+     *    plain hub-log terminal.
+     *  - **clients** (`dirc-t3`, columns): a **waiting** Claude pane (dedupe
+     *    question) beside an **idle** Claude pane (finished summary). The repo
+     *    file browser + git diff live once under the **hub** tab, so they are
+     *    not duplicated here.
+     *
+     * All panes run at [DARKNESS_CWD] so the file/git RPCs serve the DarknessIRC
+     * fixtures.
+     *
+     * @return World 2's three tabs.
+     */
+    private fun darknessTabs(): List<TabConfig> = listOf(
+        TabConfig(
+            id = "dirc-t1",
+            title = "channels",
+            panes = listOf(
+                Pane(
+                    leaf = LeafNode(
+                        id = "dirc-p1", sessionId = "dirc-s1", title = "#commodore",
+                        customName = "#commodore", cwd = DARKNESS_CWD,
+                        content = TerminalContent(sessionId = "dirc-s1"),
+                    ),
+                    x = 0.0, y = 0.0, width = 0.3334, height = 1.0, z = 1,
+                ),
+                Pane(
+                    leaf = LeafNode(
+                        id = "dirc-p3", sessionId = "dirc-s3", title = "#amiga",
+                        customName = "#amiga", cwd = DARKNESS_CWD,
+                        content = TerminalContent(sessionId = "dirc-s3"),
+                    ),
+                    x = 0.3333, y = 0.0, width = 0.3334, height = 1.0, z = 2,
+                ),
+                Pane(
+                    leaf = LeafNode(
+                        id = "dirc-p2", sessionId = "dirc-s2", title = "#kotlin-multiplatform",
+                        customName = "#kotlin-multiplatform", cwd = DARKNESS_CWD,
+                        content = TerminalContent(sessionId = "dirc-s2"),
+                    ),
+                    x = 0.6667, y = 0.0, width = 0.3333, height = 1.0, z = 3,
+                ),
+            ),
+            focusedPaneId = "dirc-p1",
+            layoutPreset = "columns",
         ),
-        activeTabId = "demo-t1",
+        TabConfig(
+            id = "dirc-t2",
+            title = "hub",
+            panes = listOf(
+                Pane(
+                    leaf = LeafNode(
+                        id = "dirc-p4", sessionId = "", title = "files: darknessirc",
+                        customName = "files: darknessirc", cwd = DARKNESS_CWD,
+                        content = FileBrowserContent(
+                            selectedRelPath = "hub/HubStore.kt",
+                            expandedDirs = setOf("", "hub", "clientServer", "clientServer/protocol"),
+                            leftColumnWidthPx = 240,
+                        ),
+                    ),
+                    x = 0.0, y = 0.0, width = 0.5, height = 0.5, z = 1,
+                ),
+                Pane(
+                    leaf = LeafNode(
+                        id = "dirc-p5", sessionId = "", title = "git: darknessirc",
+                        customName = "git: darknessirc", cwd = DARKNESS_CWD,
+                        content = GitContent(
+                            selectedFilePath = "hub/HubStore.kt",
+                            diffMode = GitDiffMode.Split,
+                            graphicalDiff = true,
+                        ),
+                    ),
+                    x = 0.5, y = 0.0, width = 0.5, height = 0.5, z = 2,
+                ),
+                Pane(
+                    leaf = LeafNode(
+                        id = "dirc-p6", sessionId = "dirc-s4", title = "claude: scrollback",
+                        customName = "claude: scrollback", cwd = DARKNESS_CWD,
+                        content = TerminalContent(sessionId = "dirc-s4"),
+                    ),
+                    x = 0.0, y = 0.5, width = 0.5, height = 0.5, z = 3,
+                ),
+                Pane(
+                    leaf = LeafNode(
+                        id = "dirc-p7", sessionId = "dirc-s5", title = "hub log",
+                        customName = "hub log", cwd = DARKNESS_CWD,
+                        content = TerminalContent(sessionId = "dirc-s5"),
+                    ),
+                    x = 0.5, y = 0.5, width = 0.5, height = 0.5, z = 4,
+                ),
+            ),
+            focusedPaneId = "dirc-p6",
+            layoutPreset = "grid",
+        ),
+        TabConfig(
+            id = "dirc-t3",
+            title = "clients",
+            panes = listOf(
+                Pane(
+                    leaf = LeafNode(
+                        id = "dirc-p8", sessionId = "dirc-s6", title = "claude: dedupe?",
+                        customName = "claude: dedupe?", cwd = DARKNESS_CWD,
+                        content = TerminalContent(sessionId = "dirc-s6"),
+                    ),
+                    x = 0.0, y = 0.0, width = 0.5, height = 1.0, z = 1,
+                ),
+                Pane(
+                    leaf = LeafNode(
+                        id = "dirc-p9", sessionId = "dirc-s7", title = "claude: reconnect",
+                        customName = "claude: reconnect", cwd = DARKNESS_CWD,
+                        content = TerminalContent(sessionId = "dirc-s7"),
+                    ),
+                    x = 0.5, y = 0.0, width = 0.5, height = 1.0, z = 2,
+                ),
+            ),
+            focusedPaneId = "dirc-p8",
+            layoutPreset = "columns",
+        ),
     )
 
     /**
@@ -292,6 +468,10 @@ internal object DemoFixtures {
         "demo-s1" to "working",
         "demo-s4" to "waiting",
         "demo-s7" to "working",
+        // DarknessIRC (World 2): the running/waiting Claude panes. The idle pane
+        // (dirc-s7) is deliberately absent so it starts stateless (finished).
+        "dirc-s4" to "working",
+        "dirc-s6" to "waiting",
     )
 
     /**
@@ -643,6 +823,240 @@ internal object DemoFixtures {
 
     /** `.worktrees/`-style default worktree path. */
     const val WORKTREE_DOTDIR = "$CWD/.worktrees/branch"
+
+    // -----------------------------------------------------------------------
+    // DarknessIRC (World 2) file-browser + git fixtures. Kept in a SEPARATE set
+    // of maps from the lastlight fixtures above and selected per-pane by cwd in
+    // [DemoServer], so the two worlds' browsers/diffs never collide even at the
+    // shared root path "". The touched files on the `feature/scrollback` branch
+    // (HubStore.kt, HubEvent.kt, ConversationBackingViewModel.kt) show their
+    // post-change content and carry matching diffs. Package: com.darkness.irc.
+    // -----------------------------------------------------------------------
+
+    /**
+     * One-level directory listings for the DarknessIRC repo tree, mirroring the
+     * real project layout (hub / clientServer/protocol / client(+viewmodel) /
+     * electron / web / iosApp / androidApp). Served to World 2's file browsers.
+     */
+    val darknessDirListings: Map<String, List<FileBrowserEntry>> = mapOf(
+        "" to listOf(
+            dir("androidApp", "androidApp", 210),
+            dir("client", "client", 44),
+            dir("clientServer", "clientServer", 61),
+            dir("electron", "electron", 900),
+            dir("hub", "hub", 12),
+            dir("iosApp", "iosApp", 240),
+            dir("web", "web", 320),
+            file("README.md", "README.md", 812, 30),
+            file("build.gradle.kts", "build.gradle.kts", 1_204, 640),
+            file("settings.gradle.kts", "settings.gradle.kts", 356, 640),
+        ),
+        "hub" to listOf(
+            file("AppPaths.kt", "hub/AppPaths.kt", 468, 900),
+            file("HubState.kt", "hub/HubState.kt", 1_540, 55),
+            file("HubStore.kt", "hub/HubStore.kt", 2_210, 12),
+            file("IrcConnection.kt", "hub/IrcConnection.kt", 3_180, 220),
+            file("IrcLine.kt", "hub/IrcLine.kt", 742, 300),
+            file("Main.kt", "hub/Main.kt", 610, 210),
+            file("Routes.kt", "hub/Routes.kt", 1_980, 90),
+        ),
+        "clientServer" to listOf(
+            dir("protocol", "clientServer/protocol", 40),
+        ),
+        "clientServer/protocol" to listOf(
+            file("HubCommand.kt", "clientServer/protocol/HubCommand.kt", 980, 190),
+            file("HubEvent.kt", "clientServer/protocol/HubEvent.kt", 1_320, 12),
+            file("HubJson.kt", "clientServer/protocol/HubJson.kt", 560, 400),
+            file("Models.kt", "clientServer/protocol/Models.kt", 1_140, 400),
+        ),
+        "client" to listOf(
+            dir("viewmodel", "client/viewmodel", 20),
+            file("ClientRuntime.kt", "client/ClientRuntime.kt", 1_460, 130),
+            file("HubConnection.kt", "client/HubConnection.kt", 2_040, 150),
+            file("HubRegistry.kt", "client/HubRegistry.kt", 880, 260),
+            file("HubStateRepository.kt", "client/HubStateRepository.kt", 1_260, 44),
+        ),
+        "client/viewmodel" to listOf(
+            file("AppBackingViewModel.kt", "client/viewmodel/AppBackingViewModel.kt", 1_180, 120),
+            file("ConversationBackingViewModel.kt", "client/viewmodel/ConversationBackingViewModel.kt", 1_720, 12),
+            file("HubListBackingViewModel.kt", "client/viewmodel/HubListBackingViewModel.kt", 940, 175),
+        ),
+        "electron" to listOf(
+            file("main.js", "electron/main.js", 1_020, 900),
+            file("package.json", "electron/package.json", 486, 900),
+        ),
+        "web" to listOf(
+            file("WebClient.kt", "web/WebClient.kt", 1_360, 320),
+        ),
+        "iosApp" to listOf(
+            file("ConversationView.swift", "iosApp/ConversationView.swift", 1_610, 240),
+            file("iOSApp.swift", "iosApp/iOSApp.swift", 520, 260),
+        ),
+        "androidApp" to listOf(
+            file("ConversationScreen.kt", "androidApp/ConversationScreen.kt", 1_540, 205),
+            file("MainActivity.kt", "androidApp/MainActivity.kt", 720, 210),
+        ),
+    )
+
+    /**
+     * Rendered file contents for the DarknessIRC repo, served to World 2's file
+     * browsers. Markdown is pre-rendered; sources are highlighted Kotlin/Swift/
+     * JS text previews. The three touched files show their post-change content.
+     */
+    val darknessFileContents: Map<String, DemoFileContent> = mapOf(
+        "README.md" to DemoFileContent(
+            kind = FileContentKind.Markdown,
+            html = """
+                <h1>DarknessIRC</h1>
+                <p>A Kotlin Multiplatform IRC client: a shared <code>clientServer</code>
+                protocol, a headless <strong>hub</strong> that holds the IRC
+                connections, and native apps (web, Electron, iOS, Android).</p>
+                <h2>Modules</h2>
+                <ul>
+                <li><code>hub/</code> — connection manager + channel state store</li>
+                <li><code>clientServer/protocol/</code> — the hub↔client wire types</li>
+                <li><code>client/</code> — shared client runtime + backing view-models</li>
+                <li><code>iosApp/</code>, <code>androidApp/</code>, <code>web/</code>, <code>electron/</code></li>
+                </ul>
+                <h2>feature/scrollback</h2>
+                <p>Persist the last 200 lines per channel in the hub so reconnecting
+                clients replay recent history instead of joining to an empty buffer.</p>
+            """.trimIndent(),
+        ),
+        "build.gradle.kts" to kt(DIRC_BUILD_GRADLE),
+        "settings.gradle.kts" to kt(DIRC_SETTINGS_GRADLE),
+        "hub/AppPaths.kt" to kt(DIRC_APPPATHS_KT),
+        "hub/HubState.kt" to kt(DIRC_HUBSTATE_KT),
+        "hub/HubStore.kt" to kt(DIRC_HUBSTORE_NEW),
+        "hub/IrcConnection.kt" to kt(DIRC_IRCCONNECTION_KT),
+        "hub/IrcLine.kt" to kt(DIRC_IRCLINE_KT),
+        "hub/Main.kt" to kt(DIRC_HUB_MAIN_KT),
+        "hub/Routes.kt" to kt(DIRC_ROUTES_KT),
+        "clientServer/protocol/HubCommand.kt" to kt(DIRC_HUBCOMMAND_KT),
+        "clientServer/protocol/HubEvent.kt" to kt(DIRC_HUBEVENT_NEW),
+        "clientServer/protocol/HubJson.kt" to kt(DIRC_HUBJSON_KT),
+        "clientServer/protocol/Models.kt" to kt(DIRC_MODELS_KT),
+        "client/ClientRuntime.kt" to kt(DIRC_CLIENTRUNTIME_KT),
+        "client/HubConnection.kt" to kt(DIRC_HUBCONNECTION_KT),
+        "client/HubRegistry.kt" to kt(DIRC_HUBREGISTRY_KT),
+        "client/HubStateRepository.kt" to kt(DIRC_HUBSTATEREPO_KT),
+        "client/viewmodel/AppBackingViewModel.kt" to kt(DIRC_APPVM_KT),
+        "client/viewmodel/ConversationBackingViewModel.kt" to kt(DIRC_CONVOVM_NEW),
+        "client/viewmodel/HubListBackingViewModel.kt" to kt(DIRC_HUBLISTVM_KT),
+        "electron/main.js" to DemoFileContent(FileContentKind.Text, text(DIRC_ELECTRON_MAIN_JS), "javascript"),
+        "electron/package.json" to DemoFileContent(FileContentKind.Text, text(DIRC_ELECTRON_PKG_JSON), "json"),
+        "web/WebClient.kt" to kt(DIRC_WEBCLIENT_KT),
+        "iosApp/ConversationView.swift" to DemoFileContent(FileContentKind.Text, text(DIRC_IOS_CONVOVIEW_SWIFT), "swift"),
+        "iosApp/iOSApp.swift" to DemoFileContent(FileContentKind.Text, text(DIRC_IOS_APP_SWIFT), "swift"),
+        "androidApp/ConversationScreen.kt" to kt(DIRC_ANDROID_CONVO_KT),
+        "androidApp/MainActivity.kt" to kt(DIRC_ANDROID_MAIN_KT),
+    )
+
+    /**
+     * The DarknessIRC uncommitted changes on the `feature/scrollback` branch —
+     * the three files touched by the scrollback work.
+     */
+    val darknessGitEntries: List<GitFileEntry> = listOf(
+        GitFileEntry(filePath = "clientServer/protocol/HubEvent.kt", status = GitFileStatus.Modified, directory = "clientServer/protocol"),
+        GitFileEntry(filePath = "client/viewmodel/ConversationBackingViewModel.kt", status = GitFileStatus.Modified, directory = "client/viewmodel"),
+        GitFileEntry(filePath = "hub/HubStore.kt", status = GitFileStatus.Modified, directory = "hub"),
+    )
+
+    /** Pre-computed DarknessIRC diffs, keyed by path, served to World 2's git panes. */
+    val darknessGitDiffs: Map<String, DemoGitDiff> = mapOf(
+        "hub/HubStore.kt" to DemoGitDiff(
+            hunks = listOf(
+                DiffHunk(
+                    oldStart = 8, oldCount = 5, newStart = 8, newCount = 11,
+                    lines = listOf(
+                        ctx(8, 8, "    private val state = MutableStateFlow(HubState())"),
+                        add(9, ""),
+                        add(10, "    /** Last SCROLLBACK_MAX lines per channel, for reconnecting clients. */"),
+                        add(11, "    private val scrollback = mutableMapOf<String, ArrayDeque<IrcLine>>()"),
+                        ctx(9, 12, ""),
+                        ctx(10, 13, "    fun record(line: IrcLine) {"),
+                        add(14, "        val ring = scrollback.getOrPut(line.channel) { ArrayDeque(SCROLLBACK_MAX) }"),
+                        add(15, "        ring.addLast(line)"),
+                        add(16, "        if (ring.size > SCROLLBACK_MAX) ring.removeFirst()"),
+                        ctx(11, 17, "        state.update { it.appendTo(line.channel, line) }"),
+                        ctx(12, 18, "    }"),
+                    ),
+                ),
+                DiffHunk(
+                    oldStart = 20, oldCount = 3, newStart = 26, newCount = 7,
+                    lines = listOf(
+                        ctx(20, 26, "    fun snapshot(channel: String): List<IrcLine> ="),
+                        ctx(21, 27, "        state.value.linesFor(channel)"),
+                        add(28, ""),
+                        add(29, "    /** Recent history for [channel], newest last — replayed on reconnect. */"),
+                        add(30, "    fun history(channel: String): List<IrcLine> ="),
+                        add(31, "        scrollback[channel]?.toList().orEmpty()"),
+                        ctx(22, 32, "}"),
+                    ),
+                ),
+            ),
+            language = "kotlin",
+            oldContent = DIRC_HUBSTORE_OLD,
+            newContent = DIRC_HUBSTORE_NEW,
+        ),
+        "clientServer/protocol/HubEvent.kt" to DemoGitDiff(
+            hunks = listOf(
+                DiffHunk(
+                    oldStart = 10, oldCount = 5, newStart = 10, newCount = 9,
+                    lines = listOf(
+                        ctx(10, 10, "    @Serializable"),
+                        ctx(11, 11, "    data class Message(val channel: String, val line: IrcLine) : HubEvent()"),
+                        add(12, ""),
+                        add(13, "    /** Recent scrollback replayed to a client that just (re)connected. */"),
+                        add(14, "    @Serializable"),
+                        add(15, "    data class History(val channel: String, val lines: List<IrcLine>) : HubEvent()"),
+                        ctx(12, 16, ""),
+                        ctx(13, 17, "    @Serializable"),
+                        ctx(14, 18, "    data class Joined(val channel: String, val who: String) : HubEvent()"),
+                    ),
+                ),
+            ),
+            language = "kotlin",
+            oldContent = DIRC_HUBEVENT_OLD,
+            newContent = DIRC_HUBEVENT_NEW,
+        ),
+        "client/viewmodel/ConversationBackingViewModel.kt" to DemoGitDiff(
+            hunks = listOf(
+                DiffHunk(
+                    oldStart = 24, oldCount = 7, newStart = 24, newCount = 14,
+                    lines = listOf(
+                        ctx(24, 24, "    private fun onEvent(event: HubEvent) {"),
+                        ctx(25, 25, "        when (event) {"),
+                        ctx(26, 26, "            is HubEvent.Message -> append(event.channel, event.line)"),
+                        add(27, "            is HubEvent.History -> {"),
+                        add(28, "                // Replay recent history without duplicating lines already shown:"),
+                        add(29, "                // dedupe by IrcLine.id, then render in order."),
+                        add(30, "                val known = lines.value.mapTo(HashSet()) { it.id }"),
+                        add(31, "                val fresh = event.lines.filter { it.id !in known }"),
+                        add(32, "                if (fresh.isNotEmpty()) prepend(event.channel, fresh)"),
+                        add(33, "            }"),
+                        ctx(27, 34, "            is HubEvent.Joined -> note(event.channel, event.who)"),
+                        ctx(28, 35, "            else -> Unit"),
+                        ctx(29, 36, "        }"),
+                        ctx(30, 37, "    }"),
+                    ),
+                ),
+            ),
+            language = "kotlin",
+            oldContent = DIRC_CONVOVM_OLD,
+            newContent = DIRC_CONVOVM_NEW,
+        ),
+    )
+
+    /**
+     * Render a Kotlin source preview the way the real server does: syntax-
+     * highlighted HTML with no `<pre><code>` wrapper (the client adds that).
+     *
+     * @param src the raw Kotlin source.
+     * @return a [DemoFileContent] with highlighted Kotlin.
+     */
+    private fun kt(src: String): DemoFileContent =
+        DemoFileContent(FileContentKind.Text, SyntaxHighlighter.highlight(src, "kotlin"), "kotlin")
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,4 +1470,639 @@ private val NOTES_MD = """
 - sine table regenerated at 1024 entries, amplitude 40
 - TODO: NTSC check — the plasma blows the 262-line frame at 60Hz
 - TODO: greets order — alphabetical, or biggest crew last?
+""".trimStart()
+
+// ---------------------------------------------------------------------------
+// DarknessIRC (World 2) source contents. Hand-authored Kotlin/Swift/JS/JSON
+// mirroring the real com.darkness.irc repo layout. The three `*_OLD`/`*_NEW`
+// pairs back the feature/scrollback git diffs; everything else is browsable
+// context. None of these use `$` (Kotlin's template introducer), so they sit
+// in raw strings verbatim.
+// ---------------------------------------------------------------------------
+
+/** Post-change `hub/HubStore.kt` (matches the feature/scrollback diff). */
+private val DIRC_HUBSTORE_NEW = """
+package com.darkness.irc.hub
+
+import com.darkness.irc.protocol.IrcLine
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+
+class HubStore {
+    private val state = MutableStateFlow(HubState())
+
+    /** Last SCROLLBACK_MAX lines per channel, for reconnecting clients. */
+    private val scrollback = mutableMapOf<String, ArrayDeque<IrcLine>>()
+
+    fun record(line: IrcLine) {
+        val ring = scrollback.getOrPut(line.channel) { ArrayDeque(SCROLLBACK_MAX) }
+        ring.addLast(line)
+        if (ring.size > SCROLLBACK_MAX) ring.removeFirst()
+        state.update { it.appendTo(line.channel, line) }
+    }
+
+    val current get() = state
+
+    fun clear(channel: String) {
+        state.update { it.clear(channel) }
+    }
+
+    fun snapshot(channel: String): List<IrcLine> =
+        state.value.linesFor(channel)
+
+    /** Recent history for [channel], newest last — replayed on reconnect. */
+    fun history(channel: String): List<IrcLine> =
+        scrollback[channel]?.toList().orEmpty()
+}
+
+private const val SCROLLBACK_MAX = 200
+""".trimStart()
+
+/** Pre-change `hub/HubStore.kt`. */
+private val DIRC_HUBSTORE_OLD = """
+package com.darkness.irc.hub
+
+import com.darkness.irc.protocol.IrcLine
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+
+class HubStore {
+    private val state = MutableStateFlow(HubState())
+
+    fun record(line: IrcLine) {
+        state.update { it.appendTo(line.channel, line) }
+    }
+
+    val current get() = state
+
+    fun clear(channel: String) {
+        state.update { it.clear(channel) }
+    }
+
+    fun snapshot(channel: String): List<IrcLine> =
+        state.value.linesFor(channel)
+}
+
+private const val SCROLLBACK_MAX = 200
+""".trimStart()
+
+/** Post-change `clientServer/protocol/HubEvent.kt` (adds HubEvent.History). */
+private val DIRC_HUBEVENT_NEW = """
+package com.darkness.irc.protocol
+
+import kotlinx.serialization.Serializable
+
+/** Events the hub pushes to connected clients. */
+@Serializable
+sealed class HubEvent {
+
+    /** A line arrived in a channel. */
+    @Serializable
+    data class Message(val channel: String, val line: IrcLine) : HubEvent()
+
+    /** Recent scrollback replayed to a client that just (re)connected. */
+    @Serializable
+    data class History(val channel: String, val lines: List<IrcLine>) : HubEvent()
+
+    @Serializable
+    data class Joined(val channel: String, val who: String) : HubEvent()
+
+    @Serializable
+    data class Parted(val channel: String, val who: String) : HubEvent()
+}
+""".trimStart()
+
+/** Pre-change `clientServer/protocol/HubEvent.kt`. */
+private val DIRC_HUBEVENT_OLD = """
+package com.darkness.irc.protocol
+
+import kotlinx.serialization.Serializable
+
+/** Events the hub pushes to connected clients. */
+@Serializable
+sealed class HubEvent {
+
+    /** A line arrived in a channel. */
+    @Serializable
+    data class Message(val channel: String, val line: IrcLine) : HubEvent()
+
+    @Serializable
+    data class Joined(val channel: String, val who: String) : HubEvent()
+
+    @Serializable
+    data class Parted(val channel: String, val who: String) : HubEvent()
+}
+""".trimStart()
+
+/** Post-change `client/viewmodel/ConversationBackingViewModel.kt` (handles History). */
+private val DIRC_CONVOVM_NEW = """
+package com.darkness.irc.client.viewmodel
+
+import com.darkness.irc.protocol.HubEvent
+import com.darkness.irc.protocol.IrcLine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+/**
+ * Backs one channel's conversation view: subscribes to the hub event stream
+ * and keeps an ordered list of visible lines for the UI to render.
+ */
+class ConversationBackingViewModel(
+    private val channel: String,
+    private val hub: HubConnection,
+    private val scope: CoroutineScope,
+) {
+    private val _lines = MutableStateFlow<List<IrcLine>>(emptyList())
+    val lines = _lines.asStateFlow()
+
+    init { scope.launch { hub.events.collect(::onEvent) } }
+
+    private fun onEvent(event: HubEvent) {
+        when (event) {
+            is HubEvent.Message -> append(event.channel, event.line)
+            is HubEvent.History -> {
+                // Replay recent history without duplicating lines already shown:
+                // dedupe by IrcLine.id, then render in order.
+                val known = lines.value.mapTo(HashSet()) { it.id }
+                val fresh = event.lines.filter { it.id !in known }
+                if (fresh.isNotEmpty()) prepend(event.channel, fresh)
+            }
+            is HubEvent.Joined -> note(event.channel, event.who)
+            else -> Unit
+        }
+    }
+
+    private fun append(channel: String, line: IrcLine) {
+        if (channel != this.channel) return
+        _lines.value = _lines.value + line
+    }
+
+    private fun note(channel: String, who: String) = Unit
+
+    private fun prepend(channel: String, older: List<IrcLine>) {
+        if (channel != this.channel) return
+        _lines.value = older + _lines.value
+    }
+}
+""".trimStart()
+
+/** Pre-change `client/viewmodel/ConversationBackingViewModel.kt`. */
+private val DIRC_CONVOVM_OLD = """
+package com.darkness.irc.client.viewmodel
+
+import com.darkness.irc.protocol.HubEvent
+import com.darkness.irc.protocol.IrcLine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+/**
+ * Backs one channel's conversation view: subscribes to the hub event stream
+ * and keeps an ordered list of visible lines for the UI to render.
+ */
+class ConversationBackingViewModel(
+    private val channel: String,
+    private val hub: HubConnection,
+    private val scope: CoroutineScope,
+) {
+    private val _lines = MutableStateFlow<List<IrcLine>>(emptyList())
+    val lines = _lines.asStateFlow()
+
+    init { scope.launch { hub.events.collect(::onEvent) } }
+
+    private fun onEvent(event: HubEvent) {
+        when (event) {
+            is HubEvent.Message -> append(event.channel, event.line)
+            is HubEvent.Joined -> note(event.channel, event.who)
+            else -> Unit
+        }
+    }
+
+    private fun append(channel: String, line: IrcLine) {
+        if (channel != this.channel) return
+        _lines.value = _lines.value + line
+    }
+
+    private fun note(channel: String, who: String) = Unit
+
+    private fun prepend(channel: String, older: List<IrcLine>) {
+        if (channel != this.channel) return
+        _lines.value = older + _lines.value
+    }
+}
+""".trimStart()
+
+/** `hub/IrcLine.kt` — one immutable channel line. */
+private val DIRC_IRCLINE_KT = """
+package com.darkness.irc.protocol
+
+import kotlinx.serialization.Serializable
+
+/** One line of channel traffic, uniquely identified by [id] for dedupe. */
+@Serializable
+data class IrcLine(
+    val id: Long,
+    val channel: String,
+    val nick: String,
+    val text: String,
+    val kind: LineKind = LineKind.Message,
+)
+
+@Serializable
+enum class LineKind { Message, Join, Part, Quit, Mode, Kick, Topic, Action }
+""".trimStart()
+
+/** `hub/HubState.kt` — the immutable per-hub channel state. */
+private val DIRC_HUBSTATE_KT = """
+package com.darkness.irc.hub
+
+import com.darkness.irc.protocol.IrcLine
+
+/** Immutable snapshot of every channel's visible lines for one hub. */
+data class HubState(
+    private val byChannel: Map<String, List<IrcLine>> = emptyMap(),
+) {
+    fun linesFor(channel: String): List<IrcLine> = byChannel[channel].orEmpty()
+
+    fun appendTo(channel: String, line: IrcLine): HubState =
+        copy(byChannel = byChannel + (channel to (linesFor(channel) + line)))
+
+    fun clear(channel: String): HubState =
+        copy(byChannel = byChannel - channel)
+}
+""".trimStart()
+
+/** `hub/IrcConnection.kt` — the raw socket to one IRC network. */
+private val DIRC_IRCCONNECTION_KT = """
+package com.darkness.irc.hub
+
+import com.darkness.irc.protocol.IrcLine
+import com.darkness.irc.protocol.LineKind
+
+/**
+ * Owns a single TCP connection to an IRC network, parses inbound lines, and
+ * hands each parsed [IrcLine] to the [HubStore]. Reconnects with backoff.
+ */
+class IrcConnection(
+    private val host: String,
+    private val port: Int,
+    private val store: HubStore,
+) {
+    private var seq = 0L
+
+    fun onRaw(raw: String) {
+        val line = parse(raw) ?: return
+        store.record(line)
+    }
+
+    private fun parse(raw: String): IrcLine? {
+        val trimmed = raw.trimEnd()
+        if (trimmed.isEmpty()) return null
+        // ... real parser elided: PRIVMSG / JOIN / PART / MODE / KICK / TOPIC
+        return IrcLine(id = seq++, channel = "#commodore", nick = "server", text = trimmed, kind = LineKind.Message)
+    }
+}
+""".trimStart()
+
+/** `hub/Main.kt` — the hub entrypoint. */
+private val DIRC_HUB_MAIN_KT = """
+package com.darkness.irc.hub
+
+/**
+ * Boots the headless hub: starts the IRC connections and serves the
+ * client-facing websocket routes (see Routes.kt).
+ */
+fun main() {
+    val store = HubStore()
+    val hub = Hub(store)
+    hub.connectAll(AppPaths.configFile())
+    hub.serve(port = 8443)
+}
+""".trimStart()
+
+/** `hub/Routes.kt` — the client-facing websocket routes. */
+private val DIRC_ROUTES_KT = """
+package com.darkness.irc.hub
+
+import com.darkness.irc.protocol.HubEvent
+
+/**
+ * Wires the hub's websocket: on connect, replays recent history for each
+ * subscribed channel, then streams live events. History replay is what the
+ * feature/scrollback branch adds — clients no longer join to an empty buffer.
+ */
+class Routes(private val store: HubStore) {
+    fun onSubscribe(channel: String, send: (HubEvent) -> Unit) {
+        val history = store.history(channel)
+        if (history.isNotEmpty()) send(HubEvent.History(channel, history))
+    }
+}
+""".trimStart()
+
+/** `hub/AppPaths.kt` — platform config paths. */
+private val DIRC_APPPATHS_KT = """
+package com.darkness.irc.hub
+
+/** Resolves the hub's config/state directories per platform. */
+object AppPaths {
+    fun configFile(): String = configDir() + "/hub.conf"
+    fun configDir(): String = System.getenv("DARKNESS_HOME") ?: (home() + "/.darknessirc")
+    private fun home(): String = System.getProperty("user.home")
+}
+""".trimStart()
+
+/** `clientServer/protocol/HubCommand.kt` — client → hub commands. */
+private val DIRC_HUBCOMMAND_KT = """
+package com.darkness.irc.protocol
+
+import kotlinx.serialization.Serializable
+
+/** Commands a client sends up to the hub. */
+@Serializable
+sealed class HubCommand {
+    @Serializable
+    data class Subscribe(val channel: String) : HubCommand()
+
+    @Serializable
+    data class Say(val channel: String, val text: String) : HubCommand()
+
+    @Serializable
+    data class Unsubscribe(val channel: String) : HubCommand()
+}
+""".trimStart()
+
+/** `clientServer/protocol/HubJson.kt` — the shared serializer. */
+private val DIRC_HUBJSON_KT = """
+package com.darkness.irc.protocol
+
+import kotlinx.serialization.json.Json
+
+/** The single lenient JSON used on both ends of the hub socket. */
+val hubJson: Json = Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+    classDiscriminator = "type"
+}
+""".trimStart()
+
+/** `clientServer/protocol/Models.kt` — small shared value types. */
+private val DIRC_MODELS_KT = """
+package com.darkness.irc.protocol
+
+import kotlinx.serialization.Serializable
+
+/** A network the hub can connect to. */
+@Serializable
+data class Network(val id: String, val name: String, val host: String, val port: Int)
+
+/** A channel a client is subscribed to. */
+@Serializable
+data class ChannelRef(val network: String, val name: String)
+""".trimStart()
+
+/** `client/ClientRuntime.kt` — the shared client runtime. */
+private val DIRC_CLIENTRUNTIME_KT = """
+package com.darkness.irc.client
+
+import kotlinx.coroutines.CoroutineScope
+
+/**
+ * The platform-agnostic client runtime: owns the hub registry and hands
+ * view-models a live [HubConnection]. Native apps wrap this.
+ */
+class ClientRuntime(private val scope: CoroutineScope) {
+    val registry = HubRegistry()
+
+    fun connect(hubUrl: String): HubConnection =
+        registry.getOrConnect(hubUrl, scope)
+}
+""".trimStart()
+
+/** `client/HubConnection.kt` — the client side of the hub socket. */
+private val DIRC_HUBCONNECTION_KT = """
+package com.darkness.irc.client
+
+import com.darkness.irc.protocol.HubCommand
+import com.darkness.irc.protocol.HubEvent
+import kotlinx.coroutines.flow.SharedFlow
+
+/**
+ * One client's connection to a hub: exposes the inbound [events] flow (which
+ * now includes HubEvent.History on connect) and sends [HubCommand]s upward.
+ */
+interface HubConnection {
+    val events: SharedFlow<HubEvent>
+    fun send(command: HubCommand)
+}
+""".trimStart()
+
+/** `client/HubRegistry.kt` — dedupes connections per hub URL. */
+private val DIRC_HUBREGISTRY_KT = """
+package com.darkness.irc.client
+
+import kotlinx.coroutines.CoroutineScope
+
+/** Keeps one live [HubConnection] per hub URL, shared across view-models. */
+class HubRegistry {
+    private val connections = mutableMapOf<String, HubConnection>()
+
+    fun getOrConnect(url: String, scope: CoroutineScope): HubConnection =
+        connections.getOrPut(url) { openSocket(url, scope) }
+}
+""".trimStart()
+
+/** `client/HubStateRepository.kt` — caches the latest per-channel lines. */
+private val DIRC_HUBSTATEREPO_KT = """
+package com.darkness.irc.client
+
+import com.darkness.irc.protocol.IrcLine
+import kotlinx.coroutines.flow.MutableStateFlow
+
+/** Process-lifetime cache of channel lines so screens survive recreation. */
+class HubStateRepository {
+    private val byChannel = mutableMapOf<String, MutableStateFlow<List<IrcLine>>>()
+
+    fun flow(channel: String): MutableStateFlow<List<IrcLine>> =
+        byChannel.getOrPut(channel) { MutableStateFlow(emptyList()) }
+}
+""".trimStart()
+
+/** `client/viewmodel/AppBackingViewModel.kt` — top-level app state. */
+private val DIRC_APPVM_KT = """
+package com.darkness.irc.client.viewmodel
+
+import com.darkness.irc.client.ClientRuntime
+
+/** Backs the app shell: the hub list and the currently-open conversation. */
+class AppBackingViewModel(private val runtime: ClientRuntime) {
+    val hubs = HubListBackingViewModel(runtime)
+    var openChannel: String? = null
+        private set
+
+    fun open(channel: String) { openChannel = channel }
+}
+""".trimStart()
+
+/** `client/viewmodel/HubListBackingViewModel.kt` — the hub sidebar. */
+private val DIRC_HUBLISTVM_KT = """
+package com.darkness.irc.client.viewmodel
+
+import com.darkness.irc.client.ClientRuntime
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/** Backs the hub/channel sidebar list. */
+class HubListBackingViewModel(private val runtime: ClientRuntime) {
+    private val _channels = MutableStateFlow<List<String>>(emptyList())
+    val channels = _channels.asStateFlow()
+
+    fun refresh(names: List<String>) { _channels.value = names.sorted() }
+}
+""".trimStart()
+
+/** `web/WebClient.kt` — the web app bootstrap. */
+private val DIRC_WEBCLIENT_KT = """
+package com.darkness.irc.web
+
+import com.darkness.irc.client.ClientRuntime
+import kotlinx.coroutines.MainScope
+
+/** Boots the web client and mounts the conversation view. */
+fun main() {
+    val runtime = ClientRuntime(MainScope())
+    val hub = runtime.connect("wss://hub.darkness.irc/socket")
+    mountApp(runtime, hub)
+}
+""".trimStart()
+
+/** `androidApp/MainActivity.kt` — the Android entrypoint. */
+private val DIRC_ANDROID_MAIN_KT = """
+package com.darkness.irc.android
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent { DarknessApp() }
+    }
+}
+""".trimStart()
+
+/** `androidApp/ConversationScreen.kt` — the Compose channel screen. */
+private val DIRC_ANDROID_CONVO_KT = """
+package com.darkness.irc.android
+
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import com.darkness.irc.client.viewmodel.ConversationBackingViewModel
+
+@Composable
+fun ConversationScreen(vm: ConversationBackingViewModel) {
+    val lines by vm.lines.collectAsState()
+    LazyColumn(Modifier.fillMaxSize()) {
+        items(lines) { line -> LineRow(line) }
+    }
+}
+""".trimStart()
+
+/** `iosApp/iOSApp.swift` — the SwiftUI app entrypoint. */
+private val DIRC_IOS_APP_SWIFT = """
+import SwiftUI
+import shared
+
+@main
+struct DarknessApp: App {
+    let runtime = ClientRuntimeFactory().create()
+
+    var body: some Scene {
+        WindowGroup {
+            HubListView(runtime: runtime)
+        }
+    }
+}
+""".trimStart()
+
+/** `iosApp/ConversationView.swift` — the SwiftUI channel view. */
+private val DIRC_IOS_CONVOVIEW_SWIFT = """
+import SwiftUI
+import shared
+
+/// Renders one channel's conversation, backed by the shared view-model.
+struct ConversationView: View {
+    @StateObject var model: ConversationObservable
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            List(model.lines, id: \.id) { line in
+                LineRow(line: line)
+            }
+            .onChange(of: model.lines.count) { _ in
+                if let last = model.lines.last { proxy.scrollTo(last.id) }
+            }
+        }
+    }
+}
+""".trimStart()
+
+/** `electron/main.js` — the Electron main process. */
+private val DIRC_ELECTRON_MAIN_JS = """
+const { app, BrowserWindow } = require('electron')
+
+function createWindow() {
+  const win = new BrowserWindow({ width: 1100, height: 760 })
+  win.loadFile('web/index.html')
+}
+
+app.whenReady().then(createWindow)
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+""".trimStart()
+
+/** `electron/package.json` — the Electron manifest. */
+private val DIRC_ELECTRON_PKG_JSON = """
+{
+  "name": "darknessirc-desktop",
+  "version": "0.4.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^31.0.0"
+  }
+}
+""".trimStart()
+
+/** Root `build.gradle.kts`. */
+private val DIRC_BUILD_GRADLE = """
+plugins {
+    kotlin("multiplatform") version "2.0.20" apply false
+    kotlin("plugin.serialization") version "2.0.20" apply false
+}
+
+allprojects {
+    group = "com.darkness.irc"
+    version = "0.4.0-SNAPSHOT"
+}
+""".trimStart()
+
+/** Root `settings.gradle.kts`. */
+private val DIRC_SETTINGS_GRADLE = """
+rootProject.name = "darknessirc"
+
+include(":hub")
+include(":clientServer")
+include(":client")
+include(":web")
+include(":androidApp")
 """.trimStart()

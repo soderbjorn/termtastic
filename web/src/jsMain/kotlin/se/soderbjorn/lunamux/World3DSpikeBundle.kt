@@ -304,12 +304,18 @@ internal fun stashTab(anchor: RingPane) {
 
     leaveFrontPane() // disengage / exit selection before the tab leaves the ring
 
+    // Fancy animations off: the whole tab just vanishes to the cargo ship. Build the stack
+    // already landed on its dock slot ([BundleState.PARKED], progress at 1) and unlist it at
+    // once (below), so there is no merge/fly cinematic and no camera move — the tab is simply
+    // gone from the ring.
+    val parkInstantly = !spikeFancyAnimations
+
     val id = "bundle-${spikeBundleSeq++}"
     val startPos = mutableMapOf<String, Triple<Double, Double, Double>>()
     members.forEachIndexed { ord, p ->
         p.bundleId = id
         p.mergeOrd = ord
-        p.mergeProg = 0.0
+        p.mergeProg = if (parkInstantly) 1.0 else 0.0
         startPos[p.paneId] = Triple(
             p.obj.position.x as Double, p.obj.position.y as Double, p.obj.position.z as Double,
         )
@@ -332,9 +338,19 @@ internal fun stashTab(anchor: RingPane) {
             mergeY = anchor.obj.position.y as Double,
             mergeZ = anchor.obj.position.z as Double,
             startPos = startPos,
+            state = if (parkInstantly) BundleState.PARKED else BundleState.MERGING,
+            mergeProg = if (parkInstantly) 1.0 else 0.0,
+            flightProg = if (parkInstantly) 1.0 else 0.0,
         ),
     )
-    showNavLabelForBundle(spikeStashedTabs.last())
+    if (parkInstantly) {
+        // Land it now: unlist the tab and mark its panes off-ring at once (the deferred second
+        // half of the animated path — normally run by [tickBundles] on the FLYING_UP → PARKED
+        // landing), so the tab is gone from the ring immediately with no journey to watch.
+        commitBundleUnlist(spikeStashedTabs.last())
+    } else {
+        showNavLabelForBundle(spikeStashedTabs.last())
+    }
     spikeSettledIndex = -1
     // The camera flight is armed when the merge completes (in [tickBundles]); the camera holds
     // while the panes gather. The tab is formally unlisted only once the stack parks
@@ -418,6 +434,21 @@ internal fun unstashTab(b: TabBundle, moveCamera: Boolean) {
     runCatching { launchCmd(WindowCommand.SetTabHidden(tabId = b.tabId, hidden = false)) }
     b.committed = false // re-listed: the loop may run these panes and compute their ring slots
     b.state = BundleState.FLYING_DOWN
+    // Fancy animations off: skip the fly-down cinematic. Drop the stack straight to the ring
+    // (flightProg 0 → no descent) and let [tickBundles] fan it onto its slots on the very next
+    // ticks as the re-list round-trip lands; snap the camera home for a user press. The bundle
+    // stays alive ([RingPane.bundleId] retained, death-sweep exempt) until separation finishes,
+    // so the round-trip is bridged exactly as the animated fly-down does — we just don't watch it.
+    if (!spikeFancyAnimations) {
+        b.flightProg = 0.0
+        if (moveCamera) {
+            spikeStashChase = null
+            spikeShelfPanTargetX = null
+            spikeCamReturning = false
+            spikeCamFlown = false
+        }
+        return
+    }
     if (moveCamera) {
         val followId = b.paneIds.first()
         if (stationBuilt()) {

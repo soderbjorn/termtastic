@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -79,14 +78,6 @@ import se.soderbjorn.darkness.core.Theme
 import se.soderbjorn.darkness.core.allThemes
 import se.soderbjorn.darkness.core.orderThemesForPicker
 import se.soderbjorn.lunamux.client.viewmodel.ThemeBackingViewModel
-
-/**
- * Number of full-span grid rows that precede the theme cards (the "Dark mode"
- * header and the appearance Auto/Light/Dark toggle). Added to a theme's index in
- * `orderedThemes` to get its flattened `LazyVerticalGrid` item index, used when
- * scrolling the active theme into view on open (issue #105).
- */
-private const val LEADING_GRID_ITEMS = 2
 
 /**
  * The appearance + theme picker bottom sheet.
@@ -140,9 +131,9 @@ fun AppearanceSheet(
     // always starting at the top. The catalog may populate a frame after the
     // sheet appears, so the effect is keyed on the list size (0 → N) and a
     // one-shot [didScrollToActive] guard stops it from ever yanking the grid
-    // back once the user has scrolled away. The two leading full-span rows (the
-    // "Dark mode" header + the appearance toggle) offset every theme's grid
-    // index by [LEADING_GRID_ITEMS].
+    // back once the user has scrolled away. The "Dark mode" header + appearance
+    // toggle are now a pinned strip *outside* the grid, so the theme's index is
+    // its raw position in `orderedThemes` (no leading-row offset).
     val gridState = rememberLazyGridState()
     var didScrollToActive by remember { mutableStateOf(false) }
     LaunchedEffect(orderedThemes.size, activeThemeName) {
@@ -150,7 +141,7 @@ fun AppearanceSheet(
         val index = orderedThemes.indexOfFirst { it.name == activeThemeName }
         if (index < 0) return@LaunchedEffect
         didScrollToActive = true
-        gridState.scrollToItem(LEADING_GRID_ITEMS + index)
+        gridState.scrollToItem(index)
     }
 
     ModalBottomSheet(
@@ -158,6 +149,35 @@ fun AppearanceSheet(
         sheetState = sheetState,
         containerColor = SidebarSurface,
     ) {
+        // Pinned header: the "Dark mode" title and the Auto/Light/Dark toggle
+        // stay fixed at the top of the sheet while only the theme catalog below
+        // scrolls — the owner wanted the mode toggle always reachable rather
+        // than scrolling away with the (potentially long) theme list.
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+            Text(
+                text = "Dark mode",
+                color = SidebarTextBright,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 8.dp, top = 4.dp, bottom = 10.dp),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (option in listOf(Appearance.Auto, Appearance.Light, Appearance.Dark)) {
+                    AppearanceSegment(
+                        label = option.label(),
+                        selected = snapshot.appearance == option,
+                        onClick = { scope.launch { vm.setAppearance(option) } },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        // Scrolling theme catalog. One flat list, no section headings (issue
+        // #107). Tapping a card assigns that theme to the currently-active slot
+        // (issue #97); long-pressing opens the star / unstar context menu.
         LazyVerticalGrid(
             state = gridState,
             columns = gridColumns,
@@ -169,36 +189,6 @@ fun AppearanceSheet(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
         ) {
-            // The "Dark mode" header + appearance toggle live inside the grid as
-            // full-span rows so they scroll together with the theme sections
-            // rather than occupying a fixed strip above the scroll area.
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Text(
-                    text = "Dark mode",
-                    color = SidebarTextBright,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 8.dp, top = 4.dp, bottom = 10.dp),
-                )
-            }
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    for (option in listOf(Appearance.Auto, Appearance.Light, Appearance.Dark)) {
-                        AppearanceSegment(
-                            label = option.label(),
-                            selected = snapshot.appearance == option,
-                            onClick = { scope.launch { vm.setAppearance(option) } },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-            }
-            // One flat list, no section headings (issue #107). Tapping a card
-            // assigns that theme to the currently-active slot (issue #97);
-            // long-pressing opens the star / unstar context menu.
             items(orderedThemes, key = { it.name }) { theme ->
                 ThemeCard(
                     theme = theme,

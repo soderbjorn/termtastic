@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.w3c.dom.HTMLElement
+import se.soderbjorn.darkness.core.argbToCss
 import se.soderbjorn.darkness.web.confirmClosePane
 import se.soderbjorn.darkness.web.hotkey.Hotkey
 import se.soderbjorn.darkness.web.hotkey.HotkeyActionSpec
@@ -81,6 +82,10 @@ private const val ICON_NEWS =
 private const val ICON_TRIPTYCH =
     """<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="7" width="5" height="10" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16.5" y="7" width="5" height="10" rx="1"/></svg>"""
 
+/** Arrow-out-of-box glyph — web pane "Open in browser" action. */
+private const val PA_ICON_OPEN_EXTERNAL =
+    """<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><line x1="20" y1="4" x2="11" y2="13"/><path d="M18 13v6a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 19V8a1.5 1.5 0 0 1 1.5-1.5H11"/></svg>"""
+
 /** Material Symbols "content_copy" — file-browser path-copy action. */
 private const val PA_ICON_COPY =
     """<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="13" height="13" rx="1.5"/><path d="M16 8V4.5A1.5 1.5 0 0 0 14.5 3H4.5A1.5 1.5 0 0 0 3 4.5v10A1.5 1.5 0 0 0 4.5 16H8"/></svg>"""
@@ -114,6 +119,17 @@ internal const val OVERVIEW3D_HOTKEY_ACTION_ID: String = "Lunamux.overview3d.tog
  * @see registerWorld3dSpikeHotkey
  */
 internal const val WORLD3D_SPIKE_HOTKEY_ACTION_ID: String = "Lunamux.world3dspike.toggle"
+
+/**
+ * Stable action id for the **switch world** hotkey (default ⌥⌘O /
+ * Alt+Meta+KeyO) — cycles the active world on to the next one in flat 2D mode,
+ * the 2D counterpart of the 3D world's ⌥⌘O fly-through-the-wormhole switch. No-
+ * op while the 3D world is open, where that chord runs the cinematic transit
+ * instead ([se.soderbjorn.lunamux.buildKeyHandler]).
+ *
+ * @see registerWorldSwitchHotkey
+ */
+internal const val WORLD_SWITCH_HOTKEY_ACTION_ID: String = "Lunamux.world.switch"
 
 /** Reformat (terminal action). */
 private const val PA_ICON_REFORMAT =
@@ -166,17 +182,51 @@ internal var appShellHandle: AppShellHandle? = null
 /* state (the latter lags the dynamic snapshot by one tick).            */
 /* -------------------------------------------------------------------- */
 
-/** Looks up a leaf descriptor in the current server config by pane id. */
-private fun findLeafDynamic(paneId: String): dynamic {
-    val cfg: dynamic = currentConfig ?: return null
-    val tabsArr = cfg.tabs as? Array<dynamic> ?: return null
-    for (tab in tabsArr) {
-        val panes = (tab.panes as? Array<dynamic>) ?: continue
-        for (p in panes) {
-            if ((p.leaf?.id as? String) == paneId) return p.leaf
+/** Returns the tabs array of the world that owns [paneId] in the dynamic
+ *  [cfg], or `null` if none (or the config has no worlds). */
+private fun worldTabsOwningPane(cfg: dynamic, paneId: String): Array<dynamic>? {
+    val worlds = cfg.worlds as? Array<dynamic> ?: return null
+    for (world in worlds) {
+        val tabs = world.tabs as? Array<dynamic> ?: continue
+        for (tab in tabs) {
+            val panes = (tab.panes as? Array<dynamic>) ?: continue
+            for (p in panes) {
+                if ((p.leaf?.id as? String) == paneId) return tabs
+            }
         }
     }
     return null
+}
+
+/** Looks up a leaf descriptor in the current server config by pane id.
+ *  Searches every world's tabs (worlds hold the source-of-truth panes for
+ *  ≥1.9 clients) and falls back to the legacy top-level `tabs` mirror.
+ *
+ *  `internal` (not `private`) because [mountPaneContent] and [rawLeafFor]
+ *  need the same world-aware scan: the legacy `cfg.tabs` mirror only carries
+ *  the DEFAULT world's panes, so a `cfg.tabs`-only scan returns `null` for
+ *  any pane created in a non-default world — leaving its pane stuck on the
+ *  `[window … — booting]` placeholder forever. */
+internal fun findLeafDynamic(paneId: String): dynamic {
+    val cfg: dynamic = currentConfig ?: return null
+    fun scan(tabsArr: Array<dynamic>?): dynamic {
+        if (tabsArr == null) return null
+        for (tab in tabsArr) {
+            val panes = (tab.panes as? Array<dynamic>) ?: continue
+            for (p in panes) {
+                if ((p.leaf?.id as? String) == paneId) return p.leaf
+            }
+        }
+        return null
+    }
+    val worlds = cfg.worlds as? Array<dynamic>
+    if (worlds != null) {
+        for (world in worlds) {
+            val found = scan(world.tabs as? Array<dynamic>)
+            if (found != null) return found
+        }
+    }
+    return scan(cfg.tabs as? Array<dynamic>)
 }
 
 /**
@@ -201,7 +251,12 @@ private fun findLeafDynamic(paneId: String): dynamic {
  */
 private fun buildMoveToTabItems(paneId: String): List<PaneMenuItem> {
     val cfg: dynamic = currentConfig ?: return emptyList()
-    val tabsArr = cfg.tabs as? Array<dynamic> ?: return emptyList()
+    // Panes only move between tabs of the SAME world, so scope the target
+    // list to the world that owns this pane (fall back to the legacy flat
+    // tabs when the config carries no worlds).
+    val tabsArr = worldTabsOwningPane(cfg, paneId)
+        ?: (cfg.tabs as? Array<dynamic>)
+        ?: return emptyList()
     // Resolve the pane's own tab first so it can be excluded from targets.
     var ownTabId: String? = null
     outer@ for (tab in tabsArr) {
@@ -436,6 +491,50 @@ private fun registerWorld3dSpikeHotkey() {
     ) { toggleWorld3dSpike() }
 }
 
+/**
+ * Register the **switch world** hotkey (default ⌥⌘O / Alt+Meta+KeyO): cycle the
+ * active world on to the next one in flat 2D mode. Mirrors the 3D world's ⌥⌘O
+ * fly-through-the-wormhole switch so the same chord means "next world" in both
+ * modes. Guarded on [spikeOpen] so it stays inert while the 3D world is up —
+ * there the world's own key handler owns ⌥⌘O and plays the cinematic transit,
+ * and firing this too would double-cycle. Same user-rebindable registration
+ * mechanics as the others; idempotent — called once at boot.
+ *
+ * @see switchToNextWorld
+ * @see WORLD_SWITCH_HOTKEY_ACTION_ID
+ */
+private fun registerWorldSwitchHotkey() {
+    HotkeyBindings.registerAction(
+        HotkeyActionSpec(
+            id = WORLD_SWITCH_HOTKEY_ACTION_ID,
+            label = "Switch workspace",
+            defaults = listOf(Hotkey(key = "o", alt = true, meta = true)),
+        ),
+    ) {
+        // The 3D world binds ⌥⌘O itself (the wormhole transit); don't also cycle here.
+        if (!spikeOpen) switchToNextWorld()
+    }
+}
+
+/**
+ * Advance the active world to the next one in [WindowConfig.worlds] (wrapping
+ * past the end) by sending [WindowCommand.SetActiveWorld]; the server re-
+ * broadcasts and the 2D tab strip repaints to the new world (see
+ * [lunamuxTabSource]). No-op with fewer than two worlds or before the server
+ * has reported any. The 2D counterpart of the globe switcher's click and the
+ * 3D ⌥⌘O transit.
+ *
+ * @see registerWorldSwitchHotkey
+ */
+internal fun switchToNextWorld() {
+    val config = lunamuxClient.windowState.config.value ?: return
+    val worlds = config.worlds
+    if (worlds.size < 2) return
+    val idx = worlds.indexOfFirst { it.id == config.activeWorldId }
+    val next = worlds[if (idx < 0) 0 else (idx + 1) % worlds.size]
+    if (next.id != config.activeWorldId) launchCmd(WindowCommand.SetActiveWorld(next.id))
+}
+
 /* -------------------------------------------------------------------- */
 /* Per-pane action buttons in the chrome header. Carries content-kind   */
 /* specific actions (reformat for terminal panes, copy-path for file-   */
@@ -505,6 +604,22 @@ fun lunamuxPaneActions(paneId: String): List<PaneAction> {
             handler = {},
             handlerWithAnchor = { btn -> cycleGitDiffMode(paneId, btn) },
             extraClass = "tt-pane-action-diffmode",
+        )
+    }
+
+    if (contentKind == "webBrowser") {
+        actions += PaneAction(
+            iconHtml = PA_ICON_OPEN_EXTERNAL,
+            tooltip = "Open in browser",
+            handler = {
+                // Prefer the live guest's current URL (it reflects in-page
+                // navigation the persisted content may lag behind); fall back
+                // to the stored content URL.
+                val liveUrl = webBrowserPaneViews[paneId]?.lastCommittedUrl
+                val url = liveUrl ?: (leaf.content?.url as? String)
+                url?.takeIf { it.isNotBlank() }?.let { openExternalUrl(it) }
+            },
+            extraClass = "tt-pane-action-openext",
         )
     }
 
@@ -819,6 +934,15 @@ private var sidebarLogoEl: HTMLElement? = null
 private var sidebarFooterEl: HTMLElement? = null
 
 /**
+ * Cached world-status element (the per-world working/waiting rows) that sits at
+ * the very bottom of the sidebar footer, below the Claude usage bar. Cached like
+ * [sidebarFooterEl] so [updateWorldStatusFooter] can reconcile the same element
+ * across toolkit rerenders instead of losing its handle. Held here (module level)
+ * rather than looked up by id so a rerender can't briefly detach it.
+ */
+private var worldStatusEl: HTMLElement? = null
+
+/**
  * Builds (once) the app logo — "Lunamux" wordmark + work-state dot — for
  * the toolkit's `sidebarHeader` slot at the top of the sessions list.
  *
@@ -889,8 +1013,179 @@ private fun buildSidebarFooter(): HTMLElement {
     }
     footer.appendChild(usage)
 
+    // World-aware agent status, pinned BELOW the usage bar (last child of the
+    // column-flex footer → renders at the very bottom of the sidebar). Ported
+    // from the 3D world's warp-core status boxes, but restyled to the pane's
+    // idiom (a titled block of accent-dot rows) — see `.world-status-bar`.
+    val worlds = document.createElement("div") as HTMLElement
+    worlds.className = "world-status-bar world-status-empty"
+    worldStatusEl = worlds
+    footer.appendChild(worlds)
+    updateWorldStatusFooter()
+
     sidebarFooterEl = footer
     return footer
+}
+
+/**
+ * A single active world's agent tally, for the sidebar's world-status block.
+ *
+ * @property name    the world's display name (the row's label).
+ * @property accent  the world's resolved theme accent as a CSS colour string
+ *   (the row's status dot), from [resolvedThemeForWorld] via [argbToCss].
+ * @property working how many of the world's panes have a running agent.
+ * @property waiting how many of the world's panes have an agent awaiting input.
+ * @see computeWorldStatusRows
+ */
+private class WorldStatusRow(
+    val name: String,
+    val accent: String,
+    val working: Int,
+    val waiting: Int,
+)
+
+/**
+ * Tallies every world's working/waiting panes from the resident
+ * [latestWindowConfig] and the authoritative session-state map
+ * ([lunamuxClient]`.windowState.states`, keyed by `sessionId` across all
+ * worlds). Returns one [WorldStatusRow] per world that has any activity, in the
+ * config's world order; quiet worlds are omitted so the block stays empty when
+ * nothing is running.
+ *
+ * This is the 2D counterpart of the 3D warp-core's `computeWorldStatuses`: it
+ * reads the same shared session-state model AND honours the same manual
+ * [spikeWaitingOverride] / [spikeWorkingOverride] test maps (keyed by pane id,
+ * toggled by the 3D `w` key), so the sidebar footer and the 3D warp-core boxes
+ * agree on the numbers even while an override is in effect.
+ *
+ * @return the active worlds' tallies, in world order.
+ * @see updateWorldStatusFooter
+ */
+private fun computeWorldStatusRows(): List<WorldStatusRow> {
+    val cfg = latestWindowConfig ?: return emptyList()
+    val states = runCatching { lunamuxClient.windowState.states.value }.getOrNull()
+    val out = mutableListOf<WorldStatusRow>()
+    for (world in cfg.worlds) {
+        var working = 0
+        var waiting = 0
+        for (tab in world.tabs) {
+            for (pane in tab.panes) {
+                // A manual override (3D `w` key) wins over the live session state,
+                // exactly as the 3D warp-core's computeWorldStatuses does; absent an
+                // override the pane follows its real state.
+                val paneId = pane.leaf.id
+                val sessionId = pane.leaf.sessionId
+                val isWaiting = spikeWaitingOverride[paneId] ?: (states?.get(sessionId) == "waiting")
+                val isWorking = spikeWorkingOverride[paneId] ?: (states?.get(sessionId) == "working")
+                if (isWaiting) waiting++ else if (isWorking) working++
+            }
+        }
+        if (working > 0 || waiting > 0) {
+            val accent = runCatching { argbToCss(resolvedThemeForWorld(world.themeSelection).accent) }
+                .getOrNull() ?: "#4f8cf7"
+            out.add(WorldStatusRow(world.name, accent, working, waiting))
+        }
+    }
+    return out
+}
+
+/**
+ * Fills a row's count element with colour-coded, gently-pulsing segments — "N
+ * working" in reactor blue and "M waiting" in attention amber (the 3D warp
+ * core's semantic working/waiting colours), joined by a muted separator, and
+ * omitting a half that is zero (so a purely-waiting world reads just "M
+ * waiting"). The colour + slow breathe draw the eye to live / blocked agents
+ * without the heavier chrome of the sidebar's per-pane dots.
+ *
+ * The breathe opacity is driven by the shared global pulse loop
+ * ([startPulse] / `pulseTick` in `WebStateActions`), NOT a CSS `@keyframes`
+ * animation: [updateWorldStatusFooter] rebuilds this block with `innerHTML = ""`
+ * on every state push, and a CSS animation on the fresh span would restart from
+ * `opacity: 1` each time, making the breathe look erratic. Seeding each segment
+ * off the shared clock keeps every world's breathe steady and in sync — the same
+ * fix the per-pane `.tt-status-dot` beads use.
+ *
+ * @param host    the row's count container to populate (assumed empty).
+ * @param working the world's working-pane count.
+ * @param waiting its waiting-pane count.
+ * @see startPulse
+ */
+private fun appendWorldStatusCounts(host: HTMLElement, working: Int, waiting: Int) {
+    var needSep = false
+    if (working > 0) {
+        val w = document.createElement("span") as HTMLElement
+        w.className = "world-status-working"
+        w.textContent = "$working working"
+        host.appendChild(w)
+        startPulse(w, WORLD_WORKING_PULSE_PERIOD_MS, WORLD_WORKING_PULSE_FLOOR)
+        needSep = true
+    }
+    if (waiting > 0) {
+        if (needSep) {
+            val sep = document.createElement("span") as HTMLElement
+            sep.className = "world-status-sep"
+            sep.textContent = " • "
+            host.appendChild(sep)
+        }
+        val a = document.createElement("span") as HTMLElement
+        a.className = "world-status-waiting"
+        a.textContent = "$waiting waiting"
+        host.appendChild(a)
+        startPulse(a, WORLD_WAITING_PULSE_PERIOD_MS, WORLD_WAITING_PULSE_FLOOR)
+    }
+}
+
+/**
+ * Repaints the sidebar's world-status block from the current worlds + session
+ * states. Called from [updateStateIndicators] — the shared hub every config /
+ * state push already routes through — so the rows track agent activity live,
+ * exactly like the per-pane sidebar dots beside them.
+ *
+ * When no world has any working/waiting pane, the block collapses to nothing
+ * (via `world-status-empty`, which zeroes its padding) so an idle footer shows
+ * only the usage bar. Otherwise it renders a "Worlds" title over one accent-dot
+ * row per active world. The whole block is rebuilt each call (a handful of
+ * worlds, pushed at most every few seconds) rather than diffed.
+ *
+ * @see computeWorldStatusRows
+ */
+internal fun updateWorldStatusFooter() {
+    val host = worldStatusEl ?: return
+    val rows = computeWorldStatusRows()
+    if (rows.isEmpty()) {
+        host.classList.add("world-status-empty")
+        host.innerHTML = ""
+        return
+    }
+    host.classList.remove("world-status-empty")
+    host.innerHTML = ""
+
+    val title = document.createElement("div") as HTMLElement
+    title.className = "world-status-title"
+    title.textContent = "Workspace agent status"
+    host.appendChild(title)
+
+    for (row in rows) {
+        val rowEl = document.createElement("div") as HTMLElement
+        rowEl.className = "world-status-row"
+
+        val dot = document.createElement("span") as HTMLElement
+        dot.className = "world-status-dot"
+        dot.style.background = row.accent
+
+        val name = document.createElement("span") as HTMLElement
+        name.className = "world-status-name"
+        name.textContent = row.name
+
+        val count = document.createElement("span") as HTMLElement
+        count.className = "world-status-count"
+        appendWorldStatusCounts(count, row.working, row.waiting)
+
+        rowEl.appendChild(dot)
+        rowEl.appendChild(name)
+        rowEl.appendChild(count)
+        host.appendChild(rowEl)
+    }
 }
 
 /* -------------------------------------------------------------------- */
@@ -922,6 +1217,12 @@ private fun buildSidebarFooter(): HTMLElement {
  * the toolkit chrome don't drop the visible state dot between the
  * rebuild and the next server push (Lunamux#24).
  *
+ * The snapshot is passed through [applySignalOverrides] so the manual 3D signal
+ * overrides (the `w` key) are reflected in construction-time dot seeds too, not
+ * just the live [updateStateIndicators] repaint — keeping every session indicator
+ * consistent with the 3D warp-core boxes and the 2D world-status footer even
+ * across chrome rebuilds that carry no state push.
+ *
  * Safe to call from any factory invoked after [bootViaToolkitShell]:
  * `lunamuxClient` is constructed in `main.kt` before `mountAppShell`,
  * so by the time the toolkit asks for a badge the runtime cache exists
@@ -929,7 +1230,7 @@ private fun buildSidebarFooter(): HTMLElement {
  * the correct pre-connection appearance).
  */
 private fun currentSessionStates(): Map<String, String?> =
-    lunamuxClient.windowState.states.value
+    applySignalOverrides(lunamuxClient.windowState.states.value)
 
 /**
  * Aggregates the per-pane states of a tab into a single tab-level
@@ -1055,6 +1356,22 @@ fun bootViaToolkitShell(root: HTMLElement) {
                 windowState = lunamuxClient.windowState,
                 socket = windowSocket,
             ),
+            // World switcher (globe, left of the tabs) fed from the server's
+            // worlds model. Switching worlds swaps the tab strip (the tab
+            // source above renders the active world) and repaints to that
+            // world's theme (see applyActiveWorldTheme on config push).
+            worldSource = lunamuxWorldSource(
+                scope = GlobalScope,
+                windowState = lunamuxClient.windowState,
+                socket = windowSocket,
+            ),
+            // Per-world pane layout: hand the toolkit each world's saved
+            // layout on demand (from the cached server UI-settings snapshot)
+            // so a world switch swaps a saved slice instead of pruning the
+            // previous world's geometry. Default world reads/writes the flat
+            // LAYOUT_STATE key (old-client + saved-data compat); see
+            // [worldLayoutBlob] / [WorldLayoutKeys].
+            worldLayoutProvider = { worldId -> worldLayoutBlob(worldId) },
             paneLabel = { _, paneId ->
                 (findLeafDynamic(paneId)?.title as? String) ?: paneId
             },
@@ -1207,7 +1524,19 @@ fun bootViaToolkitShell(root: HTMLElement) {
                 el is JsonObject -> el.toString()
                 else -> null
             } ?: return@collect
-            appShellHandle?.applyExternalLayoutState(json)
+            // `rawLayoutState` tracks the flat LAYOUT_STATE key, which now
+            // holds only the DEFAULT world's layout. Feeding it into the
+            // toolkit while a NON-default world is active would overwrite that
+            // world's geometry with the default world's — so only live-sync it
+            // when the default world is the active one. Non-default worlds pick
+            // up cross-client changes on the next switch via worldLayoutProvider
+            // (live non-default sync is a deliberate follow-up).
+            val cfg = latestWindowConfig
+            val activeIsDefault = cfg == null ||
+                cfg.worlds.isEmpty() ||
+                cfg.activeWorldId == null ||
+                cfg.activeWorldId == cfg.worlds.firstOrNull()?.id
+            if (activeIsDefault) appShellHandle?.applyExternalLayoutState(json)
         }
     }
 
@@ -1234,6 +1563,7 @@ fun bootViaToolkitShell(root: HTMLElement) {
     // [applyOverview3dChromeVisibility], and [prewarmOverview3d].
     registerOverview3dHotkey()
     registerWorld3dSpikeHotkey() // ⌥⌘← opens the world spike (mirror of ⌥⌘→)
+    registerWorldSwitchHotkey() // ⌥⌘O cycles to the next world in flat 2D mode
     applyOverview3dChromeVisibility()
     // Seed the topbar cube button's visibility from the experimental "3D world"
     // flag; the ⌥⌘← hotkey stays inert while off via the [toggleWorld3dSpike]

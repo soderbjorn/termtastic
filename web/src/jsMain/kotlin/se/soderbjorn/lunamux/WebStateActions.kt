@@ -84,11 +84,21 @@ internal fun shellQuote(p: String): String = "'" + p.replace("'", "'\\''") + "'"
  */
 internal fun savedFocusedPaneId(tabId: String): String? {
     val cfg = currentConfig ?: return null
-    val tabs = cfg.tabs as? Array<dynamic> ?: return null
-    for (tab in tabs) {
-        if ((tab.id as? String) == tabId) return tab.focusedPaneId as? String
+    fun scan(tabs: Array<dynamic>?): String? {
+        if (tabs == null) return null
+        for (tab in tabs) {
+            if ((tab.id as? String) == tabId) return tab.focusedPaneId as? String
+        }
+        return null
     }
-    return null
+    // Search every world's tabs (the active world may not be the default
+    // one mirrored at top level), then the legacy flat tabs.
+    (cfg.worlds as? Array<dynamic>)?.let { worlds ->
+        for (world in worlds) {
+            scan(world.tabs as? Array<dynamic>)?.let { return it }
+        }
+    }
+    return scan(cfg.tabs as? Array<dynamic>)
 }
 
 /**
@@ -114,7 +124,10 @@ internal fun savedFocusedPaneId(tabId: String): String? {
  */
 internal fun cwdForNewPaneIn(tabId: String): String? {
     val cfg = latestWindowConfig ?: return null
-    val tab = cfg.tabs.firstOrNull { it.id == tabId }
+    // Search across every world's tabs — the target tab may live in a
+    // non-default active world, not just the legacy flat mirror.
+    val allTabs = if (cfg.worlds.isNotEmpty()) cfg.worlds.flatMap { it.tabs } else cfg.tabs
+    val tab = allTabs.firstOrNull { it.id == tabId }
     if (tab != null) {
         tab.focusedPaneId
             ?.let { id -> tab.panes.firstOrNull { it.leaf.id == id }?.leaf?.cwd }
@@ -124,7 +137,7 @@ internal fun cwdForNewPaneIn(tabId: String): String? {
             .firstNotNullOfOrNull { it.leaf.cwd?.takeIf { c -> c.isNotBlank() } }
             ?.let { return it }
     }
-    return cfg.tabs.firstNotNullOfOrNull { t ->
+    return allTabs.firstNotNullOfOrNull { t ->
         t.panes.firstNotNullOfOrNull { it.leaf.cwd?.takeIf { c -> c.isNotBlank() } }
     }
 }
@@ -141,14 +154,23 @@ internal fun cwdForNewPaneIn(tabId: String): String? {
  */
 internal fun tabIdForPane(paneId: String): String? {
     val cfg = currentConfig ?: return null
-    val tabs = cfg.tabs as? Array<dynamic> ?: return null
-    for (tab in tabs) {
-        val panes = tab.panes as? Array<dynamic> ?: continue
-        for (p in panes) {
-            if ((p.leaf?.id as? String) == paneId) return tab.id as? String
+    fun scan(tabs: Array<dynamic>?): String? {
+        if (tabs == null) return null
+        for (tab in tabs) {
+            val panes = tab.panes as? Array<dynamic> ?: continue
+            for (p in panes) {
+                if ((p.leaf?.id as? String) == paneId) return tab.id as? String
+            }
+        }
+        return null
+    }
+    // Search every world's tabs, then the legacy flat mirror.
+    (cfg.worlds as? Array<dynamic>)?.let { worlds ->
+        for (world in worlds) {
+            scan(world.tabs as? Array<dynamic>)?.let { return it }
         }
     }
-    return null
+    return scan(cfg.tabs as? Array<dynamic>)
 }
 
 /**
@@ -281,7 +303,12 @@ internal fun focusFirstPaneInActiveTab(): Boolean {
  * tokens.
  */
 internal fun buildXtermTheme(): dynamic {
-    val theme = currentResolvedTheme()
+    // The world currently on screen: the active theme in 2D / the home 3D world, the other-world
+    // (destination) theme while a transit is previewing it — so the ring's terminal bodies
+    // re-theme to match the world's panes instead of staying the home theme. Identical to
+    // [currentResolvedTheme] whenever no world preview is active, so 2D is unaffected.
+    // @see currentWorldTheme
+    val theme = currentWorldTheme()
     // The terminal canvas sits on the pane surface (white on Lunamux Light),
     // one level above the `--t-bg` canvas — matching the pane chrome around it.
     val bg = argbToCss(theme.surface)
@@ -324,7 +351,9 @@ internal fun applyAppearanceClass() {
     kotlinx.browser.document.body?.classList?.remove("appearance-light", "appearance-dark", "dark-spiced")
     kotlinx.browser.document.body?.classList?.add(if (light) "appearance-light" else "appearance-dark")
 
-    val theme = state.resolvedTheme(isSystemDark())
+    // Resolve through the per-world override so switching worlds repaints to
+    // that world's theme pair (falls back to the global selection).
+    val theme = currentResolvedTheme()
     val root = kotlinx.browser.document.documentElement as? HTMLElement
     if (root != null) {
         applyTheme(root, theme, isDark)
@@ -468,19 +497,62 @@ private fun checkStateNotifications(sessionStates: Map<String, String?>) {
     previousSessionStates.putAll(effective)
 }
 
-/**
- * Shared breathing period, in milliseconds, for every status indicator.
- */
+/** Breathing period (ms) and midpoint floor for the per-pane / per-tab / logo dots. */
 private const val STATUS_PULSE_PERIOD_MS = 2500.0
+private const val STATUS_PULSE_FLOOR = 0.3
 
 /**
- * CSS selector matching every indicator that should breathe: the per-pane /
- * per-tab dots (`.tt-status-dot`) and the aggregate sidebar logo dot
- * (`.app-logo-dot`), in either the working or waiting state.
+ * Breathing period (ms) and midpoint floor for the sidebar world-status
+ * "N working" segment — a calm, shallow breathe (mirrors the former
+ * `world-status-breathe` keyframe). Exposed so `appendWorldStatusCounts` in
+ * `LunamuxToolkitBootstrap` seeds each fresh segment at the same curve.
  */
-private const val PULSE_SELECTOR =
-    ".tt-status-dot.state-working, .tt-status-dot.state-waiting, " +
-    ".app-logo-dot.state-working, .app-logo-dot.state-waiting"
+internal const val WORLD_WORKING_PULSE_PERIOD_MS = 2600.0
+internal const val WORLD_WORKING_PULSE_FLOOR = 0.55
+
+/**
+ * Breathing period (ms) and midpoint floor for the world-status "M waiting"
+ * segment — a slightly deeper, slower breathe (mirrors the former
+ * `world-status-breathe-strong` keyframe).
+ */
+internal const val WORLD_WAITING_PULSE_PERIOD_MS = 3000.0
+internal const val WORLD_WAITING_PULSE_FLOOR = 0.48
+
+/**
+ * One family of indicators that share a single breathing curve, all driven off
+ * the same global wall clock so recreating any member never restarts its cycle.
+ *
+ * @property selector CSS selector matching this family's elements.
+ * @property periodMs the breath period in milliseconds.
+ * @property floor    the dimmest opacity, reached at the cycle midpoint (the
+ *   cycle boundaries are always fully opaque at 1.0).
+ */
+private class PulseGroup(val selector: String, val periodMs: Double, val floor: Double)
+
+/**
+ * Every breathing indicator family, each with its own curve but all sampled from
+ * the one shared clock in [pulseTick]. Adding the world-status segments here (not
+ * a CSS `@keyframes` animation) is what keeps them steady across the frequent
+ * `innerHTML` rebuilds of the world-status block — see [pulseTick].
+ */
+private val PULSE_GROUPS: List<PulseGroup> = listOf(
+    // Per-pane / per-tab dots and the aggregate sidebar logo dot — a firm heartbeat.
+    PulseGroup(
+        ".tt-status-dot.state-working, .tt-status-dot.state-waiting, " +
+            ".app-logo-dot.state-working, .app-logo-dot.state-waiting",
+        STATUS_PULSE_PERIOD_MS, STATUS_PULSE_FLOOR,
+    ),
+    // World-status "N working" — shallow, so it reads as a soft heartbeat.
+    PulseGroup(
+        ".world-status-bar .world-status-working",
+        WORLD_WORKING_PULSE_PERIOD_MS, WORLD_WORKING_PULSE_FLOOR,
+    ),
+    // World-status "M waiting" — a touch deeper and slower, drawing more of the eye.
+    PulseGroup(
+        ".world-status-bar .world-status-waiting",
+        WORLD_WAITING_PULSE_PERIOD_MS, WORLD_WAITING_PULSE_FLOOR,
+    ),
+)
 
 /** Live `requestAnimationFrame` handle for the pulse driver, or 0 when stopped. */
 private var pulseRafHandle: Int = 0
@@ -493,46 +565,57 @@ private fun prefersReducedMotion(): Boolean =
     kotlinx.browser.window.matchMedia("(prefers-reduced-motion: reduce)").matches
 
 /**
- * The shared breathing opacity for the current instant, derived from one global
- * clock: 1.0 at the cycle boundaries, easing down to 0.3 at the midpoint and
- * back (a smoothstep approximation of the old `fade-warning` ease-in-out curve).
- * Because it is a pure function of the wall clock, every indicator painted from
- * it shows the SAME opacity regardless of when it was created.
+ * The breathing opacity for a given curve at the current instant, derived from
+ * one global clock: 1.0 at the cycle boundaries, easing down to [floor] at the
+ * midpoint and back (a smoothstep approximation of the old `fade-warning`
+ * ease-in-out curve). Because it is a pure function of the wall clock, every
+ * indicator painted from it shows the SAME opacity regardless of when it was
+ * created.
  *
- * @return an opacity in `[0.3, 1.0]`.
+ * @param periodMs the breath period in milliseconds.
+ * @param floor    the dimmest opacity, reached at the cycle midpoint.
+ * @return an opacity in `[floor, 1.0]`.
  */
-private fun currentPulseOpacity(): Double {
-    val phase = (kotlinx.browser.window.performance.now() % STATUS_PULSE_PERIOD_MS) / STATUS_PULSE_PERIOD_MS
+private fun currentPulseOpacity(periodMs: Double, floor: Double): Double {
+    val phase = (kotlinx.browser.window.performance.now() % periodMs) / periodMs
     val dip = kotlin.math.abs(2.0 * phase - 1.0)   // 1 at boundaries, 0 at midpoint
     val eased = dip * dip * (3.0 - 2.0 * dip)       // smoothstep ≈ ease-in-out
-    return 0.3 + 0.7 * eased
+    return floor + (1.0 - floor) * eased
 }
 
 /**
- * One frame of the global pulse driver: paints [currentPulseOpacity] onto every
- * working/waiting indicator, then reschedules itself. Stops (clearing
- * [pulseRafHandle]) once no indicator is pulsing, so an idle app burns no frames
- * — [ensurePulseRunning] restarts it the next time one enters working/waiting.
+ * One frame of the global pulse driver: for each [PulseGroup], paints that
+ * group's [currentPulseOpacity] onto its live members, then reschedules itself.
+ * Stops (clearing [pulseRafHandle]) once no group has any member, so an idle app
+ * burns no frames — [ensurePulseRunning] restarts it the next time an indicator
+ * enters working/waiting.
  *
- * Why a JS rAF loop rather than a CSS `@keyframes` animation: the toolkit
- * rebuilds the sidebar / tab-strip / pane-header chrome on config pushes, which
- * recreates these badge elements. A CSS animation on a freshly-created element
- * restarts from its first keyframe (`opacity: 1`), so every rebuild snapped the
- * dot to full brightness — and because rebuilds fire on the program-title
- * feature's ~750 ms config cadence while a task runs (Claude Code rewrites its
- * terminal title with a live task summary), the pulse looked erratic. Driving
- * opacity from one shared clock is immune to that: a recreated element simply
- * adopts the current global opacity on the next frame — no snap, all in sync.
+ * Why a JS rAF loop rather than a CSS `@keyframes` animation: the chrome that
+ * hosts these indicators is rebuilt on config pushes — the toolkit recreates the
+ * sidebar / tab-strip / pane-header badges, and [updateWorldStatusFooter] blows
+ * the whole world-status block away with `innerHTML = ""` on every state push. A
+ * CSS animation on a freshly-created element restarts from its first keyframe
+ * (`opacity: 1`), so every rebuild snapped the indicator to full brightness — and
+ * because rebuilds fire on the program-title feature's ~750 ms config cadence
+ * while a task runs (Claude Code rewrites its terminal title with a live task
+ * summary), the breathe looked erratic. Driving opacity from one shared clock is
+ * immune to that: a recreated element simply adopts the current global opacity on
+ * the next frame — no snap, all in sync.
  */
 private fun pulseTick() {
-    val dots = kotlinx.browser.document.querySelectorAll(PULSE_SELECTOR)
-    if (dots.length == 0) {
+    var anyLive = false
+    for (group in PULSE_GROUPS) {
+        val els = kotlinx.browser.document.querySelectorAll(group.selector)
+        if (els.length == 0) continue
+        anyLive = true
+        val opacity = currentPulseOpacity(group.periodMs, group.floor).toString()
+        for (i in 0 until els.length) {
+            (els.item(i) as? HTMLElement)?.style?.opacity = opacity
+        }
+    }
+    if (!anyLive) {
         pulseRafHandle = 0
         return
-    }
-    val opacity = currentPulseOpacity().toString()
-    for (i in 0 until dots.length) {
-        (dots.item(i) as? HTMLElement)?.style?.opacity = opacity
     }
     pulseRafHandle = kotlinx.browser.window.requestAnimationFrame { pulseTick() }
 }
@@ -552,18 +635,30 @@ internal fun ensurePulseRunning() {
 
 /**
  * Seeds a freshly-working/waiting indicator with the current breathing opacity
- * and ensures the driver is running, so the element is at the correct global
- * phase from its very first frame (no one-frame flash at full opacity) and then
- * tracks the shared clock. Under reduced motion, holds static full opacity.
+ * for its curve and ensures the driver is running, so the element is at the
+ * correct global phase from its very first frame (no one-frame flash at full
+ * opacity) and then tracks the shared clock. Under reduced motion, holds static
+ * full opacity.
  *
- * @param el the indicator that just entered the working/waiting state.
+ * The default curve is the dots' [STATUS_PULSE_PERIOD_MS]/[STATUS_PULSE_FLOOR];
+ * the world-status segment builders pass their own
+ * `WORLD_WORKING_*` / `WORLD_WAITING_*` curve so a fresh segment seeds to the
+ * matching phase, not the dots'.
+ *
+ * @param el       the indicator that just entered the working/waiting state.
+ * @param periodMs the breath period in milliseconds for this indicator's curve.
+ * @param floor    the dimmest opacity for this indicator's curve.
  */
-internal fun startPulse(el: HTMLElement) {
+internal fun startPulse(
+    el: HTMLElement,
+    periodMs: Double = STATUS_PULSE_PERIOD_MS,
+    floor: Double = STATUS_PULSE_FLOOR,
+) {
     if (prefersReducedMotion()) {
         el.style.opacity = "1"
         return
     }
-    el.style.opacity = currentPulseOpacity().toString()
+    el.style.opacity = currentPulseOpacity(periodMs, floor).toString()
     ensurePulseRunning()
 }
 
@@ -601,14 +696,85 @@ internal fun applyDotState(el: HTMLElement, state: String?) {
 }
 
 /**
+ * Folds the manual 3D signal overrides ([spikeWorkingOverride] /
+ * [spikeWaitingOverride], keyed by pane id and toggled by the 3D `w` key) into a
+ * session-keyed state map, so every session-level indicator — the global logo
+ * dot, the per-pane dots, and the per-tab aggregates — reflects the same preview
+ * the 3D warp-core boxes and the 2D world-status footer already show.
+ *
+ * The overrides are per-pane but these indicators are per-session, so a pane's
+ * override REPLACES its session's live state: for any session with at least one
+ * overriding pane the live base is dropped and only its overriding panes decide
+ * the state, aggregated waiting > working > cleared (matching the aggregate rule
+ * used everywhere else). Panes left on "auto" (no map entry) keep the live state.
+ * Sessions with no overriding pane are untouched.
+ *
+ * Returns [base] unchanged (no allocation) when no override is set — the common
+ * case — so the normal state path pays nothing.
+ *
+ * Also reused by `currentSessionStates` in `LunamuxToolkitBootstrap` so the
+ * construction-time dot seeds (on chrome rebuilds that carry no state push —
+ * theme / sidebar toggles, drag-end) reflect the same overrides as the live
+ * repaint path.
+ *
+ * @param base the raw server session-id → state map.
+ * @return the effective session-id → state map with overrides applied.
+ * @see updateStateIndicators
+ */
+internal fun applySignalOverrides(base: Map<String, String?>): Map<String, String?> {
+    if (spikeWorkingOverride.isEmpty() && spikeWaitingOverride.isEmpty()) return base
+    val cfg = latestWindowConfig ?: return base
+    // Per session: the forced state aggregated across its overriding panes. A key
+    // is present iff the session has at least one overriding pane (so its live
+    // base must be dropped); the value is the forced state (null = cleared/idle).
+    val forcedBySession = HashMap<String, String?>()
+    for (world in cfg.worlds) {
+        for (tab in world.tabs) {
+            for (pane in tab.panes) {
+                val paneId = pane.leaf.id
+                val hasWorking = spikeWorkingOverride.containsKey(paneId)
+                val hasWaiting = spikeWaitingOverride.containsKey(paneId)
+                if (!hasWorking && !hasWaiting) continue   // auto — keep live state
+                val sid = pane.leaf.sessionId
+                val forced = when {
+                    spikeWaitingOverride[paneId] == true -> "waiting"
+                    spikeWorkingOverride[paneId] == true -> "working"
+                    else -> null                            // clear — forced idle
+                }
+                val prev = forcedBySession[sid]
+                forcedBySession[sid] = when {
+                    forced == "waiting" || prev == "waiting" -> "waiting"
+                    forced == "working" || prev == "working" -> "working"
+                    else -> null
+                }
+            }
+        }
+    }
+    if (forcedBySession.isEmpty()) return base
+    val out = HashMap(base)
+    for ((sid, state) in forcedBySession) out[sid] = state
+    return out
+}
+
+/**
  * Updates all session state indicators across the sidebar, tab bar,
  * pane headers, and the lower-right app logo dot.
  */
 internal fun updateStateIndicators(sessionStates: Map<String, String?>) {
     val document = kotlinx.browser.document
+    // Fold the manual 3D signal overrides into the state map so every
+    // session-level indicator agrees with the 3D warp-core boxes and 2D footer.
+    // Desktop notifications intentionally stay on the RAW states below — an
+    // override is a visual preview, not a real agent event to notify about.
+    val effectiveStates = applySignalOverrides(sessionStates)
     checkStateNotifications(sessionStates)
-    updateAppLogoState(sessionStates)
-    val effective = HashMap(sessionStates)
+    updateAppLogoState(effectiveStates)
+    // Repaint the sidebar-footer world-status block from the same push. It reads
+    // the authoritative `windowState.states` itself (not `sessionStates`) and
+    // applies the overrides per-pane, so a config-only push — worlds added /
+    // renamed / re-themed — refreshes it too.
+    updateWorldStatusFooter()
+    val effective = HashMap(effectiveStates)
     for ((sessionId, state) in effective) {
         // Per-pane status dots — the leading bead on each sidebar row and the
         // pane-header dot. Both carry `.tt-status-dot[data-session]`.
@@ -619,7 +785,12 @@ internal fun updateStateIndicators(sessionStates: Map<String, String?>) {
         }
     }
     val cfg = appVm.stateFlow.value.config ?: return
-    for (tab in cfg.tabs) {
+    // Aggregate per-tab dots over the ACTIVE world's tabs (those are the ones
+    // in the strip with `data-tab-state`), not the legacy default-world mirror
+    // — otherwise a non-default active world's tab dots never update. Per-pane
+    // dots above are keyed by sessionId across all worlds and need no scoping.
+    val aggTabs = cfg.activeWorldOrNull()?.tabs ?: cfg.tabs
+    for (tab in aggTabs) {
         val tabId = tab.id
         val sids = mutableListOf<String>()
         for (p in tab.panes) sids.add(p.leaf.sessionId)

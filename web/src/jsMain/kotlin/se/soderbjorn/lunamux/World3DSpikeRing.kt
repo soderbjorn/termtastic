@@ -65,22 +65,29 @@ internal class SpikeChrome(
 )
 
 /**
- * Resolves the current [ResolvedTheme] into [SpikeChrome] CSS strings, falling
- * back to the old neutral slate if no theme is available.
+ * Resolves the **current world's** [ResolvedTheme] ([currentWorldTheme]) into [SpikeChrome]
+ * CSS strings, falling back to the old neutral slate if no theme is available.
  *
- * @return the pane-chrome colours for this open.
+ * Both worlds run through this one path with no per-world colour special-casing: the home
+ * world paints from the live active theme and the destination world from the theme pair of
+ * the world it is cycling to (previewed during the transit) — [currentWorldTheme] picks
+ * which, and the token reads below are identical either way. So the other world is a genuine
+ * second theme, not a blue theme with an amber accent painted over it.
+ *
+ * @return the pane-chrome colours for the world currently on screen.
+ * @see currentWorldTheme
  */
 internal fun spikeChrome(): SpikeChrome {
-    val t = runCatching { currentResolvedTheme() }.getOrNull()
-        ?: return SpikeChrome("#10161f", "#cdd9ec", "#7d90ad", "#0b0f14", "#26374e", "#4f8cf7")
-    return SpikeChrome(
-        titlebarBg = argbToCss(t.titlebar),
-        titleText = argbToCss(t.titleText),
-        titleDim = argbToCss(t.textDim),
-        surface = argbToCss(t.surface),
-        border = argbToCss(t.border),
-        accent = argbToCss(t.accent),
-    )
+    return runCatching { currentWorldTheme() }.getOrNull()?.let { t ->
+        SpikeChrome(
+            titlebarBg = argbToCss(t.titlebar),
+            titleText = argbToCss(t.titleText),
+            titleDim = argbToCss(t.textDim),
+            surface = argbToCss(t.surface),
+            border = argbToCss(t.border),
+            accent = argbToCss(t.accent),
+        )
+    } ?: SpikeChrome("#10161f", "#cdd9ec", "#7d90ad", "#0b0f14", "#26374e", "#4f8cf7")
 }
 
 /**
@@ -111,14 +118,34 @@ internal fun restyleWorldChrome() {
     val chrome = spikeChrome()
     spikeChromeColors = chrome
 
-    // Mirror panes carry fresh xterm instances that never enter the
-    // `terminals` registry, so [applyThemeToTerminals] can't reach them —
-    // re-theme them here. Real entries (p.entry != null) are already covered
-    // by the registry pass that ran just before this in [applyAll].
+    // The sky is theme-derived too (from the world theme's bg + a token-built lift), so a
+    // live theme change — or the world palette swap that routes through here — repaints
+    // it alongside the pane chrome, instead of the sky staying a hardcoded colour. @see applyWorldSky
+    applyWorldSky()
+
+    // Re-theme **every** ring pane's terminal body from the world's xterm theme (built from
+    // [currentWorldTheme]). Both kinds need it here: mirror instances (p.entry == null) never
+    // enter the `terminals` registry so [applyThemeToTerminals] can't reach them, and real
+    // entries — though the registry pass in [applyAll] themes them from the *active* theme —
+    // must be overridden to the world theme while a world preview is showing (that pass runs
+    // on 2D theme changes, not on the world palette swap that routes through here). So the
+    // pane bodies match their chrome instead of staying the home theme. Restored to the
+    // active theme on close. @see buildXtermTheme @see closeWorld3dSpike
     val xtermTheme = runCatching { buildXtermTheme() }.getOrNull()
     for (p in spikePanes) {
-        if (p.entry == null && xtermTheme != null) p.term?.options?.theme = xtermTheme
+        if (xtermTheme != null) p.term?.options?.theme = xtermTheme
         p.wrapper.style.background = chrome.surface
+        p.wrapper.style.setProperty("border-color", chrome.border)
+        // The 2D terminal *frame* — the `.terminal-inner` padding strip and the `.terminal-cell`
+        // inset — paints from the `--t-surface` / `--t-bg` CSS vars, which `:root` still stamps
+        // from the *active* theme. So while the world theme differs from the app appearance (most
+        // visibly the other world in light mode) that frame stays the light surface and reads as a
+        // pale border around the dark xterm. Override the vars on the reparented container so the
+        // frame inherits the world's surface via the cascade, matching the xterm body (whose bg is
+        // also `theme.surface`, see [buildXtermTheme]). The container's cssText is restored on
+        // close ([disposeRingPane]), which clears these automatically. @see buildXtermTheme
+        p.container.style.setProperty("--t-surface", chrome.surface)
+        p.container.style.setProperty("--t-bg", chrome.surface)
         val bar = p.wrapper.children.item(0) as? HTMLElement ?: continue
         bar.style.background = chrome.titlebarBg
         bar.style.setProperty("border-bottom", "1px solid ${chrome.accent}")
@@ -198,6 +225,13 @@ internal fun buildRingPane(spec: PaneSpec, n: Int, scene: Scene, chrome: SpikeCh
                 runCatching {
                     val view = when (spec.kind) {
                         PaneKind.GIT -> buildGitView(spec.paneId, leaf, null)
+                        PaneKind.WEB_BROWSER ->
+                            // A live <webview> only works in Electron; elsewhere
+                            // the ring shows the same link-button fallback the 2D
+                            // pane uses. buildWebBrowserView reuses the cached
+                            // cell if one already exists, so no extra reload.
+                            if (isElectronWebHost) buildWebBrowserView(spec.paneId, leaf)
+                            else buildWebBrowserLinkButton(spec.paneId, leaf.content?.url as? String)
                         else -> buildFileBrowserView(spec.paneId, leaf, null)
                     }
                     view.style.width = "100%"
@@ -281,10 +315,20 @@ internal fun buildRingPane(spec: PaneSpec, n: Int, scene: Scene, chrome: SpikeCh
         "box-shadow:0 0 42px rgba(0,0,0,0.55);"
 
     val bar = document.createElement("div") as HTMLElement
+    // The title strip is always clickable — clicking it fronts/engages this pane
+    // ([onPaneClicked]) even when the pane is a non-front ring slot whose
+    // wrapper the render loop has set to `pointer-events:none`. A descendant with
+    // an explicit `pointer-events:auto` still receives events through a `none`
+    // ancestor, exactly as the engaged front pane's body does.
     bar.style.cssText = "position:absolute;left:0;top:0;right:0;height:${TITLE_H}px;z-index:2;" +
         "display:flex;align-items:center;gap:8px;padding:0 10px;box-sizing:border-box;" +
         "background:${chrome.titlebarBg};border-bottom:1px solid ${chrome.accent};" +
-        "font:600 12px ui-monospace,Menlo,monospace;color:${chrome.titleText};white-space:nowrap;overflow:hidden;"
+        "font:600 12px ui-monospace,Menlo,monospace;color:${chrome.titleText};white-space:nowrap;overflow:hidden;" +
+        "pointer-events:auto;cursor:pointer;"
+    bar.addEventListener("click", { ev: org.w3c.dom.events.Event ->
+        ev.stopPropagation()
+        onPaneClicked(spec.paneId)
+    })
     val titleSpan = document.createElement("span") as HTMLElement
     titleSpan.textContent = spec.title
     titleSpan.style.cssText = "flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;"
@@ -305,10 +349,18 @@ internal fun buildRingPane(spec: PaneSpec, n: Int, scene: Scene, chrome: SpikeCh
 
     // Dim veil — opacity is driven continuously per frame by the render loop
     // (in lock-step with the pane swing), so no CSS transition: it would only
-    // add a fixed lag behind the motion-matched fade.
+    // add a fixed lag behind the motion-matched fade. It also doubles as the
+    // command-center **click-to-front catcher**: the render loop flips its
+    // pointer-events to `auto` over any non-interactive pane (so a click
+    // anywhere on the pane body fronts + engages it) and back to `none` over the
+    // engaged pane / in free flight (so content stays usable). @see onPaneClicked
     val dim = document.createElement("div") as HTMLElement
     dim.style.cssText = "position:absolute;inset:0;pointer-events:none;" +
-        "background:#04060a;opacity:0;"
+        "background:#04060a;opacity:0;cursor:pointer;"
+    dim.addEventListener("click", { ev: org.w3c.dom.events.Event ->
+        ev.stopPropagation()
+        onPaneClicked(spec.paneId)
+    })
     wrapper.appendChild(dim)
 
     // "Working" breath veil — above the dim so it reads over the darkening, below
@@ -328,7 +380,19 @@ internal fun buildRingPane(spec: PaneSpec, n: Int, scene: Scene, chrome: SpikeCh
     scene.add(obj)
 
     // Per-pane bulge filter (idle until a latch flex arms it in the render loop).
-    val (bulgeId, bulgeMap) = createBulgeFilter()
+    // A web-browser pane embeds a live `<webview>` guest, which Chromium
+    // composites as a separate plugin surface. Putting a CSS `filter` on any
+    // ancestor wrapper forces the guest to re-attach — which reloads the page
+    // and wipes all its state (scroll, form input, login). So web panes get no
+    // bulge filter: the empty [RingPane.bulgeFilterId] makes every
+    // `filter`-application site in the render loop skip them (their engage/
+    // disengage flex still plays via the CSS 3D scale/tilt, just without the
+    // fisheye warp). @see buildWebBrowserView @see startFlex
+    val (bulgeId, bulgeMap) = if (spec.kind == PaneKind.WEB_BROWSER) {
+        "" to null
+    } else {
+        createBulgeFilter()
+    }
 
     val baseFont = ((term?.options?.fontSize as? Number)?.toInt()) ?: 13
     spikePanes.add(
@@ -592,7 +656,10 @@ internal fun reconcileRing() {
  * A restored mounted terminal also **reasserts its 2D grid** ([forceReassert],
  * deferred one frame for real layout) when its automatic reflow is on — a 3D
  * reformat/grid step may have force-resized the shared PTY while the world was open,
- * and without this the pane stayed at that foreign size back in 2D.
+ * and without this the pane stayed at that foreign size back in 2D. That reclaim runs
+ * **only when actually leaving 3D** (`!spikeOpen`); on an in-3D world switch the
+ * departing pane's 2D container is detached/hidden, so fitting to it would corrupt the
+ * PTY (see the body comment).
  *
  * @param p the pane to dispose.
  * @see forceReassert
@@ -605,7 +672,8 @@ internal fun disposeRingPane(p: RingPane) {
             // **owned preview** has its view registration dropped (so incoming messages
             // stop rendering into detached DOM) and its host removed. The cached *state*
             // is kept either way, so the 2D pane repaints instantly if it later mounts.
-            p.kind == PaneKind.GIT || p.kind == PaneKind.FILE_BROWSER -> {
+            p.kind == PaneKind.GIT || p.kind == PaneKind.FILE_BROWSER ||
+                p.kind == PaneKind.WEB_BROWSER -> {
                 if (p.origParent != null) {
                     val container = p.container
                     container.style.cssText = container.getAttribute("data-spike-prevcss") ?: ""
@@ -613,9 +681,14 @@ internal fun disposeRingPane(p: RingPane) {
                     p.origParent?.insertBefore(container, p.origNext)
                 } else {
                     // Disconnect the view's resize observer before dropping it, so an
-                    // owned preview's observer doesn't outlive its removed DOM.
-                    if (p.kind == PaneKind.GIT) gitPaneViews.remove(p.paneId)?.resizeObserver?.disconnect()
-                    else fileBrowserPaneViews.remove(p.paneId)?.resizeObserver?.disconnect()
+                    // owned preview's observer doesn't outlive its removed DOM. The
+                    // webview cell has no observer — dropping it stops the guest page,
+                    // and the 2D pane rebuilds a fresh one if it remounts.
+                    when (p.kind) {
+                        PaneKind.GIT -> gitPaneViews.remove(p.paneId)?.resizeObserver?.disconnect()
+                        PaneKind.FILE_BROWSER -> fileBrowserPaneViews.remove(p.paneId)?.resizeObserver?.disconnect()
+                        else -> webBrowserPaneViews.remove(p.paneId)
+                    }
                     runCatching { p.container.remove() }
                 }
             }
@@ -633,7 +706,20 @@ internal fun disposeRingPane(p: RingPane) {
                 // a frame so the reinserted cell has real 2D layout to measure.
                 // Skipped for panes with automatic reflow off: the user froze that
                 // pane's size, so we leave the PTY exactly as the world left it.
-                if (entry.autoReflow) {
+                //
+                // ONLY when actually leaving 3D for good (`!spikeOpen`, which
+                // [closeWorld3dSpike] sets before its dispose loop). A dispose while the
+                // world is STILL open — the death-sweep that retires a departing world's
+                // panes on an in-3D world switch (⌥⌘O), or a single closed pane — must NOT
+                // reclaim: the pane's 2D container has just been reparented into an
+                // inactive/hidden world (offsetParent null), so `fitPreservingScroll`
+                // proposes a degenerate grid and the `ForceResize` corrupts the shared
+                // PTY to it. That is exactly the "many panes go blank on returning to a
+                // world, still blank in 2D, only cured by a 2D world switch (which refits
+                // for real)" bug. Staying in 3D there is safe: the socket persists with
+                // its vote, the ring re-presents the pane at its true grid on return, and
+                // the reclaim runs correctly at the eventual real close. @see forceReassert
+                if (entry.autoReflow && !spikeOpen) {
                     window.requestAnimationFrame {
                         runCatching { forceReassert(entry) }
                     }
@@ -650,6 +736,16 @@ internal fun disposeRingPane(p: RingPane) {
     runCatching { p.wrapper.remove() }
     // Drop any stash entry so the shelf never holds a disposed pane's id.
     spikeStashed.remove(p.paneId)
+    // The pane has left the ring (a world switch disposes the departing world's
+    // panes while the socket stays open — see WindowConnection's cross-world prune).
+    // Drop its per-mount "3D override already applied" mark so that if it re-mounts
+    // (returning to this world, or a 2D layout rebuild), [ensureGrid3dApplied] runs
+    // again and re-asserts its persisted [Pane.grid3d] override — without this the
+    // override silently stops taking effect after the first world round-trip. The
+    // pane's *native* baseline ([spikeNativeGridByPane]) and override mirror
+    // ([spikeGrid3dByPane]) are intentionally kept: native is the true 2D size
+    // captured at open, and the override is re-seeded from config anyway.
+    spikeGrid3dApplied.remove(p.paneId)
 }
 
 /** Removes an empty-tab card's plane from the scene and DOM (death-sweep / close). */

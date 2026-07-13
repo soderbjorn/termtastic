@@ -46,6 +46,7 @@ import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.Color
 import se.soderbjorn.lunamux.android.data.AppLocalRepository
 import se.soderbjorn.lunamux.android.net.ConnectionHolder
 import se.soderbjorn.lunamux.android.LunamuxDarkColorScheme
@@ -53,6 +54,7 @@ import se.soderbjorn.lunamux.android.LunamuxLightColorScheme
 import se.soderbjorn.lunamux.client.viewmodel.ThemeBackingViewModel
 import se.soderbjorn.darkness.core.Appearance
 import se.soderbjorn.darkness.core.ThemeSnapshotV2
+import se.soderbjorn.lunamux.WindowConfig
 
 /**
  * Top-level navigation host for the Lunamux Android app.
@@ -129,6 +131,10 @@ fun LunamuxApp(applicationContext: Context) {
     // light/dark variant.
     var themeVm by remember { mutableStateOf<ThemeBackingViewModel?>(null) }
     var themeSnapshot by remember { mutableStateOf<ThemeSnapshotV2?>(null) }
+    // The active world's theme pair overlays the global snapshot below. Held
+    // separately (rather than folded into `themeSnapshot`) so world switches
+    // never touch the canonical/global selection the picker edits and persists.
+    var worldConfig by remember { mutableStateOf<WindowConfig?>(null) }
     // Incremented on each successful connection to trigger a theme (re)load.
     var connectionGeneration by remember { mutableStateOf(0) }
 
@@ -143,9 +149,20 @@ fun LunamuxApp(applicationContext: Context) {
         }
     }
 
+    // Track the server config so the active world's theme pair can repaint the
+    // whole app when the user switches worlds. Runs for the lifetime of the
+    // connection alongside the theme collector above.
+    LaunchedEffect(connectionGeneration) {
+        if (connectionGeneration > 0) {
+            ConnectionHolder.client()?.windowState?.config?.collect { worldConfig = it }
+        }
+    }
+
     // Resolve the active slot for the current system appearance. Re-runs when
-    // either the snapshot or the system dark-mode flag changes, so the provided
-    // ResolvedTheme always reflects the correct light/dark theme slot.
+    // the snapshot, the active world's theme pair, or the system dark-mode flag
+    // changes, so the provided ResolvedTheme always reflects the correct
+    // light/dark theme slot — overlaid with the active world's pair when one
+    // exists (a purely client-side, non-persisted override).
     //
     // The hosts list is the NavHost start destination, so it renders before any
     // server connection exists and themeSnapshot is still null. Fall back to the
@@ -155,8 +172,11 @@ fun LunamuxApp(applicationContext: Context) {
     // let Material's green `secondary` leak through) instead of the on-brand navy
     // surface + cyan accent. This mirrors the onboarding path above.
     val systemIsDark = isSystemInDarkTheme()
-    val theme = remember(themeSnapshot, systemIsDark) {
-        (themeSnapshot ?: ThemeSnapshotV2()).resolve(systemIsDark)
+    val effectiveSnapshot = remember(themeSnapshot, worldConfig) {
+        (themeSnapshot ?: ThemeSnapshotV2()).withActiveWorldTheme(worldConfig)
+    }
+    val theme = remember(effectiveSnapshot, systemIsDark) {
+        effectiveSnapshot.resolve(systemIsDark)
     }
 
     // Drive the Material colour scheme from the *chosen* appearance (resolved
@@ -164,7 +184,8 @@ fun LunamuxApp(applicationContext: Context) {
     // (bottom sheets, dialogs, chips) flips light/dark together with the themed
     // surfaces. Without this the app looks half-switched when the user forces an
     // appearance that differs from the device's. Falls back to the OS flag until
-    // the snapshot has loaded.
+    // the snapshot has loaded. Appearance is GLOBAL (never per-world), so it
+    // reads from the canonical snapshot rather than the world-overlaid one.
     val effectiveDark = when (themeSnapshot?.appearance) {
         Appearance.Dark -> true
         Appearance.Light -> false
@@ -189,8 +210,27 @@ fun LunamuxApp(applicationContext: Context) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // Overlay the Material colour scheme's surface-family + on-surface slots
+    // with the *resolved theme*, so popup chrome that reads those slots —
+    // dropdown/overflow/context menus, the world switcher menu — matches the
+    // user's selected theme instead of always painting the fixed brand navy.
+    // Only these slots are overridden; the rest of the brand scheme (primary,
+    // error, etc.) is preserved. `surfaceContainer*` is what Material 3 uses for
+    // a menu's background; `surface`/`onSurface`/`onSurfaceVariant` cover older
+    // paths and the item text/icon colours.
+    val baseScheme = if (effectiveDark) LunamuxDarkColorScheme else LunamuxLightColorScheme
+    val colorScheme = remember(baseScheme, theme) {
+        baseScheme.copy(
+            surface = Color(theme.surface.toInt()),
+            surfaceContainer = Color(theme.surfaceAlt.toInt()),
+            surfaceContainerHigh = Color(theme.surfaceAlt.toInt()),
+            surfaceContainerHighest = Color(theme.surfaceAlt.toInt()),
+            onSurface = Color(theme.text.toInt()),
+            onSurfaceVariant = Color(theme.textDim.toInt()),
+        )
+    }
     MaterialTheme(
-        colorScheme = if (effectiveDark) LunamuxDarkColorScheme else LunamuxLightColorScheme,
+        colorScheme = colorScheme,
     ) {
       CompositionLocalProvider(LocalUiSettings provides theme) {
         NavHost(
@@ -246,6 +286,7 @@ fun LunamuxApp(applicationContext: Context) {
                     onDisconnect = {
                         themeVm = null
                         themeSnapshot = null
+                        worldConfig = null
                         navController.popBackStack("hosts", inclusive = false)
                     },
                     onOpenNews = { navController.navigate("news") },

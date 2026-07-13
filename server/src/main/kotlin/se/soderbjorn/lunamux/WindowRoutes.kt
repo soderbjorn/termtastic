@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
+import se.soderbjorn.darkness.core.PersistKeys
 import se.soderbjorn.lunamux.auth.DeviceAuth
 import se.soderbjorn.lunamux.persistence.SettingsRepository
 import se.soderbjorn.lunamux.ui.SettingsDialog
@@ -136,11 +137,117 @@ internal fun clientSupportsAgentPanes(version: String?): Boolean {
  *   with them filtered out of every tab.
  * @see clientSupportsAgentPanes
  */
-private fun WindowConfig.withoutAgentPanes(): WindowConfig =
-    copy(tabs = tabs.map { tab ->
+private fun WindowConfig.withoutAgentPanes(): WindowConfig {
+    fun strip(tabs: List<TabConfig>): List<TabConfig> = tabs.map { tab ->
         val kept = tab.panes.filterNot { it.leaf.content is AgentContent }
         if (kept.size == tab.panes.size) tab else tab.copy(panes = kept)
-    })
+    }
+    return copy(
+        tabs = strip(tabs),
+        worlds = worlds.map { it.copy(tabs = strip(it.tabs)) },
+    )
+}
+
+/**
+ * Lowest client app version that understands the `webBrowser` [LeafContent]
+ * kind. Clients below this would drop the whole config frame on the unknown
+ * `"kind"`, so web-browser panes are filtered out of configs sent to them —
+ * exactly like agent panes below [MIN_AGENT_PANE_VERSION]. Gated at the same
+ * 1.9 boundary as [MIN_WORLD_VERSION].
+ */
+private val MIN_WEB_BROWSER_VERSION = intArrayOf(1, 9, 0)
+
+/**
+ * Whether a client reporting [version] can render web-browser panes (≥ 1.9). A
+ * `null`/blank/unparseable version is treated as *incapable*, mirroring
+ * [clientSupportsAgentPanes] / [clientSupportsWorlds].
+ *
+ * @param version the self-reported client version, or `null`.
+ * @return `true` if [version] parses to at least [MIN_WEB_BROWSER_VERSION].
+ */
+internal fun clientSupportsWebBrowser(version: String?): Boolean {
+    if (version.isNullOrBlank()) return false
+    val parts = version.trim().split('.', '-', '+')
+    fun component(i: Int): Int =
+        parts.getOrNull(i)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: 0
+    for (i in MIN_WEB_BROWSER_VERSION.indices) {
+        val c = component(i)
+        if (c != MIN_WEB_BROWSER_VERSION[i]) return c > MIN_WEB_BROWSER_VERSION[i]
+    }
+    return true // exactly equal → supported
+}
+
+/**
+ * Return a copy of this config with every web-browser pane removed, for clients
+ * too old to deserialize the `webBrowser` [LeafContent] kind. Removal is a clean
+ * per-tab filter across the top-level tabs and every world — mirrors
+ * [withoutAgentPanes]. A web pane is Electron-only chrome anyway, so an old
+ * client simply never sees it.
+ *
+ * @return the config unchanged when it holds no web panes; otherwise a copy with
+ *   them filtered out of every tab.
+ * @see clientSupportsWebBrowser
+ */
+private fun WindowConfig.withoutWebBrowserPanes(): WindowConfig {
+    fun strip(tabs: List<TabConfig>): List<TabConfig> = tabs.map { tab ->
+        val kept = tab.panes.filterNot { it.leaf.content is WebBrowserContent }
+        if (kept.size == tab.panes.size) tab else tab.copy(panes = kept)
+    }
+    return copy(
+        tabs = strip(tabs),
+        worlds = worlds.map { it.copy(tabs = strip(it.tabs)) },
+    )
+}
+
+/**
+ * Lowest client app version that understands the `worlds` container. Clients
+ * at or above this read [WindowConfig.worlds]; older clients never see the
+ * field name and would drop the whole frame on the unknown structure, so
+ * configs sent to them are flattened to just the default world's tabs.
+ * Mirrors [MIN_AGENT_PANE_VERSION] exactly (the working precedent).
+ */
+private val MIN_WORLD_VERSION = intArrayOf(1, 9, 0)
+
+/**
+ * Whether a client reporting [version] is world-aware (≥ 1.9). A
+ * `null`/blank/unparseable version is treated as *incapable* — the absence
+ * of a version is itself the "old client" signal, exactly as with
+ * [clientSupportsAgentPanes].
+ *
+ * @param version the self-reported client version, or `null`.
+ * @return `true` if [version] parses to at least [MIN_WORLD_VERSION].
+ */
+internal fun clientSupportsWorlds(version: String?): Boolean {
+    if (version.isNullOrBlank()) return false
+    val parts = version.trim().split('.', '-', '+')
+    fun component(i: Int): Int =
+        parts.getOrNull(i)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: 0
+    for (i in MIN_WORLD_VERSION.indices) {
+        val c = component(i)
+        if (c != MIN_WORLD_VERSION[i]) return c > MIN_WORLD_VERSION[i]
+    }
+    return true // exactly equal → supported
+}
+
+/**
+ * Flatten a world-aware config to the pre-1.9 shape: expose only the
+ * **default** (first) world's tabs at top level and drop the `worlds`
+ * array entirely, so an old ("world-unaware") client sees exactly what it
+ * saw before worlds existed — the default world, and only the default
+ * world. Applied per-connection right before send, mirroring
+ * [withoutAgentPanes].
+ *
+ * @return the flattened config for an old client.
+ */
+internal fun WindowConfig.flattenToFirstWorld(): WindowConfig {
+    val first = worlds.firstOrNull()
+    return copy(
+        tabs = first?.tabs ?: tabs,
+        activeTabId = first?.activeTabId ?: activeTabId,
+        worlds = emptyList(),
+        activeWorldId = null,
+    )
+}
 
 /**
  * Per-`/window`-connection state passed into [handleWindowCommand]. Holds
@@ -153,6 +260,13 @@ internal class WindowConnectionContext(
     val scope: kotlinx.coroutines.CoroutineScope,
     val settingsRepo: SettingsRepository,
     val usageMonitor: ClaudeUsageMonitor,
+    /**
+     * Whether the connected client is world-aware (≥1.9). Gates world
+     * lifecycle commands (old clients never send them) and steers a bare
+     * [WindowCommand.AddTab] into the right world: new clients add to the
+     * active world; old clients always add to the default (first) world.
+     */
+    val supportsWorlds: Boolean = false,
 ) {
     private val gitWatchers = ConcurrentHashMap<String, GitWatchHandle>()
 
@@ -194,6 +308,14 @@ internal fun Route.uiSettingsRoutes(settingsRepo: SettingsRepository) {
             DeviceAuth.Decision.APPROVED -> {
                 val incoming = call.receive<JsonObject>()
                 settingsRepo.mergeUiSettings(incoming)
+                // An old client writing the global theme selection is
+                // interpreted as "set the default world's theme pair" so
+                // new clients viewing the default world repaint too (B6).
+                if (incoming.containsKey(PersistKeys.THEME_V2_SELECTION)) {
+                    settingsRepo.themePairFromSelection(incoming[PersistKeys.THEME_V2_SELECTION])?.let { pair ->
+                        WindowState.defaultWorldId()?.let { WindowState.setWorldTheme(it, pair) }
+                    }
+                }
                 call.respond(HttpStatusCode.NoContent)
             }
             DeviceAuth.Decision.REJECTED,
@@ -242,10 +364,22 @@ internal fun Route.windowRoutes(
         // and would drop the whole config frame on encountering one. Gate agent
         // panes and agent notifications on the self-reported client version.
         val supportsAgentPanes = clientSupportsAgentPanes(info.version)
+        // Worlds (≥1.9): old clients get the default world flattened to the
+        // legacy top-level tabs with no `worlds` array — pinned to the
+        // default world in both directions (their commands resolve against
+        // it too; see handleWindowCommand). New clients get the full worlds.
+        val supportsWorlds = clientSupportsWorlds(info.version)
+        // Web-browser panes (≥1.9): old clients can't deserialize the
+        // `webBrowser` pane kind and would drop the whole config frame, so
+        // strip them per-connection, exactly like agent panes.
+        val supportsWebBrowser = clientSupportsWebBrowser(info.version)
 
         val pushJob = launch {
             WindowState.config.collect { cfg ->
-                val outbound = if (supportsAgentPanes) cfg else cfg.withoutAgentPanes()
+                val outbound = cfg
+                    .let { if (supportsWorlds) it else it.flattenToFirstWorld() }
+                    .let { if (supportsAgentPanes) it else it.withoutAgentPanes() }
+                    .let { if (supportsWebBrowser) it else it.withoutWebBrowserPanes() }
                 val payload = windowJson.encodeToString<WindowEnvelope>(WindowEnvelope.Config(outbound))
                 send(Frame.Text(payload))
             }
@@ -291,6 +425,7 @@ internal fun Route.windowRoutes(
             scope = this,
             settingsRepo = settingsRepo,
             usageMonitor = usageMonitor,
+            supportsWorlds = supportsWorlds,
         )
 
         try {
@@ -545,6 +680,15 @@ internal suspend fun handleWindowCommand(text: String, ctx: WindowConnectionCont
                 ctx.send(buildGitListEnvelope(newLeaf.id, newLeaf.cwd))
             }
         }
+        is WindowCommand.AddWebBrowserToTab -> {
+            // Web panes stream no data: creating the leaf is enough. The
+            // updated WindowConfig broadcast tells the client to mount the
+            // webview (Electron) or the link button (web/mobile).
+            WindowState.addWebBrowserToTab(cmd.tabId, initialUrl = cmd.url)
+        }
+        is WindowCommand.WebBrowserSetUrl -> {
+            WindowState.setWebBrowserUrl(cmd.paneId, cmd.url, cmd.title)
+        }
         is WindowCommand.Close -> {
             ctx.cancelGitWatcher(cmd.paneId)
             WindowState.closePane(cmd.paneId)
@@ -553,12 +697,54 @@ internal suspend fun handleWindowCommand(text: String, ctx: WindowConnectionCont
             WindowState.closeSession(cmd.sessionId)
         }
         is WindowCommand.Rename -> WindowState.renamePane(cmd.paneId, cmd.title)
-        is WindowCommand.AddTab -> WindowState.addTab()
+        is WindowCommand.AddTab -> {
+            // New clients add to the active world; old clients are pinned to
+            // the default world so their new tab never lands in a world they
+            // can't see.
+            val worldId = if (ctx.supportsWorlds) WindowState.activeWorldId() else WindowState.defaultWorldId()
+            WindowState.addTab(worldId = worldId)
+        }
         is WindowCommand.CloseTab -> WindowState.closeTab(cmd.tabId)
         is WindowCommand.RenameTab -> WindowState.renameTab(cmd.tabId, cmd.title)
         is WindowCommand.MoveTab -> WindowState.moveTab(cmd.tabId, cmd.targetTabId, cmd.before)
         is WindowCommand.SetTabHidden -> WindowState.setTabHidden(cmd.tabId, cmd.hidden)
         is WindowCommand.SetTabHiddenFromSidebar -> WindowState.setTabHiddenFromSidebar(cmd.tabId, cmd.hidden)
+        is WindowCommand.AddWorld -> {
+            // World lifecycle is world-aware-only; ignore from old clients
+            // (they never send these, but guard defensively).
+            if (!ctx.supportsWorlds) return
+            // Seed the new world's theme pair from the default world's pair,
+            // falling back to the current global selection.
+            val seed = WindowState.defaultWorldTheme() ?: ctx.settingsRepo.currentThemePair()
+            WindowState.addWorld(cmd.name, seed)
+        }
+        is WindowCommand.RenameWorld -> {
+            if (!ctx.supportsWorlds) return
+            WindowState.renameWorld(cmd.worldId, cmd.name)
+        }
+        is WindowCommand.SetActiveWorld -> {
+            if (!ctx.supportsWorlds) return
+            WindowState.setActiveWorld(cmd.worldId)
+        }
+        is WindowCommand.SetWorldTheme -> {
+            if (!ctx.supportsWorlds) return
+            WindowState.setWorldTheme(cmd.worldId, cmd.selection)
+            // If the target is the default world, mirror its pair into the
+            // legacy global THEME_V2_SELECTION so pre-1.9 clients follow it
+            // (they only ever see the default world). Non-default worlds
+            // never touch the legacy key (B6 invariant).
+            if (cmd.worldId == WindowState.defaultWorldId()) {
+                ctx.settingsRepo.mirrorDefaultWorldThemePair(cmd.selection)
+            }
+        }
+        is WindowCommand.CloseWorld -> {
+            if (!ctx.supportsWorlds) return
+            WindowState.closeWorld(cmd.worldId)
+        }
+        is WindowCommand.MoveTabToWorld -> {
+            if (!ctx.supportsWorlds) return
+            WindowState.moveTabToWorld(cmd.tabId, cmd.worldId)
+        }
         is WindowCommand.AddPaneToTab -> {
             WindowState.addPaneToTab(cmd.tabId, initialCwd = cmd.cwd)
         }
@@ -572,6 +758,7 @@ internal suspend fun handleWindowCommand(text: String, ctx: WindowConnectionCont
         is WindowCommand.SetPaneGeom ->
             WindowState.setPaneGeometry(cmd.paneId, cmd.x, cmd.y, cmd.width, cmd.height)
         is WindowCommand.SetPaneZoom -> WindowState.setPaneZoom(cmd.paneId, cmd.zoom)
+        is WindowCommand.SetPaneGrid3d -> WindowState.setPaneGrid3d(cmd.paneId, cmd.cols, cmd.rows)
         is WindowCommand.RaisePane -> WindowState.raisePane(cmd.paneId)
         is WindowCommand.ToggleMaximized -> WindowState.toggleMaximized(cmd.paneId)
         is WindowCommand.ApplyLayout ->

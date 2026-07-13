@@ -30,6 +30,37 @@ import Client
 /// `ExternalLinksKt` accessor, so every platform points at one canonical
 /// source and no URL is hardcoded here.
 struct AboutMenu: View {
+    var body: some View {
+        Menu {
+            AboutMenuItems()
+        } label: {
+            Image(systemName: "info.circle")
+                // Same tint as every other bar action — mixed per-icon tints
+                // read as a bug on light themes (issue #96).
+                .foregroundStyle(Palette.textPrimary)
+        }
+        .accessibilityLabel("About & links")
+    }
+}
+
+/// The app's external-link rows (support forum, website, GitHub, App Store, and
+/// the legal pages) as bare menu content.
+///
+/// Factored out of `AboutMenu` so the same links can be embedded inside a *host*
+/// menu without duplication — the Sessions (`TreeView`) toolbar folds these
+/// links into its combined overflow ("ellipsis") menu rather than exposing a
+/// separate info button, while `AboutMenu` still wraps them in a standalone
+/// info-button-plus-menu for the Hosts (`HostsView`) toolbar. Keeping the rows
+/// in one view means the two entry points can never drift on which links they
+/// offer. Must be placed inside a `Menu` (or another menu content builder).
+///
+/// The URLs are read from the shared Kotlin `LUNAMUX_*_URL` constants (in
+/// `client`'s `ExternalLinks.kt`) via the generated `ExternalLinksKt` accessor,
+/// so every platform points at one canonical source and no URL is hardcoded.
+///
+/// - SeeAlso: `AboutMenu`
+/// - SeeAlso: `TreeView`
+struct AboutMenuItems: View {
     /// GitHub Discussions board used as the community support forum. Read from
     /// the shared Kotlin `LUNAMUX_DISCUSSIONS_URL` constant.
     private let discussionsURL = URL(string: ExternalLinksKt.LUNAMUX_DISCUSSIONS_URL)!
@@ -55,34 +86,26 @@ struct AboutMenu: View {
     private let termsURL = URL(string: ExternalLinksKt.LUNAMUX_TERMS_URL)!
 
     var body: some View {
-        Menu {
-            Link(destination: discussionsURL) {
-                Label("Support Forum", systemImage: "questionmark.circle")
-            }
-            Link(destination: siteURL) {
-                Label("Website", systemImage: "globe")
-            }
-            Link(destination: gitHubURL) {
-                Label("Star on GitHub", systemImage: "star")
-            }
-            Link(destination: appStoreURL) {
-                Label("Rate on the App Store", systemImage: "hand.thumbsup")
-            }
-            // Separate the actionable/engagement links above from the legal
-            // boilerplate below.
-            Divider()
-            Link(destination: privacyURL) {
-                Label("Privacy Policy", systemImage: "lock")
-            }
-            Link(destination: termsURL) {
-                Label("Terms", systemImage: "doc.text")
-            }
-        } label: {
-            Image(systemName: "info.circle")
-                // Same tint as every other bar action — mixed per-icon tints
-                // read as a bug on light themes (issue #96).
-                .foregroundStyle(Palette.textPrimary)
+        Link(destination: discussionsURL) {
+            Label("Support Forum", systemImage: "questionmark.circle")
         }
-        .accessibilityLabel("About & links")
+        Link(destination: siteURL) {
+            Label("Website", systemImage: "globe")
+        }
+        Link(destination: gitHubURL) {
+            Label("Star on GitHub", systemImage: "star")
+        }
+        Link(destination: appStoreURL) {
+            Label("Rate on the App Store", systemImage: "hand.thumbsup")
+        }
+        // Separate the actionable/engagement links above from the legal
+        // boilerplate below.
+        Divider()
+        Link(destination: privacyURL) {
+            Label("Privacy Policy", systemImage: "lock")
+        }
+        Link(destination: termsURL) {
+            Label("Terms", systemImage: "doc.text")
+        }
     }
 }

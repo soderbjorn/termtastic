@@ -59,6 +59,14 @@ struct TreeView: View {
     @State private var renameText = ""
     @State private var closeTarget: CloseTarget?
 
+    // World switcher flow state (globe menu). New/rename reuse the New-Tab
+    // `.alert`-with-`TextField` pattern; close shows a confirmation dialog.
+    @State private var showWorldNameAlert = false
+    @State private var worldName = ""
+    @State private var renameWorldTarget: WorldMenuItem?
+    @State private var renameWorldText = ""
+    @State private var closeWorldTarget: WorldMenuItem?
+
     /// List vs. graphical overview, toggled from the toolbar (issue #44).
     ///
     /// Seeded from (and written back to) the process-wide shared
@@ -109,6 +117,12 @@ struct TreeView: View {
                 Palette.backgroundIsDark(systemIsDark: colorScheme == .dark) ? .dark : .light,
                 for: .navigationBar
             )
+            // Colour the large "Sessions" title from the theme. `.toolbarColorScheme`
+            // above only recolours the *collapsed* title; the expanded large title
+            // otherwise falls back to the system label colour and reads near-white
+            // on a light theme in device dark mode (issue #49). Keyed on the theme
+            // generation so an in-app theme switch re-stamps the colour.
+            .themedNavigationBar(generation: themeStore.generation)
             .toolbar { toolbarItems }
             .navigationBarBackButtonHidden(true)
             .onAppear { viewModel.subscribe() }
@@ -119,6 +133,14 @@ struct TreeView: View {
                 renameTarget: $renameTarget,
                 renameText: $renameText,
                 closeTarget: $closeTarget
+            ))
+            .modifier(WorldDialogsModifier(
+                viewModel: viewModel,
+                showWorldNameAlert: $showWorldNameAlert,
+                worldName: $worldName,
+                renameWorldTarget: $renameWorldTarget,
+                renameWorldText: $renameWorldText,
+                closeWorldTarget: $closeWorldTarget
             ))
             .sheet(isPresented: $showLayoutSheet) {
                 LayoutSheet(
@@ -170,6 +192,18 @@ struct TreeView: View {
                 .foregroundStyle(Palette.textPrimary)
             }
         }
+        // World switcher (globe). Only shown on world-aware (>=1.9) servers —
+        // `viewModel.worlds` is empty on legacy servers, where the app falls
+        // back to the single top-level tab list and a switcher would be
+        // meaningless. Lists every world with a checkmark on the active one,
+        // then New / Rename / Close actions. Mirrors the desktop/web world
+        // switcher; placed first in the trailing cluster so worlds — the
+        // outermost workspace concept — read before the per-tab "+".
+        if !viewModel.worlds.isEmpty {
+            ToolbarItem(placement: .topBarTrailing) {
+                worldSwitcherMenu
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             // Combined "+" menu: always offers "New Tab"; in overview mode it
             // also offers adding a pane to the current tab (issue #58).
@@ -184,6 +218,9 @@ struct TreeView: View {
                     Label("New Tab", systemImage: "plus.rectangle.on.rectangle.angled")
                 }
                 if viewMode == .overview {
+                    // Divider under "New Tab" separating it from the pane
+                    // creators (mirrors the Android create sheet).
+                    Divider()
                     Button {
                         addOverviewPane("terminal")
                     } label: {
@@ -198,6 +235,20 @@ struct TreeView: View {
                         addOverviewPane("git")
                     } label: {
                         Label("New Git", systemImage: "arrow.triangle.branch")
+                    }
+                }
+                // "New Workspace" moved here from the world switcher so the "+"
+                // is the single "create a new thing" affordance. Only on
+                // world-aware (>=1.9) servers, where `worlds` is non-empty. The
+                // divider gives the one separator above "New Workspace" (and,
+                // in list mode, directly under "New Tab").
+                if !viewModel.worlds.isEmpty {
+                    Divider()
+                    Button {
+                        worldName = ""
+                        showWorldNameAlert = true
+                    } label: {
+                        Label("New Workspace\u{2026}", systemImage: "globe")
                     }
                 }
             } label: {
@@ -221,12 +272,28 @@ struct TreeView: View {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            // List ⇄ overview toggle (issue #44). The icon shows the layout the
-            // tap switches *to* — a grid while listing, a list while in the
-            // overview. The glyph swap alone signals the mode; no accent tint
-            // on the active state, so the bar keeps a single icon colour
-            // (issue #96). Mirrors the Android `TreeScreen` view-mode
-            // IconButton.
+            NewsBellButton(action: onOpenNews)
+        }
+        // Overflow ("ellipsis") menu. The secondary bar actions — the
+        // list/overview toggle, the appearance & theme picker, and the
+        // about/links — are collected here behind a single control so the
+        // compact toolbar isn't overcrowded. Mirrors the Android `TreeScreen`
+        // overflow (creation lives on the "+" instead).
+        // (world switcher menu content lives in `worldSwitcherMenu` below.)
+        ToolbarItem(placement: .topBarTrailing) {
+            overflowMenu
+        }
+    }
+
+    /// The trailing overflow ("ellipsis") menu holding the secondary toolbar
+    /// actions: the list ⇄ overview toggle, the appearance & theme picker, and
+    /// the shared about/links (`AboutMenuItems`). Extracted from `toolbarItems`
+    /// so each expression stays small enough for SwiftUI's type checker, and to
+    /// mirror the Android `TreeScreen` overflow menu.
+    private var overflowMenu: some View {
+        Menu {
+            // List ⇄ overview toggle (issue #44). Label + glyph both name the
+            // mode the tap switches *to*.
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     viewMode = (viewMode == .list) ? .overview : .list
@@ -235,34 +302,81 @@ struct TreeView: View {
                 // returning to this screen (issue #54).
                 Client.SessionsViewModeStore.shared.overviewMode = (viewMode == .overview)
             } label: {
-                Image(systemName: viewMode == .list ? "square.grid.2x2" : "list.bullet")
-                    .foregroundStyle(Palette.textPrimary)
+                Label(
+                    viewMode == .list ? "Switch to Overview" : "Switch to List",
+                    systemImage: viewMode == .list ? "square.grid.2x2" : "list.bullet"
+                )
             }
-            .accessibilityLabel(viewMode == .list ? "Switch to overview" : "Switch to list")
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            // Appearance + theme picker (parity with the Mac/Electron app's
-            // appearance toggle + theme manager). Available in both list and
-            // overview modes; writes the same canonical server selection the
-            // desktop does, so the choice syncs across every client. Mirrors the
-            // Android `TreeScreen` appearance button.
+            // Appearance + theme picker (parity with the Mac/Electron app).
             Button {
                 showAppearanceSheet = true
             } label: {
-                Image(systemName: "paintpalette")
-                    .foregroundStyle(Palette.textPrimary)
+                Label("Appearance & Theme", systemImage: "paintpalette")
             }
-            .accessibilityLabel("Appearance & theme")
+            Divider()
+            // Shared info links → support forum, website, legal pages. Same
+            // rows as the Hosts toolbar's `AboutMenu` so both primary screens
+            // expose the same links from the same source (`AboutMenuItems`).
+            AboutMenuItems()
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .foregroundStyle(Palette.textPrimary)
         }
-        ToolbarItem(placement: .topBarTrailing) {
-            NewsBellButton(action: onOpenNews)
+        .accessibilityLabel("More")
+    }
+
+    /// The globe world switcher menu shown in the toolbar on world-aware
+    /// servers. Each world is its own submenu (a checkmark marks the active
+    /// one): "Switch to Workspace" sends `SetActiveWorld`, and per-world
+    /// "Rename…" / "Close…" reuse the same alert / confirmation flows the tab
+    /// actions use. The submenu is the iOS-native equivalent of the Android
+    /// long-press-to-manage gesture — a menu row can't itself carry a long
+    /// press, so a world's actions live one level in. Close is disabled on the
+    /// last world (the server refuses to close it). Creating a workspace moved
+    /// to the toolbar "+" menu, so it is not offered here. Extracted from
+    /// `toolbarItems` so each expression stays small enough for SwiftUI's type
+    /// checker.
+    private var worldSwitcherMenu: some View {
+        Menu {
+            ForEach(viewModel.worlds) { world in
+                let isActive = world.id == viewModel.activeWorldId
+                Menu {
+                    Button {
+                        viewModel.setActiveWorld(worldId: world.id)
+                    } label: {
+                        Label(
+                            "Switch to Workspace",
+                            systemImage: isActive ? "checkmark.circle" : "arrow.right.circle"
+                        )
+                    }
+                    .disabled(isActive)
+                    Button {
+                        renameWorldText = world.name
+                        renameWorldTarget = world
+                    } label: {
+                        Label("Rename\u{2026}", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        closeWorldTarget = world
+                    } label: {
+                        Label("Close\u{2026}", systemImage: "xmark")
+                    }
+                    .disabled(viewModel.worldCount <= 1)
+                } label: {
+                    // A leading checkmark marks the active world, matching the
+                    // platform's menu-selection idiom.
+                    if isActive {
+                        Label(world.name, systemImage: "checkmark")
+                    } else {
+                        Text(world.name)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "globe")
+                .foregroundStyle(Palette.textPrimary)
         }
-        // Shared info menu → support forum, website, legal pages. Same control
-        // as the Hosts toolbar so both primary screens expose the same links
-        // from the same place.
-        ToolbarItem(placement: .topBarTrailing) {
-            AboutMenu()
-        }
+        .accessibilityLabel("Workspaces")
     }
 
     /// The body's content area: the graphical overview when the toolbar toggle
@@ -592,6 +706,74 @@ private struct TreeDialogsModifier: ViewModifier {
         case .pane:
             viewModel.renamePane(paneId: target.id, title: trimmed)
         }
+    }
+}
+
+// MARK: - World Dialogs Modifier
+
+/// The world switcher's three presentation flows (new-world alert, rename-world
+/// alert, close-world confirmation) extracted out of `TreeView.body`. Split into
+/// its own modifier — separate from `TreeDialogsModifier` — so neither body
+/// stacks so many presentation modifiers that SwiftUI's type checker times out
+/// (the same reason the tab/pane dialogs were extracted). New and rename reuse
+/// the New-Tab `.alert`-with-`TextField` pattern; close mirrors the tab/pane
+/// destructive confirmation.
+private struct WorldDialogsModifier: ViewModifier {
+    @Bindable var viewModel: TreeViewModel
+    @Binding var showWorldNameAlert: Bool
+    @Binding var worldName: String
+    @Binding var renameWorldTarget: WorldMenuItem?
+    @Binding var renameWorldText: String
+    @Binding var closeWorldTarget: WorldMenuItem?
+
+    func body(content: Content) -> some View {
+        content
+            .alert("New Workspace", isPresented: $showWorldNameAlert) {
+                TextField("Workspace name", text: $worldName)
+                Button("Create") {
+                    let trimmed = worldName.trimmingCharacters(in: .whitespaces)
+                    guard !trimmed.isEmpty else { return }
+                    viewModel.addWorld(name: trimmed)
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+            .alert(
+                "Rename Workspace",
+                isPresented: .init(
+                    get: { renameWorldTarget != nil },
+                    set: { if !$0 { renameWorldTarget = nil } }
+                ),
+                presenting: renameWorldTarget
+            ) { target in
+                TextField("Name", text: $renameWorldText)
+                Button("Rename") {
+                    let trimmed = renameWorldText.trimmingCharacters(in: .whitespaces)
+                    // The server rejects blank world names, so only send a
+                    // non-empty rename; either way dismiss the alert.
+                    if !trimmed.isEmpty {
+                        viewModel.renameWorld(worldId: target.id, name: trimmed)
+                    }
+                    renameWorldTarget = nil
+                }
+                Button("Cancel", role: .cancel) { renameWorldTarget = nil }
+            }
+            .confirmationDialog(
+                closeWorldTarget.map { "Close \u{201C}\($0.name)\u{201D}?" } ?? "",
+                isPresented: .init(
+                    get: { closeWorldTarget != nil },
+                    set: { if !$0 { closeWorldTarget = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: closeWorldTarget
+            ) { target in
+                Button("Close Workspace", role: .destructive) {
+                    viewModel.closeWorld(worldId: target.id)
+                    closeWorldTarget = nil
+                }
+                Button("Cancel", role: .cancel) { closeWorldTarget = nil }
+            } message: { _ in
+                Text("All tabs in this workspace will be closed and their sessions ended.")
+            }
     }
 }
 

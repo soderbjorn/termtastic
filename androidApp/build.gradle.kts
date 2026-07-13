@@ -74,8 +74,8 @@ android {
         applicationId = "se.soderbjorn.termtastic.android"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 11
-        versionName = "1.7.0"
+        versionCode = 12
+        versionName = "1.9.0"
     }
 
     buildFeatures {
@@ -154,6 +154,9 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+
+    // Published darkness toolkit Compose components (the world switcher globe).
+    implementation(libs.darkness.compose)
 
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)

@@ -215,6 +215,51 @@ internal fun activatePane(p: RingPane) {
 }
 
 /**
+ * Handle a click on a pane (its title bar always; its whole body via the dim veil —
+ * both wired in [buildRingPane]). What a click does depends on the mode:
+ *
+ *  - **free flight** ([spikeFlyMode]) → a click **engages** the clicked pane in place on
+ *    the first click (keystrokes flow into it), disengaging whatever was engaged; the
+ *    camera doesn't move. Clicking the already-engaged pane is a no-op.
+ *  - **command center**, two-stage like a desktop icon:
+ *      1. clicking a pane that is **not** the centred one brings it to the centre and
+ *         makes it *current* ([frontPane]) — it does **not** engage, and it disengages
+ *         whatever was engaged (so clicking another pane un-engages the old one);
+ *      2. clicking the **already-centred** pane a second time **engages** it.
+ *
+ * No-op while a warp owns the camera, or for a stashed (shelved) pane.
+ *
+ * @param paneId the clicked pane's stable id, resolved to the live [RingPane] here so a
+ *   ring rebuild between build and click can't strand a stale reference.
+ * @see activatePane @see frontPane
+ */
+internal fun onPaneClicked(paneId: String) {
+    if (!spikeOpen || spikeWorldTransit != null) return
+    val p = spikePanes.firstOrNull { it.paneId == paneId && !it.dying } ?: return
+    if (isStashed(p)) return
+    // Clicking the pane that's already engaged keeps it (don't disturb live typing).
+    if (spikeEngaged && spikeLastEngagedPane == paneId) return
+
+    if (spikeFlyMode) {
+        // Free flight: engage on the first click, in place.
+        if (spikeEngaged) disengage()
+        activatePane(p)
+        return
+    }
+
+    // Command center: first click centres + selects; a second click on the centred
+    // pane engages it. Clicking a different pane re-centres and disengages the old one.
+    val fi = frontIndex()
+    val front = spikePanes.getOrNull(fi)
+    val isSettledFront = front != null && front.paneId == paneId && spikeSettledIndex == fi
+    if (isSettledFront) {
+        activatePane(p) // second click on the centred pane → engage
+    } else {
+        frontPane(p) // first click → centre + make current (leaveFrontPane disengages any current)
+    }
+}
+
+/**
  * After a mirror pane's tab is engaged, waits (briefly, polling) for its real
  * terminal to mount into the [terminals] registry, then hot-swaps the live term's
  * container onto the plane in place of the preview: the pane becomes fully

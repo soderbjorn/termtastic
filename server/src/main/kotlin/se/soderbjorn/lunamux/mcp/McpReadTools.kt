@@ -2,7 +2,8 @@
  * MCP read/watch tools (plan Groups A and B) for Lunamux.
  *
  * Group A — inventory & inspection: `list_sessions`, `get_session`,
- * `list_layout`, `get_state`, `get_claude_usage`, `read_scrollback`.
+ * `list_layout`, `list_worlds`, `get_state`, `get_claude_usage`,
+ * `read_scrollback`.
  * Group B — watching: `watch_output`, `wait_for_idle`, `wait_for_exit`.
  *
  * All tools are read-only ([McpTool.requiresWrite] = false) and available
@@ -31,6 +32,7 @@ import se.soderbjorn.lunamux.ClaudeUsageMonitor
 import se.soderbjorn.lunamux.FileBrowserContent
 import se.soderbjorn.lunamux.GitContent
 import se.soderbjorn.lunamux.TerminalContent
+import se.soderbjorn.lunamux.WebBrowserContent
 import se.soderbjorn.lunamux.TermSession
 import se.soderbjorn.lunamux.TerminalSessions
 import se.soderbjorn.lunamux.WindowState
@@ -118,7 +120,11 @@ internal fun placementOf(sessionId: String): SessionPlacement {
     var primaryTab: String? = null
     var title: String? = null
     val all = mutableListOf<String>()
-    for (tab in cfg.tabs) {
+    // Span every world's tabs, not just the legacy default-world mirror
+    // (cfg.tabs), so sessions living in non-default worlds still resolve
+    // their windowId/tabId. Fall back to the mirror when worlds is empty.
+    val tabs = cfg.worlds.flatMap { it.tabs }.ifEmpty { cfg.tabs }
+    for (tab in tabs) {
         for (pane in tab.panes) {
             if (pane.leaf.sessionId == sessionId) {
                 all.add(pane.leaf.id)
@@ -218,18 +224,28 @@ fun registerMcpReadTools(settingsRepo: SettingsRepository, usageMonitor: ClaudeU
 
     McpServer.register(McpTool(
         name = "list_layout",
-        description = "The full window layout: every tab with its windows (panes), each window's " +
-            "kind (terminal/fileBrowser/git/agent), geometry (fractions of the tab area), " +
-            "stacking, focus, and backing sessionId.",
+        description = "The full window layout across every world: each tab (annotated with its " +
+            "worldId/worldName) and its windows (panes), each window's kind " +
+            "(terminal/fileBrowser/git/agent), geometry (fractions of the tab area), stacking, " +
+            "focus, and backing sessionId. Use list_worlds for a worlds-only summary.",
         inputSchema = schemaObject(),
     ) { _, _ ->
         val cfg = WindowState.config.value
+        // Iterate every world so tabs in non-default worlds are included; the
+        // legacy cfg.tabs mirror only holds the default world's tabs. Fall
+        // back to the mirror as a synthetic default world when worlds is empty.
+        val worlds = cfg.worlds.ifEmpty {
+            listOf(se.soderbjorn.lunamux.WorldConfig(id = "", name = "", tabs = cfg.tabs, activeTabId = cfg.activeTabId))
+        }
         McpToolResult.json(buildJsonObject {
             put("activeTabId", cfg.activeTabId)
+            put("activeWorldId", WindowState.activeWorldId())
             put("tabs", buildJsonArray {
-                for (tab in cfg.tabs) {
+                for (world in worlds) for (tab in world.tabs) {
                     add(buildJsonObject {
                         put("tabId", tab.id)
+                        put("worldId", world.id)
+                        put("worldName", world.name)
                         put("title", tab.title)
                         put("hidden", tab.isHidden)
                         put("layoutPreset", tab.layoutPreset)
@@ -245,6 +261,7 @@ fun registerMcpReadTools(settingsRepo: SettingsRepository, usageMonitor: ClaudeU
                                         is TerminalContent, null -> "terminal"
                                         is FileBrowserContent -> "fileBrowser"
                                         is GitContent -> "git"
+                                        is WebBrowserContent -> "webBrowser"
                                         else -> "agent"
                                     })
                                     put("sessionId", pane.leaf.sessionId.takeIf { it.isNotEmpty() })
@@ -259,6 +276,40 @@ fun registerMcpReadTools(settingsRepo: SettingsRepository, usageMonitor: ClaudeU
                                 })
                             }
                         })
+                    })
+                }
+            })
+        })
+    })
+
+    McpServer.register(McpTool(
+        name = "list_worlds",
+        description = "List every world (named workspace above tabs): its id, name, whether it is " +
+            "the active world, its tab count, and its per-world theme pair (null when the world " +
+            "follows the global theme). Use list_layout to see the tabs/windows within each world.",
+        inputSchema = schemaObject(),
+    ) { _, _ ->
+        val cfg = WindowState.config.value
+        val activeWorldId = WindowState.activeWorldId()
+        McpToolResult.json(buildJsonObject {
+            put("activeWorldId", activeWorldId)
+            put("worlds", buildJsonArray {
+                for (world in cfg.worlds) {
+                    add(buildJsonObject {
+                        put("worldId", world.id)
+                        put("name", world.name)
+                        put("active", world.id == activeWorldId)
+                        put("activeTabId", world.activeTabId)
+                        put("tabCount", world.tabs.size)
+                        val theme = world.themeSelection
+                        if (theme != null) {
+                            put("theme", buildJsonObject {
+                                put("darkThemeName", theme.darkThemeName)
+                                put("lightThemeName", theme.lightThemeName)
+                            })
+                        } else {
+                            put("theme", JsonPrimitive(null as String?))
+                        }
                     })
                 }
             })

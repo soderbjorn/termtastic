@@ -147,6 +147,82 @@ class McpWriteToolsTest {
         WindowState.config.value.tabs.flatMap { it.panes }.first { it.leaf.id == windowId }
 
     @Test
+    fun `world lifecycle create list switch rename tab-placement and close`() {
+        registerAll()
+        // Ensure a default world exists (create_tab bootstraps "Home" if absent),
+        // so closeWorld has a sibling to fall back to.
+        val homeTabId = payloadOf(call("create_tab", "{}"))["tabId"]!!.jsonPrimitive.content
+        val homeWorldId = WindowState.config.value.worlds.first().id
+        var worldId: String? = null
+        try {
+            // create_world mints a world, seeds a tab, and switches to it.
+            val created = payloadOf(call("create_world", """{"name":"MCP World"}"""))
+            worldId = created["worldId"]!!.jsonPrimitive.content
+            assertTrue(WindowState.config.value.worlds.any { it.id == worldId && it.name == "MCP World" })
+            assertEquals(worldId, WindowState.activeWorldId())
+
+            // list_worlds (read scope) reports it, flagged active, with a tab count.
+            val listedRes = call("list_worlds", "{}", scope = McpScope.READ)
+            assertNull(listedRes["isError"])
+            val entry = payloadOf(listedRes)["worlds"]!!.jsonArray
+                .map { it.jsonObject }.first { it["worldId"]!!.jsonPrimitive.content == worldId }
+            assertEquals("MCP World", entry["name"]!!.jsonPrimitive.content)
+            assertEquals("true", entry["active"]!!.jsonPrimitive.content)
+            assertTrue(entry["tabCount"]!!.jsonPrimitive.content.toInt() >= 1)
+
+            // create_tab targets a specific world; the tab lands inside it.
+            val wTab = payloadOf(call("create_tab", """{"title":"In World","worldId":"$worldId"}"""))
+            val wTabId = wTab["tabId"]!!.jsonPrimitive.content
+            assertEquals(worldId, wTab["worldId"]?.jsonPrimitive?.content)
+            assertTrue(WindowState.config.value.worlds.first { it.id == worldId }.tabs.any { it.id == wTabId })
+            // …and NOT in the default world.
+            assertTrue(WindowState.config.value.worlds.first { it.id == homeWorldId }.tabs.none { it.id == wTabId })
+
+            // list_layout annotates each tab with its owning world.
+            val laid = payloadOf(call("list_layout", "{}", scope = McpScope.READ))["tabs"]!!.jsonArray
+                .map { it.jsonObject }.first { it["tabId"]!!.jsonPrimitive.content == wTabId }
+            assertEquals(worldId, laid["worldId"]!!.jsonPrimitive.content)
+            assertEquals("MCP World", laid["worldName"]!!.jsonPrimitive.content)
+
+            // rename_world.
+            assertOk(call("rename_world", """{"worldId":"$worldId","title":"Renamed World"}"""), "rename_world")
+            assertEquals("Renamed World", WindowState.config.value.worlds.first { it.id == worldId }.name)
+
+            // switch_world flips the active world.
+            assertOk(call("switch_world", """{"worldId":"$homeWorldId"}"""), "switch home")
+            assertEquals(homeWorldId, WindowState.activeWorldId())
+            assertOk(call("switch_world", """{"worldId":"$worldId"}"""), "switch back")
+            assertEquals(worldId, WindowState.activeWorldId())
+
+            // set_world_theme validates names then stores the pair.
+            val theme = se.soderbjorn.darkness.core.allThemes(emptyList()).first().name
+            assertOk(
+                call("set_world_theme", """{"worldId":"$worldId","darkThemeName":"$theme","lightThemeName":"$theme"}"""),
+                "set_world_theme",
+            )
+            assertEquals(theme, WindowState.config.value.worlds.first { it.id == worldId }.themeSelection?.darkThemeName)
+            // Unknown theme names are rejected.
+            val badTheme = call(
+                "set_world_theme",
+                """{"worldId":"$worldId","darkThemeName":"definitely-not-a-theme","lightThemeName":"$theme"}""",
+            )
+            assertEquals("true", badTheme["isError"]?.jsonPrimitive?.content)
+
+            // Unknown worldId is rejected by requireWorld.
+            val badWorld = call("rename_world", """{"worldId":"w-nope","title":"x"}""")
+            assertEquals("true", badWorld["isError"]?.jsonPrimitive?.content)
+
+            // close_world removes it and cascades its tabs.
+            assertOk(call("close_world", """{"worldId":"$worldId"}"""), "close_world")
+            assertTrue(WindowState.config.value.worlds.none { it.id == worldId })
+            worldId = null
+        } finally {
+            worldId?.let { call("close_world", """{"worldId":"$it"}""") }
+            call("close_tab", """{"tabId":"$homeTabId"}""")
+        }
+    }
+
+    @Test
     fun `run_command captures output and exit code`() {
         registerAll()
         val tabId = payloadOf(call("create_tab", "{}"))["tabId"]!!.jsonPrimitive.content

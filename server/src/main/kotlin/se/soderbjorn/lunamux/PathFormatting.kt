@@ -123,18 +123,20 @@ internal fun WindowConfig.withBlankSessionIds(): WindowConfig {
         is TerminalContent -> if (c.sessionId.isEmpty()) c else c.copy(sessionId = "")
         // Agent panes are ephemeral and dropped on rehydrate anyway; their
         // content carries no session id to blank.
-        is FileBrowserContent, is GitContent, is AgentContent, null -> c
+        is FileBrowserContent, is GitContent, is AgentContent, is WebBrowserContent, null -> c
     }
     fun stripLeaf(leaf: LeafNode): LeafNode {
         val newContent = blankContent(leaf.content)
         return if (leaf.sessionId.isEmpty() && newContent === leaf.content) leaf
         else leaf.copy(sessionId = "", content = newContent)
     }
+    fun stripTabs(tabs: List<TabConfig>): List<TabConfig> = tabs.map { tab ->
+        tab.copy(panes = tab.panes.map { p -> p.copy(leaf = stripLeaf(p.leaf)) })
+    }
     return copy(
-        tabs = tabs.map { tab ->
-            tab.copy(
-                panes = tab.panes.map { p -> p.copy(leaf = stripLeaf(p.leaf)) },
-            )
-        }
+        // Blank both the legacy default-world mirror and every world's tabs
+        // so no live PTY id ever reaches disk, in any world.
+        tabs = stripTabs(tabs),
+        worlds = worlds.map { it.copy(tabs = stripTabs(it.tabs)) },
     )
 }

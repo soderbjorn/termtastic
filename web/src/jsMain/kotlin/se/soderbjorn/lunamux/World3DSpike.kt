@@ -117,6 +117,11 @@ fun toggleWorld3dSpike() {
 internal fun openWorld3dSpike() {
     if (spikeOpen) return
     spikeOpen = true
+    // Always open showing the live **active** world — clear any lingering destination preview
+    // before [spikeChrome] is resolved below, and drop any transit a prior session somehow left
+    // armed. @see enterOrExitOtherWorld
+    spikeWorldThemePreview = null
+    spikeWorldTransit = null
 
     val w = window.innerWidth
     val h = window.innerHeight
@@ -132,9 +137,21 @@ internal fun openWorld3dSpike() {
     // `background-color` + `background-image` as separate longhands (NOT the `background`
     // shorthand, which would reset the colour to transparent) so the flat opaque fill
     // always survives beneath the gradient.
+    // The literals here are only a pre-theme backstop: [applyWorldSky] immediately repaints both
+    // background longhands from the active world's theme tokens (and does so again on every theme
+    // change / world swap), so the sky tracks the theme. @see applyWorldSky
     overlay.style.cssText = "position:fixed;inset:0;z-index:99999;overflow:hidden;outline:none;" +
         "background-color:#04060a;background-image:radial-gradient(circle at 50% 42%,#141b27,#04060a);"
     spikeOverlay = overlay
+    applyWorldSky() // paint the sky from the active world's theme (preview was cleared above)
+
+    // Clicking the bare backdrop (empty space — not a pane, not a chrome control)
+    // disengages the engaged pane: the click-out counterpart of ⌥⌘X. Pane title-bar /
+    // dim click handlers stopPropagation, and chrome buttons are their own event
+    // targets, so this fires only when the click lands on the overlay itself. @see disengage
+    overlay.addEventListener("click", { ev: org.w3c.dom.events.Event ->
+        if (ev.target === overlay && spikeEngaged) disengage()
+    })
 
     // Hidden defs host for the per-pane latch-bulge displacement filters. Kept in the
     // overlay (so `url(#…)` references resolve) but zero-sized and out of the flow.
@@ -205,6 +222,16 @@ internal fun openWorld3dSpike() {
     // Restore persisted per-pane zooms (Pane.zoom) on a fresh app run — local
     // session memory always wins over the server copy (see seedZoomFromConfig).
     latestWindowConfig?.let { seedZoomFromConfig(it) }
+    // Restore persisted per-pane 3D grid overrides (Pane.grid3d) the same local-first
+    // way. spikeGrid3dApplied / spikeNativeGridByPane are per-open state: cleared here
+    // so this open re-captures each pane's native (2D) grid from the term's current
+    // size and re-asserts its override exactly once (ensureGrid3dApplied). Native is
+    // captured fresh per open (the term is at its true 2D size here, before any override
+    // is applied) but held stable across in-world switches, so a restore-to-native always
+    // targets the real 2D size rather than a stale override.
+    spikeGrid3dApplied.clear()
+    spikeNativeGridByPane.clear()
+    latestWindowConfig?.let { seedGrid3dFromConfig(it) }
     spikeSelectionMode = false
     // Seed the shelf from the panes minimized (docked) in the 2D layout: stash and
     // minimize are the same persisted state now (see persistPaneMinimized), so a pane
@@ -268,6 +295,15 @@ internal fun openWorld3dSpike() {
 
     document.body?.appendChild(overlay)
 
+    // Flash the world we've just entered in the top-centre arrival banner, matching the cue shown
+    // when flying between worlds. It auto-fades after a few seconds ([updateWorldBanner]); the empty
+    // name (no worlds configured) is a no-op, so single-world setups simply show "HOME" briefly.
+    run {
+        val cfg = latestWindowConfig
+        val activeName = cfg?.worlds?.firstOrNull { it.id == cfg.activeWorldId }?.name ?: ""
+        updateWorldBanner(activeName)
+    }
+
     // Hide the 2D app shell entirely while the world is open. The 3D overlay covers it,
     // but under compositor tile-memory pressure a plane (or the overlay itself) can drop
     // a tile for a frame or two and render transparent — with the shell hidden there is
@@ -289,6 +325,7 @@ internal fun openWorld3dSpike() {
             if (cfg != null && spikeOpen) {
                 latestWindowConfig = cfg
                 seedZoomFromConfig(cfg) // a pane created while open may carry a persisted zoom
+                seedGrid3dFromConfig(cfg) // ...and a persisted 3D grid override
                 reconcileRing()
                 // Tab-unlist ⇄ isHidden inbound sync: a bundle whose tab was re-listed from
                 // another client flies back down and separates. @see syncBundlesFromHidden
@@ -445,6 +482,16 @@ internal fun buildKeyHandler(): (Event) -> Unit = handler@{ ev ->
         return@handler
     }
 
+    // World-transit lockout: while flying through the wormhole to the next world
+    // ([tickWorldTransit] owns the camera), every *real* key is swallowed so nothing fights the
+    // flight — except Esc, which bails out by closing the whole world. The transit is short and
+    // self-completing, so there's no key to "cancel" it mid-air.
+    if (spikeWorldTransit != null && ke.isTrusted) {
+        consume()
+        if (ke.key == "Escape") closeWorld3dSpike()
+        return@handler
+    }
+
     // Secret demo-only chord **⌥⌘M**: start the guided world tour (stopping one is
     // handled by the tour lockout above). Checked in every mode (before the modal
     // branches below). Deliberately absent from the legend, and inert outside demo
@@ -471,6 +518,15 @@ internal fun buildKeyHandler(): (Event) -> Unit = handler@{ ev ->
     // the ⌘ passthrough below — on the physical `code` (⌥ rewrites `ke.key`).
     if (ke.altKey && ke.metaKey && ke.code == "Comma") {
         consume(); flashShortcut("settings"); toggleWorld3dSettingsPanel(); return@handler
+    }
+
+    // **⌥⌘O** — fly through the wormhole to the **next world**: arm the transit cinematic and,
+    // at its midpoint, cycle the active world on to the next real world ([enterOrExitOtherWorld]
+    // → [se.soderbjorn.lunamux.WindowCommand.SetActiveWorld]). Available in both command center
+    // and free flight (the engaged branch above already returned). Matched on physical `code`
+    // (⌥ rewrites `ke.key`). @see enterOrExitOtherWorld
+    if (ke.altKey && ke.metaKey && ke.code == "KeyO") {
+        consume(); flashShortcut("other-world"); enterOrExitOtherWorld(); return@handler
     }
 
     // **Free-fly** mode: keys drive the camera, not pane navigation. `F` (or Esc)
@@ -533,6 +589,8 @@ internal fun buildKeyHandler(): (Event) -> Unit = handler@{ ev ->
             ke.key == "," -> { flashShortcut("grid-w"); gridNearestW(-1) }
             ke.key == ">" -> { flashShortcut("grid-h"); gridNearestH(1) }
             ke.key == "<" -> { flashShortcut("grid-h"); gridNearestH(-1) }
+            // `/` restores the pane's native (2D) grid, clearing its 3D grid override.
+            ke.key == "/" -> { flashShortcut("grid-native"); restoreNearestNativeGrid() }
             ke.key == "r" || ke.key == "R" -> { flashShortcut("reformat"); reformatNearest() }
             ke.code in FLY_KEY_CODES -> {
                 spikeCamReturning = false
@@ -640,6 +698,8 @@ internal fun buildKeyHandler(): (Event) -> Unit = handler@{ ev ->
         ke.key == "," -> { flashShortcut("grid-w"); growGridW(-1) }
         ke.key == ">" -> { flashShortcut("grid-h"); growGridH(1) }  // ⇧ → height (rows)
         ke.key == "<" -> { flashShortcut("grid-h"); growGridH(-1) }
+        // `/` restores the front pane's native (2D) grid, clearing its 3D grid override.
+        ke.key == "/" -> { flashShortcut("grid-native"); restoreFrontNativeGrid() }
         ke.code == "KeyF" -> { flashShortcut("fly"); toggleFlyMode() }
         // ⌥R toggles screen-recording the world to a .webm on the Desktop. Desktop
         // app only (isElectronClient) — see the screenshot/recording note below.
@@ -653,7 +713,9 @@ internal fun buildKeyHandler(): (Event) -> Unit = handler@{ ev ->
         ke.key == "j" || ke.key == "J" -> { flashShortcut("tilt"); tiltCamera() }
         ke.key == "c" || ke.key == "C" -> { flashShortcut("cam-home"); resetCamera() }
         ke.code == "KeyM" -> { flashShortcut("overview"); flyOverview() }
-        ke.key == "w" || ke.key == "W" -> { flashShortcut("signal"); cycleSignalOverride() }
+        // The `w` signal-override cycle is intentionally absent from the legend
+        // (a hidden dev/preview affordance); a toast confirms each change instead.
+        ke.key == "w" || ke.key == "W" -> cycleSignalOverride()
         // Cinematic glides around the *selected* pane (behind / beside / over / under).
         // Matched on physical `code` so shift/caps don't matter; `G` is beside since `N`
         // stays "new pane" in command center. (Window bob / status style are now settings,
@@ -709,6 +771,12 @@ internal val FLY_KEY_CODES = setOf(
 internal fun closeWorld3dSpike() {
     if (!spikeOpen) return
     spikeOpen = false
+    // Leaving the 3D world: drop any destination preview *now* (2D always shows the live active
+    // world) so [buildXtermTheme] / [currentWorldTheme] resolve the active theme again. Any ring
+    // terminals overridden to a previewed world's theme are re-themed to the active theme once the
+    // pane sweep below has restored the real ones to 2D. @see buildXtermTheme
+    val hadWorldPreview = spikeWorldThemePreview != null
+    spikeWorldThemePreview = null
     // Abort a pre-recording 3-2-1 countdown so its pending timer can't fire
     // acquireAndRecord() into the overlay this teardown is about to remove.
     cancelRecordingCountdown()
@@ -736,10 +804,21 @@ internal fun closeWorld3dSpike() {
     spikeFlyMode = false
     spikeFlyKeys.clear()
 
+    // Before tearing down the ring (and its PTY sockets), revert any pane that
+    // carries a 3D grid override back to its native size so 2D shows the native
+    // grid again. The override itself is kept (persisted) for the next open; the
+    // sockets are still live here so the NORMAL vote lands. A crash that skips this
+    // still reverts, since the closing sockets drop their THREE_D votes server-side.
+    revertGrid3dOverridesOnClose()
     for (p in spikePanes) disposeRingPane(p)
     spikePanes = mutableListOf()
     for (c in spikeEmptyTabs) disposeEmptyCard(c)
     spikeEmptyTabs = mutableListOf()
+
+    // Real terminals restored to 2D above may still carry a previewed world's xterm theme they
+    // wore in the ring; with the preview now cleared, re-theme the registry back to the active
+    // theme.
+    if (hadWorldPreview) applyThemeToTerminals()
 
     // Land the app on the last pane you engaged (deferred here so the app's
     // focus management never fights ⌘Esc during the session).
@@ -768,7 +847,6 @@ internal fun closeWorld3dSpike() {
     spikeDemoTourPulseTimer?.let { window.clearTimeout(it) }
     spikeDemoTourPulseTimer = null
     spikeDemoTourButton = null
-    spikeDemoTourHint = null
     spikeLegendRows.clear()
     spikeFlyLegendRows.clear()
     spikeEngageLegendRows.clear()
@@ -776,6 +854,8 @@ internal fun closeWorld3dSpike() {
     spikeNavLabelTimer?.let { window.clearTimeout(it) }
     spikeNavLabelTimer = null
     spikeNavLabel = null
+    spikeWorldBannerTimer?.let { window.clearTimeout(it) }
+    spikeWorldBannerTimer = null
     spikeLegendAtShelf = false
     spikeShelfPanTargetX = null
     clearHomeBeacon()
@@ -792,6 +872,9 @@ internal fun closeWorld3dSpike() {
     // Wormhole spawn: the portals are children of the CSS3D layer (removed wholesale
     // below), so just drop the registry (any mid-birth pane dies with the pane sweep above).
     clearWormholes()
+    // World transit: the vortex + tunnel + flash are overlay/scene children (removed wholesale
+    // below), so just drop the registry; the preview resets on the next open.
+    clearWorldTransit()
     // Warp-core: the canvas + HUD are overlay children (removed wholesale below), so just
     // drop the references, pings and clock so a re-open starts cold.
     clearWarpCore()
@@ -808,4 +891,38 @@ internal fun closeWorld3dSpike() {
     spikeHiddenShell?.style?.visibility = spikeHiddenShellVis
     spikeHiddenShell = null
     spikeHiddenShellVis = ""
+
+    // Re-home every live terminal into the toolkit's CURRENT pane cell.
+    //
+    // THE blank-pane bug: while the world was open the ring reparented each live
+    // `entry.container` (the `.terminal` xterm host) OUT of the toolkit's cached
+    // pane cell and onto a CSS3D plane. The toolkit caches pane bodies by id and
+    // PRUNES any pane not in the active world's snapshot
+    // (AppShellMount.pruneStalePaneContentCache), so an **in-3D world switch**
+    // rebuilds that cache underneath us. The `origParent` cell that
+    // [disposeRingPane] restores the container into is then an orphaned, detached
+    // node — leaving a *live* terminal attached to a *dead* cell: the pane shows
+    // blank in 2D (0 `.xterm` in the document), curable only by a real 2D world
+    // switch (which rebuilds pane content and re-appends the live container).
+    //
+    // Do that rebuild here on close: refresh the shell so the toolkit re-mounts
+    // its (possibly empty) cached cells into live slots, then next frame move each
+    // live container back into its `[data-pane]` cell and reassert its 2D grid.
+    // A container already in its cell (cache was rebuilt via mountPaneContent) is
+    // left alone. @see mountPaneContent @see forceReassert
+    appShellHandle?.refresh()
+    window.requestAnimationFrame {
+        var rehomed = 0
+        for ((paneId, entry) in terminals) {
+            val cell = document.querySelector("[data-pane=\"$paneId\"]") as? HTMLElement ?: continue
+            if (!cell.contains(entry.container)) {
+                cell.appendChild(entry.container)
+                rehomed++
+                runCatching { if (entry.autoReflow) forceReassert(entry) }
+            }
+        }
+        if (rehomed > 0) {
+            console.log("[world3d-spike] world close: re-homed $rehomed detached terminal(s) into their 2D cells")
+        }
+    }
 }

@@ -6,6 +6,9 @@
  * Group D — windows & tabs: `create_window`, `close_window`,
  * `rename_window`, `activate_window`, `move_window`, `maximize_window`,
  * `arrange`, `create_tab`, `rename_tab`, `close_tab`, `activate_tab`.
+ * Group F — worlds: `create_world`, `rename_world`, `switch_world`,
+ * `close_world`, `set_world_theme` (a world is a named workspace above
+ * tabs, owning its own tab list and theme pair).
  * Group E — workspaces & signalling: `save_workspace`, `apply_workspace`,
  * `list_workspaces`, `set_theme`, `annotate_window`, `notify`.
  *
@@ -44,6 +47,7 @@ import se.soderbjorn.lunamux.LeafNode
 import se.soderbjorn.lunamux.TerminalContent
 import se.soderbjorn.lunamux.WindowEnvelope
 import se.soderbjorn.lunamux.WindowState
+import se.soderbjorn.lunamux.WorldThemeSelection
 import se.soderbjorn.lunamux.persistence.SettingsRepository
 
 /** SQLite key holding the persisted workspace-template store. */
@@ -108,19 +112,54 @@ private fun requireWindow(windowId: String): LeafNode =
     WindowState.findLeaf(windowId)
         ?: throw McpArgumentException("Unknown windowId: $windowId")
 
-/** Resolve an existing tab id or throw the standard argument error. */
+/**
+ * Resolve an existing tab id or throw the standard argument error. Spans
+ * every world's tabs (not just the legacy default-world mirror) so MCP can
+ * address tabs in any world.
+ *
+ * @param tabId the candidate tab id.
+ * @return the same [tabId] when it exists in some world.
+ * @throws McpArgumentException when no world contains the tab.
+ */
 private fun requireTab(tabId: String): String {
-    if (WindowState.config.value.tabs.none { it.id == tabId }) {
+    if (WindowState.config.value.worlds.flatMap { it.tabs }.none { it.id == tabId }) {
         throw McpArgumentException("Unknown tabId: $tabId")
     }
     return tabId
 }
 
-/** The target tab: explicit arg, else the active tab, else the first tab. */
+/**
+ * Resolve an existing world id or throw the standard argument error.
+ * Called by every world-scoped write tool (`rename_world`, `switch_world`,
+ * `close_world`, `set_world_theme`) and by the `worldId` argument on the
+ * tab/window-creating tools.
+ *
+ * @param worldId the candidate world id.
+ * @return the same [worldId] when it exists.
+ * @throws McpArgumentException when no world has that id.
+ */
+private fun requireWorld(worldId: String): String {
+    if (WindowState.config.value.worlds.none { it.id == worldId }) {
+        throw McpArgumentException("Unknown worldId: $worldId")
+    }
+    return worldId
+}
+
+/**
+ * The target tab for a window-creating / layout tool: an explicit `tabId`
+ * argument, else the active tab of the target world (explicit `worldId`
+ * argument, else the active world), else that world's first tab.
+ *
+ * @param args the tool arguments (`tabId` and/or `worldId` are consulted).
+ * @return the resolved tab id.
+ * @throws McpArgumentException when no addressable tab exists.
+ */
 private fun resolveTargetTab(args: JsonObject): String {
     args.optString("tabId")?.let { return requireTab(it) }
     val cfg = WindowState.config.value
-    return cfg.activeTabId ?: cfg.tabs.firstOrNull()?.id
+    val worldId = args.optString("worldId")?.let { requireWorld(it) } ?: WindowState.activeWorldId()
+    val world = cfg.worlds.firstOrNull { it.id == worldId } ?: cfg.worlds.firstOrNull()
+    return world?.activeTabId ?: world?.tabs?.firstOrNull()?.id
         ?: throw McpArgumentException("No tabs exist")
 }
 
@@ -314,6 +353,7 @@ fun registerMcpWriteTools(settingsRepo: SettingsRepository) {
             "command" to schemaString("The command line to run."),
             "sessionId" to schemaString("Run in this existing session. Omit to create a new window."),
             "tabId" to schemaString("When creating a window: the tab to create it in (default: active tab)."),
+            "worldId" to schemaString("When creating a window and no tabId is given: the world whose active tab to use (default: active world)."),
             "cwd" to schemaString("When creating a window: the starting directory for its shell."),
             "waitForExit" to schemaBool("Wait for completion and capture output. Default true."),
             "timeoutMs" to schemaInt("Max wait in ms (default $DEFAULT_RUN_TIMEOUT_MS, max $MAX_RUN_TIMEOUT_MS)."),
@@ -398,6 +438,7 @@ fun registerMcpWriteTools(settingsRepo: SettingsRepository) {
         description = "Create a new terminal window (pane). Returns the new windowId and sessionId.",
         inputSchema = schemaObject(
             "tabId" to schemaString("Tab to create the window in (default: active tab)."),
+            "worldId" to schemaString("When no tabId is given: the world whose active tab to use (default: active world)."),
             "cwd" to schemaString("Starting directory for the new shell."),
             "title" to schemaString("Optional custom window name."),
         ),
@@ -520,17 +561,23 @@ fun registerMcpWriteTools(settingsRepo: SettingsRepository) {
 
     writeTool(
         name = "create_tab",
-        description = "Create a new tab (seeded with one terminal window) and switch to it.",
+        description = "Create a new tab (seeded with one terminal window) in a world and switch to " +
+            "it. Targets the active world unless a worldId is given.",
         inputSchema = schemaObject(
             "title" to schemaString("Optional tab title."),
+            "worldId" to schemaString("World to create the tab in (default: active world)."),
         ),
     ) { _, args ->
-        val tabId = WindowState.addTab()
+        val worldId = args.optString("worldId")?.let { requireWorld(it) }
+        val tabId = WindowState.addTab(worldId)
         args.optString("title")?.let { WindowState.renameTab(tabId, it) }
-        val tab = WindowState.config.value.tabs.first { it.id == tabId }
+        // The tab may live in a non-default world, so search every world's
+        // tabs rather than only the legacy default-world mirror (config.tabs).
+        val tab = WindowState.config.value.worlds.flatMap { it.tabs }.first { it.id == tabId }
         val seeded = tab.panes.firstOrNull()?.leaf
         McpToolResult.json(buildJsonObject {
             put("tabId", tabId)
+            put("worldId", worldId ?: WindowState.activeWorldId())
             put("windowId", seeded?.id)
             put("sessionId", seeded?.sessionId)
         })
@@ -574,6 +621,111 @@ fun registerMcpWriteTools(settingsRepo: SettingsRepository) {
         val tabId = requireTab(args.requireString("tabId"))
         WindowState.setActiveTab(tabId)
         McpToolResult.text("Activated tab $tabId")
+    }
+
+    // ── Group F — worlds ─────────────────────────────────────────────────
+
+    writeTool(
+        name = "create_world",
+        description = "Create a new world (a named workspace above tabs, seeded with one tab) and " +
+            "switch to it. Returns the new worldId.",
+        inputSchema = schemaObject(
+            "name" to schemaString("The display name for the new world."),
+            required = listOf("name"),
+        ),
+    ) { _, args ->
+        val name = args.requireString("name")
+        // Seed the new world's theme pair from the default world so it starts
+        // consistent; null lets it follow the global selection.
+        val worldId = WindowState.addWorld(name, WindowState.defaultWorldTheme())
+        McpToolResult.json(buildJsonObject {
+            put("worldId", worldId)
+            put("name", name)
+        })
+    }
+
+    writeTool(
+        name = "rename_world",
+        description = "Set a world's display name.",
+        inputSchema = schemaObject(
+            "worldId" to schemaString("The world to rename."),
+            "title" to schemaString("The new name."),
+            required = listOf("worldId", "title"),
+        ),
+    ) { _, args ->
+        val worldId = requireWorld(args.requireString("worldId"))
+        WindowState.renameWorld(worldId, args.requireString("title"))
+        McpToolResult.text("Renamed world $worldId")
+    }
+
+    writeTool(
+        name = "switch_world",
+        description = "Switch the active (visible) world. World-aware clients render the active " +
+            "world's tabs.",
+        inputSchema = schemaObject(
+            "worldId" to schemaString("The world to activate."),
+            required = listOf("worldId"),
+        ),
+    ) { _, args ->
+        val worldId = requireWorld(args.requireString("worldId"))
+        WindowState.setActiveWorld(worldId)
+        McpToolResult.text("Activated world $worldId")
+    }
+
+    writeTool(
+        name = "close_world",
+        description = "Close a world and cascade to every tab and PTY session inside it. The server " +
+            "refuses to close the last remaining world.",
+        inputSchema = schemaObject(
+            "worldId" to schemaString("The world to close."),
+            required = listOf("worldId"),
+        ),
+    ) { _, args ->
+        val worldId = requireWorld(args.requireString("worldId"))
+        if (WindowState.config.value.worlds.size <= 1) {
+            throw McpArgumentException("Cannot close the last remaining world")
+        }
+        WindowState.closeWorld(worldId)
+        McpToolResult.text("Closed world $worldId")
+    }
+
+    writeTool(
+        name = "set_world_theme",
+        description = "Set a world's theme pair (the dark-slot and light-slot theme names). Both " +
+            "must match an existing built-in or custom theme. The global appearance mode " +
+            "(auto/dark/light) decides which of the two is live and stays shared across worlds — " +
+            "use set_theme to change that.",
+        inputSchema = schemaObject(
+            "worldId" to schemaString("The world whose theme pair to set."),
+            "darkThemeName" to schemaString("Theme name to bind to the world's dark slot."),
+            "lightThemeName" to schemaString("Theme name to bind to the world's light slot."),
+            required = listOf("worldId", "darkThemeName", "lightThemeName"),
+        ),
+    ) { _, args ->
+        val worldId = requireWorld(args.requireString("worldId"))
+        val darkName = args.requireString("darkThemeName")
+        val lightName = args.requireString("lightThemeName")
+        val stored = settingsRepo.getUiSettings()
+        fun raw(key: String): String? =
+            (stored[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val snapshot = ThemeSnapshotV2.fromStrings(
+            selectionJson = raw(PersistKeys.THEME_V2_SELECTION),
+            customThemesJson = raw(PersistKeys.THEME_V2_CUSTOM),
+        )
+        val known = allThemes(snapshot.customThemes).map { it.name }
+        for (candidate in listOf(darkName, lightName)) {
+            if (candidate !in known) {
+                throw McpArgumentException(
+                    "Unknown theme '$candidate'. Available: ${known.joinToString(", ")}",
+                )
+            }
+        }
+        WindowState.setWorldTheme(worldId, WorldThemeSelection(darkName, lightName))
+        McpToolResult.json(buildJsonObject {
+            put("worldId", worldId)
+            put("darkThemeName", darkName)
+            put("lightThemeName", lightName)
+        })
     }
 
     // ── Group E — workspaces & signalling ────────────────────────────────

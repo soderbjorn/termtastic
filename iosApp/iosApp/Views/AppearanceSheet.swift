@@ -83,30 +83,40 @@ struct AppearanceSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        // Subheading, styled identically to the "Dark themes" /
-                        // "Light themes" section headers.
-                        Text("Dark mode")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(Palette.textBright)
-                        appearancePicker
-                    }
-                    themeGrid
+            VStack(alignment: .leading, spacing: 16) {
+                // Pinned header: the "Dark mode" subheading and the Auto / Light
+                // / Dark toggle stay fixed at the top while only the theme
+                // catalog below scrolls, so the mode toggle is always reachable
+                // rather than scrolling away with the (potentially long) list.
+                VStack(alignment: .leading, spacing: 8) {
+                    // Subheading, styled identically to the "Dark themes" /
+                    // "Light themes" section headers.
+                    Text("Dark mode")
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Palette.textBright)
+                    appearancePicker
                 }
-                .padding(16)
-            }
-            // Centre the active theme in view the first time the sheet's catalog
-            // is available, so opening the picker reveals the current theme
-            // rather than starting at the top (issue #105). `orderedThemes` loads
-            // asynchronously, so trigger from whichever fires with data first.
-            .onChange(of: viewModel.orderedThemes.count) { _, _ in
-                scrollToActiveIfNeeded(proxy)
-            }
-            .onAppear { scrollToActiveIfNeeded(proxy) }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+
+                // Scrolling theme catalog.
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        themeGrid
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 16)
+                    }
+                    // Centre the active theme in view the first time the sheet's
+                    // catalog is available, so opening the picker reveals the
+                    // current theme rather than starting at the top (issue #105).
+                    // `orderedThemes` loads asynchronously, so trigger from
+                    // whichever fires with data first.
+                    .onChange(of: viewModel.orderedThemes.count) { _, _ in
+                        scrollToActiveIfNeeded(proxy)
+                    }
+                    .onAppear { scrollToActiveIfNeeded(proxy) }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Palette.background)

@@ -269,6 +269,96 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     display: none;
 }
 
+/* World-aware agent status, at the very bottom of the sidebar footer (below the
+   Claude usage bar). Ported from the 3D world's warp-core status boxes, but
+   restyled to the left pane's idiom: a titled block of rows, each an accent dot
+   (the world's theme accent, set inline) + world name + a muted working/waiting
+   count — mirroring `.claude-usage-bar` metrics rather than the 3D overlay's
+   translucent floating cards. Populated by `updateWorldStatusFooter`. */
+.world-status-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 12px 0;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--t-text, var(--text-secondary));
+    white-space: nowrap;
+    user-select: none;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    /* Top hairline separating this block from the Claude usage bar above,
+       matching the `.tt-sidebar-footer` divider that sits above the usage bar.
+       The 8px gap over the line comes from the footer's own `gap`, so no
+       extra margin here (that would double the spacing). */
+    border-top: 1px solid var(--t-border, color-mix(in srgb, currentColor 12%, transparent));
+}
+/* No active world → collapse to nothing (padding + divider) so an idle footer
+   shows only the usage bar with no stray hairline. */
+.world-status-bar.world-status-empty {
+    padding: 0;
+    border-top: none;
+}
+.world-status-bar .world-status-title {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+    font-weight: 600;
+    opacity: 0.75;
+    margin-bottom: 1px;
+}
+.world-status-bar .world-status-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+/* The world's theme accent, as a small status bead (background set inline). */
+.world-status-bar .world-status-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+}
+.world-status-bar .world-status-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.world-status-bar .world-status-count {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+}
+/* Muted separator between the working and waiting halves. */
+.world-status-bar .world-status-sep {
+    opacity: 0.4;
+}
+/* Working: the theme's accent (`--t-warn`'s sibling `--t-accent`), a calm slow
+   breathe — an ambient "live" signal that doesn't demand action.
+   Waiting: the theme's warn token (`--t-warn`, the same attention colour the
+   shell-death warning, usage bars and "Mac only" tag use), a quicker, deeper
+   breathe and heavier weight — a blocked agent needs YOU, so it draws a little
+   more of the eye than working.
+
+   Both pull from the active theme's tokens rather than fixed blue/amber, so the
+   status follows light/dark/custom themes; the former hard-coded reactor blue
+   (`WARP_CORE_COLOR`) / attention amber (`WARP_AMBER_COLOR`) survive only as the
+   var() fallbacks for the (unexpected) case where the tokens are unset.
+
+   The breathe (opacity) is driven by the shared JS pulse loop
+   (WebStateActions.pulseTick / startPulse), NOT a CSS animation: the
+   world-status block is rebuilt via `innerHTML = ""` on every state push, and a
+   CSS keyframe animation on the fresh span restarts from `opacity: 1` each time,
+   making the breathe erratic. See appendWorldStatusCounts. Reduced motion is
+   honoured in JS (startPulse holds a static full opacity), so no @media override
+   is needed here. */
+.world-status-bar .world-status-working {
+    color: var(--t-accent, #4fb8ff);
+}
+.world-status-bar .world-status-waiting {
+    color: var(--t-warn, #f0b649);
+    font-weight: 600;
+}
+
 /* Consolidated hover popup for the Claude usage bar (ClaudeUsageBar.kt's
    `buildUsagePopupHtml`). Parented to <body> and fixed-positioned by JS
    (the `.dt-sidebar` clips with overflow:hidden, so it can't live inside the

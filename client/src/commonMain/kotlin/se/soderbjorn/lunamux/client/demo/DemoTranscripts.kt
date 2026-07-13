@@ -67,6 +67,15 @@ internal val DEMO_PROMPT: String =
     "$GREEN demo@a500 $R$BLUE~/code/lastlight$R % "
 
 /**
+ * The zsh-style prompt for the DarknessIRC world's shell/Claude sessions —
+ * identical chrome to [DEMO_PROMPT] but rooted at the DarknessIRC project, so
+ * the hub-log terminal and the Ctrl-C fallback of its Claude panes read as that
+ * repo's cwd.
+ */
+internal val DEMO_DIRC_PROMPT: String =
+    "$GREEN demo@a500 $R$BLUE~/code/darknessirc$R % "
+
+/**
  * Prompt block shown by the simulated Claude Code session for typed input,
  * matching the real Claude Code chrome exactly: the `›` input caret sits in a
  * box (a dim rule above and below it) with the `⏵⏵ auto mode on` status line
@@ -1030,6 +1039,209 @@ private fun watchTranscript(): String = lines(
     "${DIM}[21:08:17]$R rebuild ok in ${YELLOW}0.5s$R ${DIM}(tools/sinetable.bas changed)$R",
 )
 
+// ---------------------------------------------------------------------------
+// DarknessIRC (World 2) terminal sessions: the three Claude Code panes
+// (running / waiting / idle) that tell the channel-scrollback story, plus the
+// plain hub-log terminal. The IRC channel panes are driven separately by
+// [DemoIrcSession]; only these scripted terminals live here.
+// ---------------------------------------------------------------------------
+
+/**
+ * The **running** Claude session (`dirc-s4`, state "working"): mid-task,
+ * implementing the per-channel scrollback ring buffer in `hub/HubStore.kt` and
+ * the new `HubEvent.History`, with the hub test suite compiling. The transcript
+ * ends mid-status-line so [claudeScrollbackLiveScript] ticks it in place.
+ */
+private fun claudeScrollbackTranscript(): String = lines(
+    "$DEMO_DIRC_PROMPT${"claude"}",
+    "$CLAUDE╭──────────────────────────────────────────────────────────────╮$R",
+    "$CLAUDE│$R $CLAUDE✻$R ${B}Welcome to Claude Code!$R                                     $CLAUDE│$R",
+    "$CLAUDE│$R   ${DIM}cwd: /Users/demo/code/darknessirc$R                          $CLAUDE│$R",
+    "$CLAUDE╰──────────────────────────────────────────────────────────────╯$R",
+    "",
+    "$B>$R persist recent channel messages so reconnecting clients get history",
+    "",
+    "$B●$R I'll add a per-channel ring buffer in the hub plus a HubEvent.History",
+    "  the clients replay on connect. Reading the store and protocol first.",
+    "",
+    "$B●$R ${B}Read$R(hub/HubStore.kt · protocol/HubEvent.kt)",
+    "  ${DIM}⎿  Read 34 lines$R",
+    "",
+    "$B●$R ${B}Edit$R(hub/HubStore.kt)",
+    "  ${DIM}⎿  ring buffer — last 200 lines per channel$R",
+    "",
+    "$B●$R ${B}Write$R(protocol/HubEvent.kt)",
+    "  ${DIM}⎿  HubEvent.History(channel, lines)$R",
+    "",
+    "$B●$R Replay is wired into Routes.onSubscribe. Running the hub tests now.",
+    "",
+) + claudeStatus("Compiling", 47, "running :hub:test")
+
+/**
+ * The looping feed for the running scrollback session (`dirc-s4`): a ticking
+ * status line interleaved with the test run finishing green and the next round
+ * of work, so the pane reads as an agent mid-task. @return one loop iteration.
+ */
+private fun claudeScrollbackLiveScript(): List<DemoScriptStep> = listOf(
+    DemoScriptStep(1_800, CLEAR_LINE + claudeStatus("Compiling", 51, "running :hub:test")),
+    DemoScriptStep(
+        2_000,
+        CLEAR_LINE + toolStep("Bash", "./gradlew :hub:test", "HubStoreTest — 6 passed (scrollback caps at 200)") +
+            claudeStatus("Verifying", 54, "checking the replay path"),
+    ),
+    DemoScriptStep(
+        1_700,
+        CLEAR_LINE +
+            "$B●$R Ring buffer holds; History replays newest-last. Next: make the\r\n" +
+            "  client dedupe replayed lines so nothing shows twice.\r\n\r\n" +
+            claudeStatus("Threading", 57, "wiring ConversationBackingViewModel"),
+    ),
+    DemoScriptStep(
+        1_900,
+        CLEAR_LINE + toolStep("Edit", "client/viewmodel/ConversationBackingViewModel.kt", "handle HubEvent.History") +
+            claudeStatus("Racing the socket", 61, "almost done thinking with high effort"),
+    ),
+    DemoScriptStep(2_300, CLEAR_LINE + claudeStatus("Racing the socket", 66, "almost done thinking with high effort")),
+)
+
+/**
+ * The **waiting** Claude session (`dirc-s6`, state "waiting"): it has hit a real
+ * design fork — replayed history could duplicate lines already on screen — and
+ * sits at a numbered prompt awaiting the user's choice. No trailing shell
+ * prompt: Claude owns the tty (Ctrl-C drops to the DarknessIRC shell).
+ */
+private fun claudeDedupeTranscript(): String = lines(
+    "$DEMO_DIRC_PROMPT${"claude"}",
+    "",
+    "$B>$R replay recent history to clients when they reconnect",
+    "",
+    "$B●$R The hub now keeps 200 lines per channel and sends HubEvent.History on",
+    "  connect. But a reconnecting client may still have some of those lines on",
+    "  screen from before the drop, so a naive replay double-prints them.",
+    "",
+    "$B●$R ${B}Read$R(client/viewmodel/ConversationBackingViewModel.kt)",
+    "  ${DIM}⎿  Read 41 lines$R",
+    "",
+    "$CLAUDE╭──────────────────────────────────────────────────────────────╮$R",
+    "$CLAUDE│$R ${B}Replaying history could duplicate lines already on screen.$R    $CLAUDE│$R",
+    "$CLAUDE│$R ${B}Dedupe by message id, or clear and re-render from history?$R   $CLAUDE│$R",
+    "$CLAUDE│$R                                                              $CLAUDE│$R",
+    "$CLAUDE│$R $GRN❯ 1. dedupe$R                                                  $CLAUDE│$R",
+    "$CLAUDE│$R   2. clear+render                                            $CLAUDE│$R",
+    "$CLAUDE│$R   ${DIM}(waiting for your choice…)$R                                $CLAUDE│$R",
+    "$CLAUDE╰──────────────────────────────────────────────────────────────╯$R",
+)
+
+/**
+ * The **idle** Claude session (`dirc-s7`, stateless/finished): the scrollback
+ * work is done — History wired into the shared view-model, iOS + Android
+ * rendering replayed scrollback on reconnect — and the session rests at the
+ * Claude input prompt. Typing into it plays [claudeReconnectInputScript] and
+ * the pane flips to "working" for the burst. Kept out of
+ * [DemoFixtures.initialStates] so it starts stateless.
+ */
+private fun claudeReconnectTranscript(): String = lines(
+    "$DEMO_DIRC_PROMPT${"claude"}",
+    "",
+    "$B>$R make the reconnect replay work end to end across all clients",
+    "",
+    "$B●$R ${B}Edit$R(client/viewmodel/ConversationBackingViewModel.kt)",
+    "  ${DIM}⎿  dedupe replayed History by IrcLine.id$R",
+    "",
+    "$B●$R ${B}Bash$R(./gradlew check)",
+    "  ${DIM}⎿  BUILD SUCCESSFUL — 214 tests, all green$R",
+    "",
+    "$B●$R ${GRN}✓$R Wired HubEvent.History into ConversationBackingViewModel; iOS +",
+    "  Android render replayed scrollback on reconnect. 8 files, tests green.",
+    "",
+) + DEMO_CLAUDE_PROMPT
+
+/**
+ * The one-shot burst played when the user types into the finished reconnect
+ * session (`dirc-s7`): same ~9 s shape as the lastlight finished sessions but
+ * themed to the scrollback/hub pipeline. Three variants rotate on [runIndex];
+ * the typed [line] is sniffed only for a `test`/`tests` wink (re-run the suite).
+ * Ends at [DEMO_CLAUDE_PROMPT].
+ *
+ * @param line the submitted input line (sniffed for the "tests" wink).
+ * @param runIndex 0-based count of bursts already played this session.
+ * @return the steps of one burst, ending with [DEMO_CLAUDE_PROMPT].
+ */
+private fun claudeReconnectInputScript(line: String, runIndex: Int): List<DemoScriptStep> {
+    val tests = line.contains("test", ignoreCase = true)
+    val ack = listOf(
+        "$B●$R On it — extending the replay path now.",
+        "$B●$R Good call. Let me tighten the dedupe.",
+        "$B●$R Sure — another pass on the history buffer.",
+    )
+    val edit = listOf(
+        toolStep("Edit", "hub/HubStore.kt", "Cap raised to 500 lines for busy channels"),
+        toolStep("Edit", "client/viewmodel/ConversationBackingViewModel.kt", "Dedupe by id, keep original order"),
+        toolStep("Edit", "hub/Routes.kt", "Replay only channels the client is subscribed to"),
+    )
+    val done = listOf(
+        "$B●$R Done — reconnect replays clean, no duplicate lines. Tests green.",
+        "$B●$R That's in. History is deduped by id; order preserved.",
+        "$B●$R Done. Busy channels replay 500 lines now; still snappy.",
+    )
+    val v = runIndex.mod(ack.size)
+    val ackLine = if (tests) "$B●$R Re-running the hub + client suites to be sure." else ack[v]
+    val editStep = if (tests) toolStep("Bash", "./gradlew check", "214 tests, all green") else edit[v]
+    val doneLine = if (tests) "$B●$R All 214 tests pass — scrollback replay holds on every client." else done[v]
+    return listOf(
+        DemoScriptStep(400, "\r\n$CLAUDE✻$R ${DIM}Thinking…$R"),
+        DemoScriptStep(1_300, CLEAR_LINE + ackLine + "\r\n\r\n" + claudeStatus("Threading", 3, "thinking with high effort")),
+        DemoScriptStep(
+            1_700,
+            CLEAR_LINE + toolSummary(
+                "Reading ${B}2$R files, running ${B}1$R shell command…",
+                "hub/HubStore.kt",
+            ) + claudeStatus("Threading", 6, "tracing the replay path"),
+        ),
+        DemoScriptStep(1_500, CLEAR_LINE + toolStep("Read", "hub/HubStore.kt", "Read 32 lines") + claudeStatus("Weaving", 8, "folding the change in")),
+        DemoScriptStep(1_900, CLEAR_LINE + editStep + claudeStatus("Verifying", 10, "running the tests")),
+        DemoScriptStep(
+            2_100,
+            CLEAR_LINE + toolStep("Bash", "./gradlew :hub:test", "6 passed (scrollback caps hold)") +
+                claudeStatus("Racing the socket", 13, "almost done thinking with high effort"),
+        ),
+        DemoScriptStep(1_400, CLEAR_LINE + doneLine + "\r\n\r\n" + DEMO_CLAUDE_PROMPT),
+    )
+}
+
+/**
+ * The plain **hub-log** terminal (`dirc-s5`): the running DarknessIRC hub's
+ * stdout — startup banner then a live tail of record/subscribe lines. A
+ * foreground program (Ctrl-C stops it and drops to the DarknessIRC shell); its
+ * looping feed appends lines rather than rewriting a status line, and it never
+ * pulses as an agent (absent from [DemoFixtures.initialStates], and the
+ * construction-time activity callback is a no-op).
+ */
+private fun hubLogTranscript(): String = lines(
+    "$DEMO_DIRC_PROMPT${"./gradlew :hub:run"}",
+    "",
+    "${DIM}[hub]$R starting DarknessIRC hub ${B}0.4.0$R",
+    "${DIM}[hub]$R connecting to irc.example.net:6697 ${DIM}(tls)$R",
+    "${DIM}[hub]$R registered as ${B}darkbot$R · joined 10 channels",
+    "${DIM}[hub]$R websocket listening on ${CYAN}:8443$R",
+    "${GRN}▶$R serving — ${DIM}ctrl-c stops the hub$R",
+    "${DIM}21:02:08$R  #commodore             recorded line ${DIM}(scrollback 128/200)$R",
+    "${DIM}21:02:11$R  #kotlin-multiplatform  recorded line ${DIM}(scrollback 96/200)$R",
+    "${DIM}21:02:14$R  #amiga                 client subscribed → replayed ${B}42$R lines",
+)
+
+/**
+ * The looping feed for the hub log (`dirc-s5`): appends fresh record/subscribe
+ * lines, so the log tails like a live server. @return one loop iteration.
+ */
+private fun hubLogLiveScript(): List<DemoScriptStep> = listOf(
+    DemoScriptStep(1_600, "${DIM}21:02:19$R  #commodore             recorded line ${DIM}(scrollback 129/200)$R\r\n"),
+    DemoScriptStep(2_100, "${DIM}21:02:23$R  #kotlin-multiplatform  client subscribed → replayed ${B}200$R lines\r\n"),
+    DemoScriptStep(1_800, "${DIM}21:02:26$R  #commodore             recorded line ${DIM}(scrollback 130/200)$R\r\n"),
+    DemoScriptStep(2_400, "${DIM}21:02:31$R  #amiga                 recorded line ${DIM}(scrollback 43/200)$R\r\n"),
+    DemoScriptStep(1_900, "${DIM}21:02:34$R  #kotlin-multiplatform  recorded line ${DIM}(scrollback 97/200)$R\r\n"),
+)
+
 /**
  * The session specs for every PTY session referenced by
  * [DemoFixtures.initialConfig]. Looked up by [DemoServer] when seeding its
@@ -1106,6 +1318,38 @@ internal fun demoSessionSpecs(): List<DemoSessionSpec> = listOf(
         startsAtPrompt = true, // idle at the Claude input prompt (finished)
         respond = ::demoShellRespond, // unused: inputScript takes the Enter path
         inputScript = ::claudeCopperInputScript,
+    ),
+    // --- DarknessIRC world (World 2) terminals ---
+    DemoSessionSpec(
+        sessionId = "dirc-s4",
+        transcript = claudeScrollbackTranscript(),
+        prompt = DEMO_DIRC_PROMPT,
+        startsAtPrompt = false, // Claude owns the tty; Ctrl-C stops the feed
+        respond = ::demoShellRespond,
+        liveScript = claudeScrollbackLiveScript(),
+    ),
+    DemoSessionSpec(
+        sessionId = "dirc-s5",
+        transcript = hubLogTranscript(),
+        prompt = DEMO_DIRC_PROMPT,
+        startsAtPrompt = false, // the hub owns the tty; Ctrl-C stops it
+        respond = ::demoShellRespond,
+        liveScript = hubLogLiveScript(),
+    ),
+    DemoSessionSpec(
+        sessionId = "dirc-s6",
+        transcript = claudeDedupeTranscript(),
+        prompt = DEMO_DIRC_PROMPT,
+        startsAtPrompt = false, // Claude owns the tty until Ctrl-C (waiting)
+        respond = ::demoShellRespond,
+    ),
+    DemoSessionSpec(
+        sessionId = "dirc-s7",
+        transcript = claudeReconnectTranscript(),
+        prompt = DEMO_CLAUDE_PROMPT,
+        startsAtPrompt = true, // idle at the Claude input prompt (finished)
+        respond = ::demoShellRespond, // unused: inputScript takes the Enter path
+        inputScript = ::claudeReconnectInputScript,
     ),
 )
 

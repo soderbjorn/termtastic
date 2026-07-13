@@ -102,11 +102,32 @@ fun connectPane(entry: TerminalEntry) {
         if (!entry.autoReflow) return
         if (!isOpen()) return
         val cols = entry.term.cols; val rows = entry.term.rows
+        // While the pane rides a 3D-world plane, this automatic vote lands on the
+        // *same* socket/clientId as the 3D world's explicit vote — fired by
+        // `term.onResize` the instant `setPaneGrid` resizes the grid, and again on
+        // every fresh socket-open re-seed. Vote at the pane's **tier** so it
+        // *reinforces* rather than clobbers: a pane carrying a `grid3d` override
+        // re-votes THREE_D at the same grid (a plain NORMAL Resize here would
+        // silently drop the override to the NORMAL tier — the "counter-voted back"
+        // failure the `isRidingSpikePlane` doc describes), while any other riding
+        // pane, and every 2D pane, votes NORMAL. The circular fit that would ratchet
+        // the grid down is suppressed separately (ResizeObserver / onopen guards), so
+        // `cols`/`rows` here is always PTY-truth, never a fit proposal. Muting the
+        // vote entirely instead would strand a pane that reconnects or re-mounts in
+        // 3D with no size vote at all (blank on world round-trip).
+        // @see setPaneGrid @see isRidingSpikePlane @see SizePriority
+        val priority =
+            if (isRidingSpikePlane(entry) && entry.paneId in spikeGrid3dByPane) SizePriority.THREE_D
+            else SizePriority.NORMAL
         pendingResize?.let { window.clearTimeout(it) }
         pendingResize = window.setTimeout({
             pendingResize = null
             if (!isOpen()) return@setTimeout
-            socket.send(windowJson.encodeToString<PtyControl>(PtyControl.Resize(cols = cols, rows = rows)))
+            socket.send(
+                windowJson.encodeToString<PtyControl>(
+                    PtyControl.Resize(cols = cols, rows = rows, priority = priority)
+                )
+            )
         }, 50)
     }
 
@@ -452,6 +473,11 @@ fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
                     resyncViewportScroll(entry)
                 }
                 updateOobOverlay(entry)
+                // Demo mode: reflow the IRC TUI (and any other size-aware demo
+                // session) to the freshly-fitted grid. The demo path bypasses the
+                // real socket's resize plumbing, so this observer is where the new
+                // size reaches the session. No-op outside demo / for fixed frames.
+                pushDemoSessionResize(entry)
             }
             entry.wasContainerVisible = visible
         } catch (_: Throwable) {}
@@ -487,20 +513,12 @@ fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
  * @see ensureTerminal
  */
 fun mountPaneContent(paneId: String): HTMLElement {
-    val cfg: dynamic = currentConfig
-    var foundLeaf: dynamic = null
-    if (cfg != null) {
-        val tabsArr = cfg.tabs as? Array<dynamic> ?: emptyArray()
-        outer@ for (tab in tabsArr) {
-            val panes = (tab.panes as? Array<dynamic>) ?: continue
-            for (p in panes) {
-                if ((p.leaf?.id as? String) == paneId) {
-                    foundLeaf = p.leaf
-                    break@outer
-                }
-            }
-        }
-    }
+    // Search every world's tabs, not just the legacy top-level `cfg.tabs`
+    // mirror (which only carries the DEFAULT world's panes). A pane created
+    // in a non-default world lives solely under `cfg.worlds[…].tabs`, so a
+    // `cfg.tabs`-only scan would return `null` and pin this pane on the
+    // `[window … — booting]` placeholder forever. See [findLeafDynamic].
+    val foundLeaf: dynamic = findLeafDynamic(paneId)
     if (foundLeaf == null) {
         val placeholder = document.createElement("div") as HTMLElement
         placeholder.style.height = "100%"
@@ -550,6 +568,17 @@ fun mountPaneContent(paneId: String): HTMLElement {
             cell.appendChild(localStrip)
             cell.appendChild(buildGitView(paneId, leaf, localStrip))
         }
+        "webBrowser" -> {
+            // Only the Electron host can embed a live page (a <webview> guest
+            // on a CSS3D plane); every other client shows an "Open in browser"
+            // link button that hands the URL to the OS default browser.
+            if (isElectronWebHost) {
+                cell.appendChild(buildWebBrowserView(paneId, leaf))
+            } else {
+                val url = leaf.content?.url as? String
+                cell.appendChild(buildWebBrowserLinkButton(paneId, url))
+            }
+        }
         "agent" -> {
             val sessionId = leaf.sessionId as String
             val renderMode = (leaf.content?.renderMode as? String) ?: "transcript"
@@ -561,8 +590,12 @@ fun mountPaneContent(paneId: String): HTMLElement {
                 val entry = ensureTerminal(paneId, sessionId)
                 entry.term.options.fontSize = (appVm.stateFlow.value.paneFontSize ?: 14)
                 entry.term.options.fontFamily = resolveFontFamilyCss(appVm.stateFlow.value.paneFontFamily)
-                try { safeFit(entry.term, entry.fit) } catch (_: Throwable) {}
-                cell.appendChild(entry.container)
+                // See the terminal branch below: don't steal the container off a
+                // 3D plane while the world is open. @see closeWorld3dSpike
+                if (!spikeOpen) {
+                    try { safeFit(entry.term, entry.fit) } catch (_: Throwable) {}
+                    cell.appendChild(entry.container)
+                }
             } else {
                 // Transcript mode: plain-DOM conversation list + input box
                 // over the structured /agent/{sessionId} socket.
@@ -580,13 +613,26 @@ fun mountPaneContent(paneId: String): HTMLElement {
             (leaf.content?.autoReflow as? Boolean)?.let { entry.autoReflow = it }
             entry.term.options.fontSize = (appVm.stateFlow.value.paneFontSize ?: 14)
             entry.term.options.fontFamily = resolveFontFamilyCss(appVm.stateFlow.value.paneFontFamily)
-            // Skip the mount-time refit for frozen panes so re-rendering the
-            // chrome (tab switch, sidebar toggle) doesn't silently reformat a
-            // terminal the user pinned; auto-reflow panes refit as before.
-            if (entry.autoReflow) {
-                try { safeFit(entry.term, entry.fit) } catch (_: Throwable) {}
+            // While the 3D world owns this terminal, its `entry.container` is
+            // reparented onto a CSS3D plane. Do NOT append it into this (hidden)
+            // 2D cell here: a toolkit pane-content REBUILD triggered mid-3D — an
+            // in-3D world switch prunes the departing world's cache
+            // (AppShellMount.pruneStalePaneContentCache) and rebuilds it on return
+            // — would otherwise `appendChild` the live container out from under the
+            // plane, blanking it (the race that left "not all" panes empty on world
+            // return). Leave the cell empty while `spikeOpen`; [closeWorld3dSpike]
+            // re-homes every live container into its cell on exit. On the normal 2D
+            // path (world closed) this is the usual mount + refit.
+            // @see closeWorld3dSpike @see se.soderbjorn.lunamux.spikeOpen
+            if (!spikeOpen) {
+                // Skip the mount-time refit for frozen panes so re-rendering the
+                // chrome (tab switch, sidebar toggle) doesn't silently reformat a
+                // terminal the user pinned; auto-reflow panes refit as before.
+                if (entry.autoReflow) {
+                    try { safeFit(entry.term, entry.fit) } catch (_: Throwable) {}
+                }
+                cell.appendChild(entry.container)
             }
-            cell.appendChild(entry.container)
         }
     }
 

@@ -17,9 +17,13 @@
  * reveal state is held in memory by [SessionsViewModeStore.showHiddenTabs] so it
  * survives navigation but resets on app restart.
  *
- * Also hosts the "+" button for creating a new tab. Panes are created from
- * each tab header's menu (see [TabNameDialog], [RenameDialog],
- * [ConfirmCloseDialog] in PaneActions.kt).
+ * Creating things (a tab, a pane, or a world) is gathered into a "+" create
+ * bottom sheet (see [CreateSheet]); the remaining secondary actions (toggle
+ * list ↔ overview, appearance & theme, and the about/links) sit in an overflow
+ * ("⋮") menu so the compact phone bar stays uncluttered. The "+", layout, world
+ * switcher, and news bell remain as first-class bar icons. Panes are also
+ * created from each tab header's menu (see [TabNameDialog], [WorldNameDialog],
+ * [RenameDialog], [ConfirmCloseDialog] in PaneActions.kt).
  *
  * @see TerminalScreen
  * @see FileBrowserListScreen
@@ -59,6 +63,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -94,8 +99,10 @@ import se.soderbjorn.lunamux.AgentContent
 import se.soderbjorn.lunamux.GitContent
 import se.soderbjorn.lunamux.LeafNode
 import se.soderbjorn.lunamux.FileBrowserContent
+import se.soderbjorn.lunamux.WebBrowserContent
 import se.soderbjorn.lunamux.TabConfig
 import se.soderbjorn.lunamux.TerminalContent
+import se.soderbjorn.lunamux.WindowCommand
 import se.soderbjorn.lunamux.WindowConfig
 import se.soderbjorn.lunamux.android.net.ConnectionHolder
 import se.soderbjorn.lunamux.android.net.NewsUpdatesController
@@ -113,6 +120,8 @@ import se.soderbjorn.lunamux.client.viewmodel.OverviewBackingViewModel
 import se.soderbjorn.lunamux.client.viewmodel.SessionsViewModeStore
 import se.soderbjorn.lunamux.client.viewmodel.ThemeBackingViewModel
 import se.soderbjorn.darkness.web.layout.LayoutPreset
+import se.soderbjorn.darkness.compose.WorldMenuEntry
+import se.soderbjorn.darkness.compose.WorldSwitcher
 
 // Palette tokens live in SidebarPalette.kt — shared with MarkdownListScreen.
 
@@ -241,7 +250,11 @@ private fun flatten(
     showHiddenTabs: Boolean,
 ): List<TreeRow> {
     val rows = mutableListOf<TreeRow>()
-    val (hiddenTabs, visibleTabs) = config.tabs.partition { it.isHiddenFromSidebar }
+    // Render the ACTIVE world's tabs — worlds are the source of truth for
+    // >=1.9 clients; fall back to the legacy flat tabs when the config carries
+    // no worlds (a pre-1.9 server).
+    val worldTabs = config.activeWorldOrNull()?.tabs ?: config.tabs
+    val (hiddenTabs, visibleTabs) = worldTabs.partition { it.isHiddenFromSidebar }
 
     for (tab in visibleTabs) {
         appendTab(tab, states, minimizedPaneIds, rows)
@@ -337,6 +350,11 @@ private fun addLeaf(
         // shows the mirrored conversation with cooked typed input, screen
         // mode is the full grid — see AgentSession on the server.
         is AgentContent -> LeafKind.TERMINAL
+        // Web-browser panes render live only in Electron; the Android app is
+        // out of scope for embedded browsing (recorded in the plan), so a web
+        // pane degrades to the terminal placeholder here, matching the `else`
+        // fallback used everywhere else on Android (e.g. OverviewScreen).
+        is WebBrowserContent -> LeafKind.TERMINAL
     }
     out.add(
         CollectedLeaf(
@@ -380,18 +398,18 @@ private fun addLeaf(
  * Smallest device width (dp) at or above which the Sessions top bar still has
  * room to show its "Sessions" title alongside the full action cluster.
  *
- * The Sessions bar carries many actions (add, layout, view toggle, appearance,
- * news, and the shared [AboutMenu]); on narrow phones the Material top bar
- * sacrifices the title first, crushing it to an unreadable sliver. Below this
- * threshold we drop the title entirely (the back arrow plus the tab chips still
- * convey context) so the icons get the width; at or above it the title fills
- * what would otherwise read as awkward empty space between the back arrow and
- * the icons.
+ * The Sessions bar still carries several actions ("+", layout, world switcher,
+ * news, and the overflow "⋮" menu that holds view-toggle/appearance/about);
+ * on narrow phones the Material top bar sacrifices the title first, crushing it
+ * to an unreadable sliver. Below this threshold we drop the title entirely (the
+ * back arrow plus the tab chips still convey context) so the icons get the
+ * width; at or above it the title fills what would otherwise read as awkward
+ * empty space between the back arrow and the icons.
  *
  * Gated on `smallestScreenWidthDp` (a stable per-device value) rather than the
  * current width so the title never flickers in and out as the phone rotates.
  *
- * @see AboutMenu
+ * @see AboutMenuItems
  */
 private const val SESSIONS_TITLE_MIN_WIDTH_DP = 440
 
@@ -437,12 +455,18 @@ fun TreeScreen(
     // overview toolbar actions (add pane → this tab; layout miniatures →
     // this pane count). Derived from the already-collected config + minimized
     // set so we don't need a second state subscription.
-    val overviewActiveTabId = config?.let { cfg ->
-        cfg.activeTabId?.takeIf { id -> cfg.tabs.any { it.id == id && !it.isHidden } }
-            ?: cfg.tabs.firstOrNull { !it.isHidden }?.id
+    // Resolve the active world once (its tabs / activeTabId are the source of
+    // truth for >=1.9 clients); fall back to the legacy flat fields when the
+    // config carries no worlds.
+    val activeWorld = config?.activeWorldOrNull()
+    val worldTabs = activeWorld?.tabs ?: config?.tabs ?: emptyList()
+    val worldActiveTabId = activeWorld?.activeTabId ?: config?.activeTabId
+    val overviewActiveTabId = config?.let {
+        worldActiveTabId?.takeIf { id -> worldTabs.any { it.id == id && !it.isHidden } }
+            ?: worldTabs.firstOrNull { !it.isHidden }?.id
     }
-    val overviewActivePaneCount = config?.tabs
-        ?.firstOrNull { it.id == overviewActiveTabId }
+    val overviewActivePaneCount = worldTabs
+        .firstOrNull { it.id == overviewActiveTabId }
         ?.panes?.count { it.leaf.id !in minimizedPaneIds } ?: 0
 
     // The active tab's persisted layout preset, read from the toolkit-owned
@@ -457,9 +481,17 @@ fun TreeScreen(
     }
 
     // Overview toolbar UI state.
-    var showNewWindowMenu by remember { mutableStateOf(false) }
     var showLayoutSheet by remember { mutableStateOf(false) }
     var showAppearanceSheet by remember { mutableStateOf(false) }
+    // The "+" create bottom sheet (new tab / pane / world) and the follow-up
+    // world-name dialog it opens.
+    var showCreateSheet by remember { mutableStateOf(false) }
+    var showNewWorldName by remember { mutableStateOf(false) }
+    // The "⋮" overflow menu collects the remaining secondary bar actions —
+    // the list/overview toggle, appearance & theme, and the about/links — so
+    // the compact phone bar isn't overcrowded. (Creation now lives on the "+"
+    // create sheet instead.)
+    var showOverflowMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     // Shared news/update checker — drives the toolbar bell's visibility (shown
@@ -508,6 +540,19 @@ fun TreeScreen(
                 showTabName = false
                 val socket = ConnectionHolder.windowSocket() ?: return@TabNameDialog
                 scope.launch { addTab(client, socket, name) }
+            },
+        )
+    }
+    if (showNewWorldName) {
+        // Reached from the "+" create sheet's "New world" row; sends the world
+        // to the server, which creates and activates it (moving the user off
+        // the current world).
+        WorldNameDialog(
+            onDismiss = { showNewWorldName = false },
+            onConfirm = { name ->
+                showNewWorldName = false
+                val socket = ConnectionHolder.windowSocket() ?: return@WorldNameDialog
+                scope.launch { socket.send(WindowCommand.AddWorld(name)) }
             },
         )
     }
@@ -587,6 +632,30 @@ fun TreeScreen(
         )
     }
 
+    if (showCreateSheet) {
+        CreateSheet(
+            // Pane creation targets the active overview tab, so only offer it
+            // in overview mode where that tab is well-defined (issue #58).
+            showPaneOptions = viewMode == SessionsViewMode.OVERVIEW,
+            onNewTab = {
+                showCreateSheet = false
+                showTabName = true
+            },
+            onNewPane = { kind ->
+                showCreateSheet = false
+                val tabId = overviewActiveTabId
+                if (tabId != null) {
+                    scope.launch { overviewVm?.addPane(tabId, kind) }
+                }
+            },
+            onNewWorld = {
+                showCreateSheet = false
+                showNewWorldName = true
+            },
+            onDismiss = { showCreateSheet = false },
+        )
+    }
+
     Scaffold(
         containerColor = SidebarBackground,
         topBar = {
@@ -620,60 +689,19 @@ fun TreeScreen(
                     }
                 },
                 actions = {
-                    // Combined "+" menu: always offers "New tab"; in overview
-                    // mode it also offers adding a pane to the current tab
-                    // (issue #58). Replaces the former separate "New window"
-                    // button so the toolbar carries a single add affordance.
-                    // Placed first so it sits leftmost in the action cluster.
-                    Box {
-                        IconButton(onClick = { showNewWindowMenu = true }) {
-                            PlusIcon(
-                                contentDescription = "Add",
-                                tint = SidebarTextPrimary,
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = showNewWindowMenu,
-                            onDismissRequest = { showNewWindowMenu = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("New tab") },
-                                onClick = {
-                                    showNewWindowMenu = false
-                                    showTabName = true
-                                },
-                            )
-                            if (viewMode == SessionsViewMode.OVERVIEW) {
-                                DropdownMenuItem(
-                                    text = { Text("New terminal") },
-                                    onClick = {
-                                        showNewWindowMenu = false
-                                        val tabId = overviewActiveTabId ?: return@DropdownMenuItem
-                                        scope.launch { overviewVm?.addPane(tabId, "terminal") }
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("New file browser") },
-                                    onClick = {
-                                        showNewWindowMenu = false
-                                        val tabId = overviewActiveTabId ?: return@DropdownMenuItem
-                                        scope.launch { overviewVm?.addPane(tabId, "fileBrowser") }
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("New git") },
-                                    onClick = {
-                                        showNewWindowMenu = false
-                                        val tabId = overviewActiveTabId ?: return@DropdownMenuItem
-                                        scope.launch { overviewVm?.addPane(tabId, "git") }
-                                    },
-                                )
-                            }
-                        }
+                    // Create ("+"): opens the create bottom sheet (new tab /
+                    // pane / world). A first-class bar icon and placed leftmost
+                    // — creating things is the bar's primary action.
+                    IconButton(onClick = { showCreateSheet = true }) {
+                        PlusIcon(
+                            contentDescription = "Create",
+                            tint = SidebarTextPrimary,
+                        )
                     }
                     // Overview-only layout preset picker (issue #58). Hidden in
-                    // list mode where it has no spatial meaning. Adding panes is
-                    // folded into the combined "+" menu above.
+                    // list mode where it has no spatial meaning. Kept as a
+                    // first-class bar icon (not folded into the overflow) as it
+                    // is the primary overview affordance.
                     if (viewMode == SessionsViewMode.OVERVIEW) {
                         IconButton(onClick = { showLayoutSheet = true }) {
                             LayoutGridIcon(
@@ -682,42 +710,36 @@ fun TreeScreen(
                             )
                         }
                     }
-                    // Single toggle between the list and the overview. The icon
-                    // shows the mode you'll switch *to*; the glyph swap alone
-                    // signals the mode — no accent tint on the active state, so
-                    // the bar keeps a single icon colour (issue #96).
-                    IconButton(onClick = {
-                        viewMode = when (viewMode) {
-                            SessionsViewMode.LIST -> SessionsViewMode.OVERVIEW
-                            SessionsViewMode.OVERVIEW -> SessionsViewMode.LIST
-                        }
-                        // Persist the new mode in memory so it survives leaving
-                        // and returning to this screen (issue #54).
-                        SessionsViewModeStore.overviewMode = viewMode == SessionsViewMode.OVERVIEW
-                    }) {
-                        when (viewMode) {
-                            SessionsViewMode.LIST -> Icon(
-                                Icons.Filled.GridView,
-                                contentDescription = "Switch to overview",
-                                tint = SidebarTextPrimary,
-                            )
-                            SessionsViewMode.OVERVIEW -> Icon(
-                                Icons.AutoMirrored.Filled.ViewList,
-                                contentDescription = "Switch to list",
-                                tint = SidebarTextPrimary,
-                            )
-                        }
-                    }
-                    // Appearance + theme picker (parity with the Mac/Electron
-                    // app's appearance toggle + theme manager). Available in both
-                    // list and overview modes; disabled until the theme model is
-                    // ready. Writes the same canonical server selection the
-                    // desktop does, so the choice syncs across every client.
-                    if (themeVm != null) {
-                        IconButton(onClick = { showAppearanceSheet = true }) {
-                            Icon(
-                                Icons.Outlined.Palette,
-                                contentDescription = "Appearance & theme",
+                    // World switcher globe (published toolkit-compose
+                    // component). Lists every world in the server config with a
+                    // checkmark on the active one; gestures are forwarded as
+                    // world WindowCommands through the window socket. Shown only
+                    // when the server is world-aware (>=1.9) — a pre-1.9 config
+                    // carries no worlds, so there is nothing to switch between.
+                    config?.let { cfg ->
+                        if (cfg.worlds.isNotEmpty()) {
+                            WorldSwitcher(
+                                worlds = cfg.worlds.map { WorldMenuEntry(it.id, it.name) },
+                                activeWorldId = cfg.activeWorldId,
+                                onSelect = { id ->
+                                    val socket = ConnectionHolder.windowSocket()
+                                        ?: return@WorldSwitcher
+                                    scope.launch { socket.send(WindowCommand.SetActiveWorld(id)) }
+                                },
+                                // World creation now lives on the "+" create
+                                // sheet, so the dropdown offers no "New world"
+                                // (onAdd left null); long-press a row to rename
+                                // or close it.
+                                onRename = { id, name ->
+                                    val socket = ConnectionHolder.windowSocket()
+                                        ?: return@WorldSwitcher
+                                    scope.launch { socket.send(WindowCommand.RenameWorld(id, name)) }
+                                },
+                                onClose = { id ->
+                                    val socket = ConnectionHolder.windowSocket()
+                                        ?: return@WorldSwitcher
+                                    scope.launch { socket.send(WindowCommand.CloseWorld(id)) }
+                                },
                                 tint = SidebarTextPrimary,
                             )
                         }
@@ -727,10 +749,84 @@ fun TreeScreen(
                         shouldPulse = newsUpdatesState.hasNews,
                         muted = !newsUpdatesState.hasContent,
                     )
-                    // Shared info menu → support forum, website, legal pages.
-                    // Same control as the Hosts top bar so both primary screens
-                    // expose the same links from the same place.
-                    AboutMenu()
+                    // Overflow ("⋮") menu. Collects the secondary bar actions —
+                    // the list/overview toggle, appearance & theme, and the
+                    // about/links — behind a single kebab so the compact phone
+                    // bar isn't overcrowded. Each item pairs a glyph with a text
+                    // label. (Creation lives on the "+" create sheet instead.)
+                    Box {
+                        IconButton(onClick = { showOverflowMenu = true }) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "More",
+                                tint = SidebarTextPrimary,
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false },
+                        ) {
+                            // --- List / overview toggle. Label + glyph both name
+                            // the mode you'll switch *to* (issue #54, #96). ---
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when (viewMode) {
+                                            SessionsViewMode.LIST -> "Switch to overview"
+                                            SessionsViewMode.OVERVIEW -> "Switch to list"
+                                        }
+                                    )
+                                },
+                                leadingIcon = {
+                                    when (viewMode) {
+                                        SessionsViewMode.LIST -> Icon(
+                                            Icons.Filled.GridView,
+                                            contentDescription = null,
+                                        )
+                                        SessionsViewMode.OVERVIEW -> Icon(
+                                            Icons.AutoMirrored.Filled.ViewList,
+                                            contentDescription = null,
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    viewMode = when (viewMode) {
+                                        SessionsViewMode.LIST -> SessionsViewMode.OVERVIEW
+                                        SessionsViewMode.OVERVIEW -> SessionsViewMode.LIST
+                                    }
+                                    // Persist the new mode in memory so it
+                                    // survives leaving and returning to this
+                                    // screen (issue #54).
+                                    SessionsViewModeStore.overviewMode =
+                                        viewMode == SessionsViewMode.OVERVIEW
+                                },
+                            )
+                            // --- Appearance + theme picker (parity with the
+                            // Mac/Electron app). Present only once the theme
+                            // model is ready. ---
+                            if (themeVm != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Appearance & theme") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Outlined.Palette,
+                                            contentDescription = null,
+                                        )
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        showAppearanceSheet = true
+                                    },
+                                )
+                            }
+                            HorizontalDivider()
+                            // --- About & external links (support forum, website,
+                            // legal pages). Shared with the Hosts bar via
+                            // [AboutMenuItems] so the two never drift. ---
+                            AboutMenuItems(onItemSelected = { showOverflowMenu = false })
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = SidebarBackground,
@@ -802,7 +898,7 @@ fun TreeScreen(
                                 )
                                 is TreeRow.TabHeader -> TabHeaderRow(
                                     row = row,
-                                    closeEnabled = cfg.tabs.size > 1,
+                                    closeEnabled = (cfg.activeWorldOrNull()?.tabs ?: cfg.tabs).size > 1,
                                     onRename = { renameTabTarget = row },
                                     onToggleHidden = {
                                         val socket = ConnectionHolder.windowSocket() ?: return@TabHeaderRow

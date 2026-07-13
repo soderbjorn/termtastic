@@ -116,6 +116,10 @@ internal fun postOpenLayout() {
             for (p in spikePanes) {
                 val t = p.term ?: continue
                 runCatching {
+                    // Re-assert any persisted 3D grid override now the term exists and
+                    // still holds its native size (once per open — see ensureGrid3dApplied).
+                    // Runs before present so the plane lays out at the override grid.
+                    ensureGrid3dApplied(p)
                     presentPaneToGrid(p)
                     t.asDynamic().scrollToBottom()
                     t.asDynamic().refresh(0, t.rows - 1)
@@ -345,7 +349,13 @@ internal fun resizePaneBox(p: RingPane, dW: Int, dH: Int, animate: Boolean = tru
  *   `false` to only follow it (server broadcast).
  * @see growGridAxis @see reformatPane @see applyMirrorSize @see spikeOnServerSize
  */
-internal fun setPaneGrid(p: RingPane, cols: Int, rows: Int, reassert: Boolean) {
+internal fun setPaneGrid(
+    p: RingPane,
+    cols: Int,
+    rows: Int,
+    reassert: Boolean,
+    votePriority: SizePriority = SizePriority.THREE_D,
+) {
     val term = p.term ?: return
     if (cols < 1 || rows < 1) return
     if (reassert && isOnAltScreen(term)) {
@@ -380,16 +390,21 @@ internal fun setPaneGrid(p: RingPane, cols: Int, rows: Int, reassert: Boolean) {
             val kind = if (p.entry?.socket != null) "mounted" else "mirror"
             when {
                 sock == null -> console.warn(
-                    "[world3d-spike] no PTY socket for pane ${p.paneId}: ForceResize " +
+                    "[world3d-spike] no PTY socket for pane ${p.paneId}: resize vote " +
                         "${cols}x$rows NOT sent; local grid will diverge from the PTY"
                 )
                 sock.readyState.toInt() != org.w3c.dom.WebSocket.OPEN.toInt() -> console.warn(
                     "[world3d-spike] $kind socket for pane ${p.paneId} not OPEN " +
-                        "(readyState=${sock.readyState}): ForceResize ${cols}x$rows NOT sent"
+                        "(readyState=${sock.readyState}): resize vote ${cols}x$rows NOT sent"
                 )
                 else -> {
-                    console.log("[world3d-spike] ForceResize ${cols}x$rows sent for pane ${p.paneId} ($kind socket)")
-                    sendForceResize(sock, term)
+                    // Soft resize *vote* at [votePriority] (THREE_D for a grid override,
+                    // NORMAL when reverting to native), not a ForceResize: the tiered
+                    // aggregation lets a THREE_D vote outrank the 2D clients without
+                    // evicting anyone, and a connected mobile client's MOBILE floor still
+                    // wins. @see sendResizeVote @see SizePriority
+                    console.log("[world3d-spike] resize vote ${cols}x$rows ($votePriority) sent for pane ${p.paneId} ($kind socket)")
+                    sendResizeVote(sock, cols, rows, votePriority)
                 }
             }
         }
@@ -417,6 +432,150 @@ internal fun setPaneGrid(p: RingPane, cols: Int, rows: Int, reassert: Boolean) {
         )
     }.onFailure {
         console.error("[world3d-spike] setPaneGrid(${cols}x$rows) FAILED for pane ${p.paneId}", it)
+    }
+}
+
+/**
+ * The [SizePriority] tier a pane's PTY-size votes should carry right now:
+ * [SizePriority.THREE_D] while it holds a 3D grid override ([spikeGrid3dByPane]),
+ * else [SizePriority.NORMAL]. Lets a reformat/redraw re-assert a pane's size at
+ * the right tier without changing whether it is overridden.
+ *
+ * @param p the pane. @return its current vote tier. @see setPaneGrid
+ */
+internal fun paneVotePriority(p: RingPane): SizePriority =
+    if (p.paneId in spikeGrid3dByPane) SizePriority.THREE_D else SizePriority.NORMAL
+
+/**
+ * Record a pane's **native** (2D) grid the first time it is seen this world
+ * session, so a later revert has a target. No-op once captured (a pane already
+ * carrying an override would otherwise overwrite native with the override size).
+ *
+ * @param paneId the pane. @param term its terminal (its current cols/rows are the
+ *   native grid, since capture happens before any override is applied).
+ * @see spikeNativeGridByPane @see restoreFrontNativeGrid
+ */
+internal fun captureNativeGrid(paneId: String, term: Terminal) {
+    if (paneId !in spikeNativeGridByPane) {
+        spikeNativeGridByPane[paneId] = term.cols to term.rows
+    }
+}
+
+/**
+ * Remember a pane's 3D grid override locally ([spikeGrid3dByPane]) and write it
+ * through to the server ([WindowCommand.SetPaneGrid3d] → [Pane.grid3d]) so it
+ * persists across app restarts and re-entering the world. The single place a
+ * user grid resize records its override; the actual PTY reflow is driven by the
+ * THREE_D vote in [setPaneGrid].
+ *
+ * @param paneId the pane. @param cols/[rows] the chosen 3D grid.
+ * @see rememberGrid3dOverride @see restoreFrontNativeGrid
+ */
+internal fun rememberGrid3dOverride(paneId: String, cols: Int, rows: Int) {
+    spikeGrid3dByPane[paneId] = cols to rows
+    runCatching { launchCmd(WindowCommand.SetPaneGrid3d(paneId, cols, rows)) }
+}
+
+/**
+ * Apply a pane's persisted 3D grid override exactly once per world open.
+ *
+ * On the first call for [p] this open: captures the pane's native grid (the term
+ * is still at its 2D size here), then — if the pane carries an override differing
+ * from native — resizes it and votes the override at [SizePriority.THREE_D].
+ * Idempotent across the two [postOpenLayout] settle passes via [spikeGrid3dApplied]
+ * (cleared on open), so a pane already resized on the 120 ms pass is left alone at
+ * 700 ms rather than re-capturing the (now overridden) size as "native".
+ *
+ * @param p the pane to reconcile. No-op until its terminal exists.
+ * @see spikeGrid3dByPane @see seedGrid3dFromConfig
+ */
+internal fun ensureGrid3dApplied(p: RingPane) {
+    val term = p.term ?: return
+    if (p.paneId in spikeGrid3dApplied) return
+    captureNativeGrid(p.paneId, term)
+    spikeGrid3dApplied.add(p.paneId)
+    val ov = spikeGrid3dByPane[p.paneId] ?: return
+    if (ov.first != term.cols || ov.second != term.rows) {
+        console.log("[world3d-spike] applying persisted grid override ${ov.first}x${ov.second} to pane ${p.paneId}")
+        setPaneGrid(p, ov.first, ov.second, reassert = true, votePriority = SizePriority.THREE_D)
+    }
+}
+
+/**
+ * **Restore native grid** hotkey — clears the front pane's 3D grid override and
+ * reflows it back to its native (2D) size. Drops the override both locally
+ * ([spikeGrid3dByPane]) and on the server ([WindowCommand.SetPaneGrid3d] with
+ * null cols/rows → [Pane.grid3d] = null), then votes the native size at
+ * [SizePriority.NORMAL] so the PTY leaves the THREE_D tier and rejoins the 2D
+ * clients' aggregation. No-op unless a pane is settled at the front.
+ *
+ * Bound to `/` in [buildKeyHandler] (adjacent to the `,`/`.` grid keys). If the
+ * pane's native grid was never captured this session it falls back to the term's
+ * current size (nothing to restore), still clearing the override.
+ *
+ * @see rememberGrid3dOverride @see setPaneGrid
+ */
+internal fun restoreFrontNativeGrid() {
+    val fi = frontIndex()
+    if (spikeSettledIndex != fi || fi < 0) {
+        console.warn("[world3d-spike] restore-native ignored: front pane not settled (front=$fi settled=$spikeSettledIndex)")
+        return
+    }
+    restorePaneNativeGrid(spikePanes.getOrNull(fi) ?: return)
+}
+
+/**
+ * Free-flight counterpart of [restoreFrontNativeGrid]: clears the 3D grid
+ * override on the pane **nearest the camera** and reflows it to native. @see
+ * restorePaneNativeGrid
+ */
+internal fun restoreNearestNativeGrid() {
+    restorePaneNativeGrid(actionTargetPane() ?: return)
+}
+
+/**
+ * Shared body of the "restore native grid" hotkey: clear [p]'s 3D grid override
+ * locally and on the server, then reflow it back to its native (2D) size with a
+ * [SizePriority.NORMAL] vote so the PTY leaves the THREE_D tier. No-op for a
+ * non-terminal pane. Falls back to the term's current size if the native grid was
+ * never captured this session (still clearing the override).
+ *
+ * @param p the pane to restore. @see restoreFrontNativeGrid @see restoreNearestNativeGrid
+ */
+internal fun restorePaneNativeGrid(p: RingPane) {
+    val term = p.term ?: return
+    val hadOverride = p.paneId in spikeGrid3dByPane
+    spikeGrid3dByPane.remove(p.paneId)
+    runCatching { launchCmd(WindowCommand.SetPaneGrid3d(p.paneId, null, null)) }
+    val native = spikeNativeGridByPane[p.paneId] ?: (term.cols to term.rows)
+    console.log(
+        "[world3d-spike] restore-native: pane ${p.paneId} ${term.cols}x${term.rows} -> " +
+            "${native.first}x${native.second} (hadOverride=$hadOverride)"
+    )
+    setPaneGrid(p, native.first, native.second, reassert = true, votePriority = SizePriority.NORMAL)
+}
+
+/**
+ * Revert every overridden pane to its native grid as the world closes: for each
+ * pane still carrying a 3D override with a live PTY socket, vote its native size
+ * at [SizePriority.NORMAL] so the PTY drops the THREE_D tier and 2D shows the
+ * native size again. The override itself is left in [spikeGrid3dByPane] /
+ * [Pane.grid3d] so re-entering the world restores it. Best-effort — a crashed
+ * app that never runs this still reverts, because the closing sockets drop their
+ * THREE_D votes server-side.
+ *
+ * Called from [closeWorld3dSpike] before the ring panes (and their sockets) are
+ * disposed.
+ *
+ * @see closeWorld3dSpike @see ensureGrid3dApplied
+ */
+internal fun revertGrid3dOverridesOnClose() {
+    for (p in spikePanes) {
+        if (p.paneId !in spikeGrid3dByPane) continue
+        val native = spikeNativeGridByPane[p.paneId] ?: continue
+        val sock = p.entry?.socket ?: p.mirrorSocket ?: continue
+        console.log("[world3d-spike] world close: reverting pane ${p.paneId} to native ${native.first}x${native.second}")
+        sendResizeVote(sock, native.first, native.second, SizePriority.NORMAL)
     }
 }
 
@@ -494,9 +653,13 @@ internal fun reformatPane(p: RingPane) {
     // Grow first when there is headroom (gentler: no transient scroll-up), else
     // shrink; either way the return trip lands exactly on the original grid.
     val step = if (rows + 1 <= GRID_MAX_ROWS) 1 else -1
-    setPaneGrid(p, cols, rows + step, reassert = true)
+    // A reformat is a *redraw at the current size*, not a resize: re-assert at the
+    // pane's existing tier (THREE_D if it carries a 3D override, else NORMAL) rather
+    // than persisting a new override.
+    val prio = paneVotePriority(p)
+    setPaneGrid(p, cols, rows + step, reassert = true, votePriority = prio)
     window.setTimeout({
-        setPaneGrid(p, cols, rows, reassert = true)
+        setPaneGrid(p, cols, rows, reassert = true, votePriority = prio)
         // Reformat means "show me this pane properly": land on the live tail
         // unconditionally. The jiggle's resizes (and any interleaved server
         // Size follows) can leave the viewport a line above the cursor — the

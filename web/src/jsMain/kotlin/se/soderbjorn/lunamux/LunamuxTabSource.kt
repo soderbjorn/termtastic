@@ -25,6 +25,16 @@ import se.soderbjorn.darkness.web.shell.TabSource
 import se.soderbjorn.lunamux.client.WindowSocket
 import se.soderbjorn.lunamux.client.WindowStateRepository
 import se.soderbjorn.lunamux.WindowCommand
+import se.soderbjorn.lunamux.WorldConfig
+
+/**
+ * The active world of a server config (by `activeWorldId`), falling back to
+ * the first world, or `null` when the config carries no worlds (a legacy
+ * pre-1.9 server / flat fixture). The toolkit shell renders exactly this
+ * world's tabs; the world switcher lists all of [WindowConfig.worlds].
+ */
+internal fun WindowConfig.activeWorldOrNull(): WorldConfig? =
+    worlds.firstOrNull { it.id == activeWorldId } ?: worlds.firstOrNull()
 
 /**
  * Inline SVGs used by the "New pane" hover dropdown. Same glyphs that
@@ -43,6 +53,8 @@ private const val NEW_PANE_FILE_BROWSER_SVG =
     """<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9 a1 1 0 0 1 1-1 h7 l2 3 h13 a1 1 0 0 1 1 1 v13 a1 1 0 0 1 -1 1 H5 a1 1 0 0 1 -1 -1 Z"/><line x1="9" y1="17" x2="23" y2="17"/><line x1="9" y1="21" x2="19" y2="21"/></svg>"""
 private const val NEW_PANE_GIT_SVG =
     """<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="2.5"/><circle cx="10" cy="24" r="2.5"/><circle cx="22" cy="16" r="2.5"/><line x1="10" y1="10.5" x2="10" y2="21.5"/><path d="M10 10.5 C10 16 16 16 19.5 16"/></svg>"""
+private const val NEW_PANE_WEBBROWSER_SVG =
+    """<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="16" cy="16" r="12"/><ellipse cx="16" cy="16" rx="5" ry="12"/><line x1="4" y1="16" x2="28" y2="16"/><line x1="6" y1="10" x2="26" y2="10"/><line x1="6" y1="22" x2="26" y2="22"/></svg>"""
 
 /**
  * Builds a [TabSource] backed by Lunamux's server-pushed
@@ -118,9 +130,19 @@ fun lunamuxTabSource(
                 // reach the toolkit so it can decide whether to render
                 // the row. The two server flags map 1:1 onto the
                 // toolkit snapshot fields.
+                // Render the ACTIVE world's tabs (worlds are the source of
+                // truth for ≥1.9 clients); fall back to the legacy flat tabs
+                // when the config carries no worlds.
+                val world = config.activeWorldOrNull()
+                val worldTabs = world?.tabs ?: config.tabs
+                val worldActiveTab = world?.activeTabId ?: config.activeTabId
+                // Repaint to the active world's theme pair when it changes
+                // (no-op otherwise). Runs before the tab push so the chrome
+                // rebuild below already carries the new theme.
+                applyActiveWorldTheme(config)
                 push(
                     TabListSnapshot(
-                        tabs = config.tabs.map { tab ->
+                        tabs = worldTabs.map { tab ->
                             TabSnapshotEntry(
                                 id = tab.id,
                                 label = tab.title,
@@ -132,7 +154,12 @@ fun lunamuxTabSource(
                                 isHiddenFromSidebar = tab.isHiddenFromSidebar,
                             )
                         },
-                        activeTabId = config.activeTabId,
+                        activeTabId = worldActiveTab,
+                        // Tag the snapshot with its world so the toolkit keys pane
+                        // geometry per world (see AppShellSpec.worldLayoutProvider):
+                        // switching worlds now swaps a saved layout slice instead of
+                        // pruning the previous world's panes as "closed".
+                        worldId = world?.id ?: config.activeWorldId,
                     )
                 )
                 // Paint freshly-mounted status badges with the most
@@ -221,14 +248,14 @@ fun lunamuxTabSource(
         buildList {
             add(PaneAddMenuItem(
                 id = "terminal",
-                label = "New Terminal",
+                label = "New terminal",
                 iconHtml = NEW_PANE_TERMINAL_SVG,
             ) {
                 launchCmd(WindowCommand.AddPaneToTab(tabId = tabId, cwd = cwdForNewPaneIn(tabId)))
             })
             add(PaneAddMenuItem(
                 id = "terminal-link",
-                label = "New Terminal link",
+                label = "New terminal link",
                 iconHtml = NEW_PANE_LINK_SVG,
             ) {
                 openTerminalLinkPicker(emptyTabId = tabId, anchorPaneId = savedFocusedPaneId(tabId))
@@ -236,7 +263,7 @@ fun lunamuxTabSource(
             if (isExperimentalFileBrowserEnabled()) {
                 add(PaneAddMenuItem(
                     id = "file-browser",
-                    label = "New File Browser",
+                    label = "New file browser",
                     iconHtml = NEW_PANE_FILE_BROWSER_SVG,
                 ) {
                     launchCmd(WindowCommand.AddFileBrowserToTab(tabId = tabId, cwd = cwdForNewPaneIn(tabId)))
@@ -249,6 +276,18 @@ fun lunamuxTabSource(
                     iconHtml = NEW_PANE_GIT_SVG,
                 ) {
                     launchCmd(WindowCommand.AddGitToTab(tabId = tabId, cwd = cwdForNewPaneIn(tabId)))
+                })
+            }
+            if (isExperimentalWebBrowserEnabled()) {
+                add(PaneAddMenuItem(
+                    id = "web-browser",
+                    label = "New web browser",
+                    iconHtml = NEW_PANE_WEBBROWSER_SVG,
+                ) {
+                    // No cwd: a web pane isn't filesystem-rooted. Open on the
+                    // client's blank start page (url=null); the user types a
+                    // URL in the pane's own address bar.
+                    launchCmd(WindowCommand.AddWebBrowserToTab(tabId = tabId, url = null))
                 })
             }
         }

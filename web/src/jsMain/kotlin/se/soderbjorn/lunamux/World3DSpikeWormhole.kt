@@ -104,7 +104,9 @@ private fun smoother(t: Double): Double {
 
 /**
  * Whether a wormhole spawn may be armed for the pane(s) just built by [reconcileRing]:
- * the flag is on, the scene is up, **exactly one** pane was newly built (a burst — e.g.
+ * the feature flag is on, **fancy animations are enabled** ([spikeFancyAnimations] — with
+ * them off the pane just grows in on the ring, no vortex), the scene is up, **exactly one**
+ * pane was newly built (a burst — e.g.
  * a workspace restore — falls back to the plain grow-in so we never fire a camera
  * hijack per pane), no wormhole is already running, and the camera is idle (not flying,
  * not mid-tour). Fires during the demo movie too — its `n` beat is a genuine single
@@ -118,6 +120,7 @@ private fun smoother(t: Double): Double {
  */
 internal fun wormholeSpawnEligible(newBornCount: Int): Boolean =
     WORMHOLE_SPAWN_ENABLED &&
+        spikeFancyAnimations &&
         newBornCount == 1 &&
         spikeWormholes.isEmpty() &&
         spikeCssScene != null &&
@@ -371,7 +374,7 @@ internal fun clearWormholes() {
  *   flash element, and the wrapper element (for the portal fade + teardown).
  * @see armWormholeSpawn @see tickWormhole
  */
-private fun buildWormholeVortex(chrome: SpikeChrome): WormholeVortex {
+internal fun buildWormholeVortex(chrome: SpikeChrome): WormholeVortex {
     val group = Group()
     val d = WORMHOLE_DIAMETER
 
@@ -392,13 +395,15 @@ private fun buildWormholeVortex(chrome: SpikeChrome): WormholeVortex {
         return el
     }
 
-    // Structural backdrop — the dark eye, a faint blue body, and a feathered rim, so the
-    // vortex has a black hole at its heart and dissolves into space at its edge. Normal
-    // blend (it darkens); the cloud layers screen over it.
+    // Structural backdrop — the dark eye and a dark, near-neutral body that dissolves into
+    // space well before the rim, so the vortex has a black hole at its heart but adds NO
+    // blue glow of its own: the blue is the screen-blended cloud gas alone. (A saturated
+    // blue body here read as an ugly smooth halo ring around the disc, glowing wherever the
+    // gas was thin.) Normal blend (it darkens); the cloud layers screen over it.
     val backdrop = document.createElement("div") as HTMLElement
     backdrop.style.cssText = "width:${d * 1.04}px;height:${d * 1.04}px;border-radius:50%;" +
         "pointer-events:none;background:radial-gradient(circle,#000000 0%,#000208 15%," +
-        "rgba(12,30,66,0.55) 33%,rgba(24,58,120,0.4) 52%,rgba(8,18,42,0.22) 74%,transparent 90%);"
+        "rgba(6,14,32,0.5) 34%,rgba(6,14,32,0.24) 56%,transparent 74%);"
     add(backdrop)
 
     // Two turbulent-gas cloud layers, counter-rotated by the tick. Different noise scale
@@ -470,7 +475,7 @@ private fun cloudLayer(diameter: Double, seed: Int, baseFreq: String, octaves: I
 }
 
 /** Bundle returned by [buildWormholeVortex]. */
-private class WormholeVortex(
+internal class WormholeVortex(
     val group: Group,
     val rings: List<HTMLElement>,
     val twists: DoubleArray,

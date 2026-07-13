@@ -265,6 +265,42 @@ internal object PaneManager {
         return if (changed) cfg.copy(tabs = newTabs) else null
     }
 
+    /**
+     * Set (or clear) the persisted 3D-world grid override on [paneId].
+     *
+     * Called from `WindowState.setPaneGrid3d` when the 3D world grows/shrinks a
+     * pane's grid there (or the "restore native grid" hotkey clears it). Both
+     * [cols] and [rows] `null` clears the override ([Pane.grid3d] → `null`);
+     * otherwise the pair is clamped to a sane floor/ceiling so a garbage value
+     * can't be persisted (the 3D world already clamps to its own tighter
+     * display range, this is just defence in depth).
+     *
+     * @param cfg the current config
+     * @param paneId the pane whose 3D grid override to set
+     * @param cols the override column count, or `null` to clear
+     * @param rows the override row count, or `null` to clear
+     * @return the updated config, or `null` when the pane is missing or the
+     *   override is unchanged
+     * @see Pane.grid3d
+     */
+    fun setPaneGrid3d(cfg: WindowConfig, paneId: String, cols: Int?, rows: Int?): WindowConfig? {
+        val target: PaneGrid? =
+            if (cols == null || rows == null) null
+            else PaneGrid(cols.coerceIn(1, 1000), rows.coerceIn(1, 1000))
+        var changed = false
+        val newTabs = cfg.tabs.map { tab ->
+            val idx = tab.panes.indexOfFirst { it.leaf.id == paneId }
+            if (idx < 0) return@map tab
+            val current = tab.panes[idx]
+            if (current.grid3d == target) return@map tab
+            changed = true
+            val newPanes = tab.panes.toMutableList()
+            newPanes[idx] = current.copy(grid3d = target)
+            tab.copy(panes = newPanes)
+        }
+        return if (changed) cfg.copy(tabs = newTabs) else null
+    }
+
     /** Bring [paneId] to the top of its tab's stacking order. */
     fun raisePane(cfg: WindowConfig, paneId: String): WindowConfig? {
         var changed = false
@@ -558,6 +594,45 @@ internal object PaneManager {
         fun mutate(leaf: LeafNode): LeafNode {
             if (leaf.id != paneId) return leaf
             val current = leaf.content as? GitContent ?: return leaf
+            val next = transform(current)
+            if (next == current) return leaf
+            newState = next
+            return leaf.copy(content = next)
+        }
+        val newCfg = cfg.copy(
+            tabs = cfg.tabs.map { tab ->
+                tab.copy(
+                    panes = tab.panes.map { p -> p.copy(leaf = mutate(p.leaf)) },
+                )
+            }
+        )
+        val ns = newState ?: return null
+        return newCfg to ns
+    }
+
+    /**
+     * Apply [transform] to the [WebBrowserContent] of pane [paneId] if it
+     * exists and is currently a web-browser pane. Returns the new content and
+     * the new config when the transform produced a change; `null` otherwise.
+     *
+     * Called from [WindowState.setWebBrowserUrl] when the Electron webview
+     * commits a navigation or the page title changes.
+     *
+     * @param cfg the current window config
+     * @param paneId the web pane to mutate
+     * @param transform pure transform over the pane's current content
+     * @return the updated config paired with the new content, or `null`
+     * @see updateGitContent
+     */
+    fun updateWebBrowserContent(
+        cfg: WindowConfig,
+        paneId: String,
+        transform: (WebBrowserContent) -> WebBrowserContent,
+    ): Pair<WindowConfig, WebBrowserContent>? {
+        var newState: WebBrowserContent? = null
+        fun mutate(leaf: LeafNode): LeafNode {
+            if (leaf.id != paneId) return leaf
+            val current = leaf.content as? WebBrowserContent ?: return leaf
             val next = transform(current)
             if (next == current) return leaf
             newState = next

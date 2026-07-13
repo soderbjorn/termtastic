@@ -48,9 +48,9 @@ import kotlinx.coroutines.sync.withLock
 class DemoTerminalSession internal constructor(
     private val spec: DemoSessionSpec,
     private val scope: CoroutineScope,
-) {
+) : DemoSession {
     /** The fixture session id, mirroring [DemoSessionSpec.sessionId]. */
-    val sessionId: String get() = spec.sessionId
+    override val sessionId: String get() = spec.sessionId
 
     /**
      * Simulated-agent activity callback: invoked with `true` when a script
@@ -132,7 +132,7 @@ class DemoTerminalSession internal constructor(
      * referencing this session closes — the demo equivalent of the real
      * server killing the PTY process.
      */
-    fun close() {
+    override fun close() {
         inputChannel.close()
         inputJob.cancel()
         scriptJob?.cancel()
@@ -188,7 +188,7 @@ class DemoTerminalSession internal constructor(
      *
      * Called by [DemoServer.resetToFixtures] before the demo tour plays.
      */
-    suspend fun restart() {
+    override suspend fun restart() {
         scriptJob?.cancel()
         scriptJob = null
         lineBuffer.clear()
@@ -216,7 +216,7 @@ class DemoTerminalSession internal constructor(
      *
      * @return a flow of output byte frames for one attaching client.
      */
-    fun output(): Flow<ByteArray> = live.onSubscription {
+    override fun output(): Flow<ByteArray> = live.onSubscription {
         val snapshot = lock.withLock { scrollback.toString() }
         if (snapshot.isNotEmpty()) emit(snapshot.encodeToByteArray())
     }
@@ -227,7 +227,7 @@ class DemoTerminalSession internal constructor(
      *
      * @param bytes UTF-8 input bytes.
      */
-    fun input(bytes: ByteArray) {
+    override fun input(bytes: ByteArray) {
         inputChannel.trySend(bytes.decodeToString())
     }
 
@@ -237,7 +237,7 @@ class DemoTerminalSession internal constructor(
      *
      * @param text the typed/pasted text (may include control characters).
      */
-    fun inputText(text: String) {
+    override fun inputText(text: String) {
         inputChannel.trySend(text)
     }
 

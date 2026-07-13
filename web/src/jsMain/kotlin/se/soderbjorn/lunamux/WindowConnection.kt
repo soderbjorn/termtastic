@@ -225,8 +225,8 @@ private fun isOnlyFocusChange(prev: dynamic, next: dynamic): Boolean {
  * @param config the dynamic server configuration object
  */
 private fun refocusActivePane(config: dynamic) {
-    val activeTabId = config.activeTabId as? String ?: return
-    val tabsArr = config.tabs as? Array<dynamic> ?: return
+    val activeTabId = activeWorldActiveTabIdDyn(config) ?: return
+    val tabsArr = activeWorldTabsDyn(config)
     val activeTab = tabsArr.firstOrNull { (it.id as? String) == activeTabId } ?: return
     if ((activeTab.focusedPaneId as? String) == null) return
     focusActivePaneNow()
@@ -260,8 +260,8 @@ private fun refocusActivePane(config: dynamic) {
 internal fun focusActivePaneNow() {
     kotlinx.browser.window.requestAnimationFrame {
         val cfg: dynamic = currentConfig ?: return@requestAnimationFrame
-        val tabs = cfg.tabs as? Array<dynamic> ?: return@requestAnimationFrame
-        val nowActiveId = cfg.activeTabId as? String ?: return@requestAnimationFrame
+        val tabs = activeWorldTabsDyn(cfg)
+        val nowActiveId = activeWorldActiveTabIdDyn(cfg) ?: return@requestAnimationFrame
         val nowTab = tabs.firstOrNull { (it.id as? String) == nowActiveId } ?: return@requestAnimationFrame
         val paneId = (nowTab.focusedPaneId as? String) ?: return@requestAnimationFrame
         val entry = terminals[paneId] ?: return@requestAnimationFrame
@@ -321,10 +321,51 @@ private fun resyncVisibleTerminalsScroll() {
  * @param config the dynamic server config object.
  * @return a stable signature that changes iff something structural changed.
  */
+/**
+ * The **active world's** tab array from a dynamic server config, falling back
+ * to the legacy flat `config.tabs` for a world-less (pre-1.9-shaped) config.
+ * The raw-dynamic mirror of [WindowConfig.activeWorldOrNull]`?.tabs`, used by
+ * the post-toolkit housekeeping that must follow the active world rather than
+ * the default-world legacy mirror.
+ *
+ * @param config the dynamic server config object.
+ * @return the active world's tabs (never null; empty array when none).
+ */
+private fun activeWorldTabsDyn(config: dynamic): Array<dynamic> {
+    val worlds = config.worlds as? Array<dynamic>
+    if (worlds != null && worlds.isNotEmpty()) {
+        val activeId = config.activeWorldId as? String
+        val world = worlds.firstOrNull { (it.id as? String) == activeId } ?: worlds[0]
+        return (world.tabs as? Array<dynamic>) ?: emptyArray()
+    }
+    return (config.tabs as? Array<dynamic>) ?: emptyArray()
+}
+
+/**
+ * The **active world's** active tab id (falls back to legacy `config.activeTabId`).
+ *
+ * @param config the dynamic server config object.
+ * @return the active world's focused tab id, or `null` when none.
+ */
+private fun activeWorldActiveTabIdDyn(config: dynamic): String? {
+    val worlds = config.worlds as? Array<dynamic>
+    if (worlds != null && worlds.isNotEmpty()) {
+        val activeId = config.activeWorldId as? String
+        val world = worlds.firstOrNull { (it.id as? String) == activeId } ?: worlds[0]
+        return (world.activeTabId as? String) ?: (config.activeTabId as? String)
+    }
+    return config.activeTabId as? String
+}
+
 private fun structuralConfigSignature(config: dynamic): String {
     val sb = StringBuilder()
-    sb.append(config.activeTabId as? String ?: "")
-    val tabs = config.tabs as? Array<dynamic> ?: return sb.toString()
+    // Lead with the active world so a world switch always changes the
+    // signature (its tabs differ, but this guarantees it even if two worlds
+    // happened to share a structure) — otherwise the fast-path bail below
+    // would skip the refocus / scroll repair on every world round-trip.
+    sb.append(config.activeWorldId as? String ?: "")
+    sb.append("#").append(activeWorldActiveTabIdDyn(config) ?: "")
+    val tabs = activeWorldTabsDyn(config)
     for (tab in tabs) {
         sb.append("|t:").append(tab.id as? String ?: "")
         sb.append(",ti:").append(tab.title as? String ?: "")
@@ -337,6 +378,24 @@ private fun structuralConfigSignature(config: dynamic): String {
     return sb.toString()
 }
 
+/**
+ * The config [renderConfig] last processed, used solely as the baseline for its
+ * structural fast-path comparison.
+ *
+ * Deliberately NOT the shared [currentConfig]: `LunamuxTabSource`'s config
+ * collector also writes [currentConfig] (for synchronous pane lookups) and
+ * *frequently wins the race* to process a given server push first (see its own
+ * comment). If [renderConfig] read `currentConfig` as its "previous" baseline,
+ * that collector would already have overwritten it with the *incoming* config —
+ * so the signature compare would see `new == new` and take the fast-path bail on
+ * a genuinely structural change (tab / world switch), skipping
+ * [refocusActivePane]. The result was a switched-to terminal whose xterm textarea
+ * never regained DOM focus (cursor stranded in `<body>`; a click was needed).
+ * A private, single-writer baseline makes the prev/next compare correct
+ * regardless of collector ordering.
+ */
+private var lastRenderedConfig: dynamic = null
+
 fun renderConfig(config: dynamic) {
     // Post-toolkit-migration: the toolkit's `mountAppShell` (driven by
     // `LunamuxTabSource`) owns the entire chrome rebuild — top bar,
@@ -345,14 +404,40 @@ fun renderConfig(config: dynamic) {
     // a side effect: snapshot the live config for synchronous lookups
     // (`mountPaneContent`, `savedFocusedPaneId`, `countPanesForSession`)
     // and prune any PTY entries whose pane is no longer in the config.
-    val prevConfig = currentConfig
+    //
+    // The fast-path baseline is [lastRenderedConfig], not [currentConfig]:
+    // the latter is also written by `LunamuxTabSource` (which usually
+    // processes the same push first), which would corrupt the prev/next
+    // comparison. See [lastRenderedConfig].
+    val prevConfig = lastRenderedConfig
+    lastRenderedConfig = config
     currentConfig = config
-    val tabsArr = config.tabs as? Array<dynamic> ?: return
 
+    // Live panes = every pane across ALL worlds, not just the active/default
+    // one. A terminal is torn down only when its pane is gone from *every*
+    // world — so switching worlds never disposes another world's still-live
+    // sessions (their agents keep running and keep being status-detected
+    // server-side; see StateDetector). This MUST stay a union while the
+    // signature above follows the active world: pruning against the active
+    // world alone would dispose every inactive world's terminals on switch.
     val livePanes = HashSet<String>()
-    for (tab in tabsArr) {
-        val panes = tab.panes as? Array<dynamic> ?: emptyArray()
-        for (p in panes) livePanes.add(p.leaf.id as String)
+    run {
+        val worlds = config.worlds as? Array<dynamic>
+        if (worlds != null && worlds.isNotEmpty()) {
+            for (w in worlds) {
+                val wtabs = w.tabs as? Array<dynamic> ?: continue
+                for (tab in wtabs) {
+                    val panes = tab.panes as? Array<dynamic> ?: continue
+                    for (p in panes) (p.leaf.id as? String)?.let { livePanes.add(it) }
+                }
+            }
+        } else {
+            val tabsArr = config.tabs as? Array<dynamic> ?: emptyArray()
+            for (tab in tabsArr) {
+                val panes = tab.panes as? Array<dynamic> ?: continue
+                for (p in panes) (p.leaf.id as? String)?.let { livePanes.add(it) }
+            }
+        }
     }
     // Agent badges can change without any structural change (an MCP agent
     // annotating a window), so sync them before the fast-path bail below.
@@ -382,6 +467,15 @@ fun renderConfig(config: dynamic) {
     }
     // Agent transcript panes are pruned the same way terminal entries are.
     pruneAgentTranscripts(livePanes)
+    // Web panes hold a live <webview> guest (a whole running page). Unlike the
+    // lightweight file-browser/git DOM caches, a leaked webview keeps loading
+    // and consuming memory, so drop the cell and detach it (which destroys the
+    // guest) as soon as its pane leaves the config.
+    val staleWebPanes = webBrowserPaneViews.keys.filter { it !in livePanes }
+    for (pid in staleWebPanes) {
+        val view = webBrowserPaneViews.remove(pid) ?: continue
+        try { view.root.remove() } catch (_: Throwable) {}
+    }
     updateAggregateStatus()
     // Label-only fast path. When nothing structural changed (only pane titles
     // did — e.g. a program-set OSC title tick while a terminal task runs), the

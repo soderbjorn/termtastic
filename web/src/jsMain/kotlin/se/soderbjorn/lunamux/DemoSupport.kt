@@ -33,6 +33,7 @@ import org.khronos.webgl.Uint8Array
 import se.soderbjorn.darkness.core.Appearance
 import se.soderbjorn.darkness.core.PersistKeys
 import se.soderbjorn.darkness.core.ThemeSnapshotV2
+import se.soderbjorn.lunamux.client.demo.DemoSession
 import se.soderbjorn.lunamux.client.demo.DemoTerminalSession
 
 /**
@@ -234,13 +235,49 @@ internal fun connectDemoPane(entry: TerminalEntry) {
     }
     entry.sendInput = ::sendInput
     entry.term.onData { data -> sendInput(data) }
-    entry.term.onResize { _ -> updateOobOverlay(entry) }
+
+    // Notify size-aware sessions (the IRC TUI reflows its frame to fill the pane;
+    // fixed-frame shell/Claude sessions ignore it) of the terminal's live cell
+    // grid — the web demo attaches straight to the DemoSession and never goes
+    // through DemoPtySocket, so this is where the resize has to be forwarded.
+    // Push the current size once now, then on every refit.
+    fun pushResize(cols: Int, rows: Int) {
+        if (cols > 0 && rows > 0) GlobalScope.launch { session.resize(cols, rows) }
+    }
+    pushResize(entry.term.cols, entry.term.rows)
+    entry.term.onResize { size ->
+        val d = size.asDynamic()
+        pushResize((d.cols as? Number)?.toInt() ?: entry.term.cols, (d.rows as? Number)?.toInt() ?: entry.term.rows)
+        updateOobOverlay(entry)
+    }
 
     entry.demoJob = GlobalScope.launch {
         session.output().collect { bytes ->
             writeHoldingScroll(entry, toUint8(bytes))
         }
     }
+}
+
+/**
+ * Forward a demo pane's **current terminal grid** to its [DemoSession] so a
+ * size-aware session (the IRC TUI) reflows its full-screen frame to fill the
+ * pane. Called from the terminal [ResizeObserver] in [buildTerminalPaneView]
+ * right after each refit — the reliable resize signal, since the demo path does
+ * not go through the real socket's `onResize`→resize plumbing and xterm's own
+ * `onResize` can miss the fit that the observer just performed. No-op outside
+ * demo mode, before the grid is measurable, or for fixed-frame sessions (their
+ * [DemoSession.resize] default ignores it).
+ *
+ * @param entry the terminal registry entry whose grid changed.
+ */
+internal fun pushDemoSessionResize(entry: TerminalEntry) {
+    if (!isDemoClient) return
+    val demo = lunamuxClient.demoServer ?: return
+    val cols = entry.term.cols
+    val rows = entry.term.rows
+    if (cols <= 0 || rows <= 0) return
+    val session = demo.session(entry.sessionId)
+    GlobalScope.launch { session.resize(cols, rows) }
 }
 
 /**
@@ -255,7 +292,7 @@ internal fun connectDemoPane(entry: TerminalEntry) {
 @OptIn(DelicateCoroutinesApi::class)
 internal fun attachDemoPreview(previewTerm: Terminal, sessionId: String) {
     val demo = lunamuxClient.demoServer ?: return
-    val session: DemoTerminalSession = demo.session(sessionId)
+    val session: DemoSession = demo.session(sessionId)
     GlobalScope.launch {
         // Take just the first frame (the snapshot) and stop collecting.
         var done = false

@@ -20,9 +20,12 @@
  *     it stays **fully lit** (no dim veil) — all without changing the pane's size or place.
  *
  * A collective **reactor load** (summed ring charge) faintly warms the sky (gated on the
- * toggle). Two top-left **status pills** — shown *independently* of the toggle, and of each
- * other — report how many agents await your answer (amber) and how many are running (blue);
- * each pill disappears when its count is zero.
+ * toggle). A top-left **status column** — shown *independently* of the toggle — carries one
+ * small box **per world** that has any waiting/working panes: the world's name in small text
+ * atop a single "N working • M waiting" line (only the non-zero halves shown), the box chrome
+ * (border + name) themed with that world's own accent ([resolvedThemeForWorld]). A world's box
+ * disappears when it has no active panes. Counts span *all* worlds (not just the one on
+ * screen), read from the global session-state map keyed by `sessionId`.
  *
  * **Layering, and why screen-space:** the pane wrapper is `overflow:hidden`, so anything
  * that must bleed *past* the pane edge cannot be a DOM child of it. The outward reactor
@@ -55,6 +58,7 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import org.w3c.dom.HTMLCanvasElement
 import org.w3c.dom.HTMLElement
+import se.soderbjorn.darkness.core.argbToCss
 import se.soderbjorn.lunamux.three.PerspectiveCamera
 
 /**
@@ -88,17 +92,36 @@ internal val spikeWarpPings: MutableList<WarpPing> = mutableListOf()
 internal var spikeWarpSkyTint: HTMLElement? = null
 
 /**
- * The top-left **status row** holding the two independent count pills side by side; `null`
+ * The top-left **status column** holding one per-world status box (stacked top→down); `null`
  * until built. Built + updated **independently of [spikeStatusIndication]** — the world always
- * shows how many agents want you and how many are running. @see ensureWarpBanner @see updateWarpBanner
+ * shows, for every world with activity, how many of its agents want you and how many are
+ * running. @see ensureWarpBanner @see updateWarpWorldBoxes
  */
-internal var spikeWarpBannerRow: HTMLElement? = null
+internal var spikeWarpBannerCol: HTMLElement? = null
 
-/** The amber **"N awaiting your answer"** pill; shown only while any agent awaits you, else hidden. @see updateWarpBanner */
-internal var spikeWarpAwaitPill: HTMLElement? = null
+/**
+ * One live per-world status box in [spikeWarpBannerCol] — the world's name atop a
+ * "N working • M waiting" line. Keyed by world id in [spikeWarpWorldBoxes], created on demand
+ * and torn down when its world's activity drops to zero. Caches the last-applied accent + count
+ * text so the per-frame [updateWarpWorldBoxes] pass only touches the DOM when something changed.
+ *
+ * @property root the box element (appended to [spikeWarpBannerCol]).
+ * @property nameEl the small world-name line at the top.
+ * @property countEl the "N working • M waiting" line below it.
+ * @property lastAccent the accent last written to the box chrome, or `null` if never set.
+ * @property lastText the plain-text count line last rendered, for change detection.
+ * @see updateWarpWorldBoxes
+ */
+internal class WorldStatusBox(
+    val root: HTMLElement,
+    val nameEl: HTMLElement,
+    val countEl: HTMLElement,
+    var lastAccent: String? = null,
+    var lastText: String? = null,
+)
 
-/** The blue **"M working"** pill; shown only while any agent is running, else hidden. @see updateWarpBanner */
-internal var spikeWarpWorkPill: HTMLElement? = null
+/** Live per-world status boxes, keyed by world id; reconciled every frame by [updateWarpWorldBoxes]. */
+internal val spikeWarpWorldBoxes: MutableMap<String, WorldStatusBox> = mutableMapOf()
 
 /** Pre-built inner-heat gradient for the amber HOLD state — constant, so cached here to skip a per-frame re-parse. @see tickWarpCore */
 private val WARP_HEAT_AMBER_BG = warpHeatGradient(WARP_AMBER_COLOR)
@@ -293,29 +316,23 @@ internal fun tickWarpCore(p: RingPane, phaseIdx: Int, working: Boolean, waiting:
 /**
  * Screen-space + HUD driver of the warp-core effect, called once per frame from the render
  * loop **after** `css.render` (so the camera matrices its projection uses are current),
- * mirroring [tickPhaser]. It first updates the top-center status banner (awaiting/working
- * counts) — **regardless of [spikeStatusIndication]** — then, only when the reactor FX is on,
- * clears the warp canvas, paints every discharging pane's bloom + thruster plume and every
- * live sonar ping, and updates the collective reactor-load meter + warm sky tint. When the
- * FX is off it hides the canvas + reactor HUD (but not the banner) and returns cheaply.
+ * mirroring [tickPhaser]. It first updates the top-left per-world status boxes (each world's
+ * working/waiting counts) — **regardless of [spikeStatusIndication]** — then, only when the
+ * reactor FX is on, clears the warp canvas, paints every discharging pane's bloom + thruster
+ * plume and every live sonar ping, and updates the collective reactor-load meter + warm sky
+ * tint. When the FX is off it hides the canvas + reactor HUD (but not the boxes) and returns
+ * cheaply.
  *
  * @param camera the shared spike camera, used to project each pane to the screen.
  * @see tickWarpCore @see clearWarpCore
  */
 internal fun tickWarpCoreOverlay(camera: PerspectiveCamera) {
-    // --- top-of-world status banner: awaiting + working counts, shown REGARDLESS of the
-    //     reactor-FX flag (it is agent-status info, not a warp visual). Resolved from the
-    //     live session state map, honouring the manual override maps like the render loop. ---
+    // --- top-of-world status boxes: one per world with waiting/working panes, shown REGARDLESS
+    //     of the reactor-FX flag (it is agent-status info, not a warp visual). Counts span ALL
+    //     worlds (not just the one on screen) via the resident config + global session-state map,
+    //     honouring the manual override maps like the render loop. ---
     ensureWarpBanner()
-    val states = runCatching { lunamuxClient.windowState.states.value }.getOrNull()
-    var waitingN = 0
-    var workingN = 0
-    for (p in spikePanes) {
-        val waiting = spikeWaitingOverride[p.paneId] ?: (states?.get(p.sessionId) == "waiting")
-        val working = spikeWorkingOverride[p.paneId] ?: (states?.get(p.sessionId) == "working")
-        if (waiting) waitingN++ else if (working) workingN++
-    }
-    updateWarpBanner(waitingN, workingN)
+    updateWarpWorldBoxes(computeWorldStatuses())
 
     // --- the reactor FX + sky tint are gated on the REACTOR status style. ---
     if (spikeStatusIndication != StatusIndication.REACTOR) {
@@ -366,24 +383,172 @@ internal fun tickWarpCoreOverlay(camera: PerspectiveCamera) {
 }
 
 /**
- * Updates the two **status pills** with the live counts, called every frame by
- * [tickWarpCoreOverlay] regardless of [spikeStatusIndication]. The amber "awaiting" pill shows
- * only while any agent is blocked on you; the blue "working" pill shows only while any agent
- * is running; each disappears independently when its count drops to zero.
+ * A single world's agent-activity tally — the input [updateWarpWorldBoxes] renders into one box.
+ * Only produced (by [computeWorldStatuses]) for worlds with at least one waiting/working pane.
  *
- * @param waitingN how many panes' agents are blocked awaiting your input.
- * @param workingN how many panes' agents are currently running.
- * @see ensureWarpBanner
+ * @property id        the world's stable id (the box key).
+ * @property name      the world's display name (the box's small heading).
+ * @property selection the world's theme pair, for accent resolution ([resolvedThemeForWorld]).
+ * @property working   how many of the world's panes have a running agent.
+ * @property waiting   how many of the world's panes have an agent blocked awaiting input.
  */
-private fun updateWarpBanner(waitingN: Int, workingN: Int) {
-    spikeWarpAwaitPill?.let {
-        it.style.display = if (waitingN > 0) "flex" else "none"
-        if (waitingN > 0) it.textContent = "$waitingN awaiting answer"
+private class WorldStatus(
+    val id: String,
+    val name: String,
+    val selection: WorldThemeSelection?,
+    val working: Int,
+    val waiting: Int,
+)
+
+/**
+ * Tallies every world's waiting/working panes from the resident [latestWindowConfig] and the
+ * global session-state map ([lunamuxClient]`.windowState.states`, keyed by `sessionId` across all
+ * worlds), honouring the manual [spikeWaitingOverride] / [spikeWorkingOverride] test maps (keyed
+ * by pane id) exactly as the render loop does. Returns one [WorldStatus] per world that has any
+ * activity, in the config's world order; worlds with no waiting/working panes are omitted (so
+ * they get no box).
+ *
+ * Called every frame by [tickWarpCoreOverlay]. Uses config panes rather than [spikePanes] because
+ * only the on-screen world's panes are mounted as [RingPane]s — a per-world *count* needs the
+ * full tab→pane tree of every world, which the config carries.
+ *
+ * @return the active worlds' tallies, in world order.
+ * @see updateWarpWorldBoxes
+ */
+private fun computeWorldStatuses(): List<WorldStatus> {
+    val cfg = latestWindowConfig ?: return emptyList()
+    val states = runCatching { lunamuxClient.windowState.states.value }.getOrNull()
+    val out = mutableListOf<WorldStatus>()
+    for (world in cfg.worlds) {
+        var working = 0
+        var waiting = 0
+        for (tab in world.tabs) {
+            for (pane in tab.panes) {
+                val paneId = pane.leaf.id
+                val sessionId = pane.leaf.sessionId
+                val isWaiting = spikeWaitingOverride[paneId] ?: (states?.get(sessionId) == "waiting")
+                val isWorking = spikeWorkingOverride[paneId] ?: (states?.get(sessionId) == "working")
+                if (isWaiting) waiting++ else if (isWorking) working++
+            }
+        }
+        if (working > 0 || waiting > 0) {
+            out.add(WorldStatus(world.id, world.name, world.themeSelection, working, waiting))
+        }
     }
-    spikeWarpWorkPill?.let {
-        it.style.display = if (workingN > 0) "flex" else "none"
-        if (workingN > 0) it.textContent = "$workingN working"
+    return out
+}
+
+/**
+ * The count line for a world's box — "N working • M waiting", omitting a half that is zero (so a
+ * purely-waiting world reads just "M waiting"). All one colour (the world accent, applied to the
+ * element by [updateWarpWorldBoxes]); no per-state tinting. Doubles as the change-detection key
+ * ([WorldStatusBox.lastText]).
+ *
+ * @param working the world's working-pane count. @param waiting its waiting-pane count.
+ * @return the joined count line (empty string only when both are zero, which never reaches here).
+ */
+private fun countLineText(working: Int, waiting: Int): String {
+    val parts = mutableListOf<String>()
+    if (working > 0) parts.add("$working working")
+    if (waiting > 0) parts.add("$waiting waiting")
+    return parts.joinToString(" • ")
+}
+
+/**
+ * Builds one empty per-world status box (world-name line over a count line) and appends it to
+ * [spikeWarpBannerCol]. Theme accent + text are filled in by [updateWarpWorldBoxes]; here we only
+ * lay out the neutral base chrome.
+ *
+ * @return the freshly-built (unthemed, textless) box.
+ */
+private fun buildWorldStatusBox(): WorldStatusBox {
+    val root = document.createElement("div") as HTMLElement
+    // Understated so the boxes read as ambient status, not chrome that competes with the
+    // world: a translucent fill lets it sit softly over the scene, but with NO overall
+    // opacity knock-back so the accent border/text applied later stay crisp and legible.
+    root.style.cssText = "pointer-events:none;padding:6px 12px;border-radius:10px;" +
+        "background:rgba(10,14,20,0.92);border:1px solid #26374e;white-space:nowrap;" +
+        "box-shadow:0 2px 10px rgba(0,0,0,0.28);display:flex;flex-direction:column;gap:2px;" +
+        "align-items:flex-start;"
+    val nameEl = document.createElement("div") as HTMLElement
+    nameEl.style.cssText = "font:600 10px/1.1 ui-monospace,Menlo,monospace;letter-spacing:.04em;color:#7d90ad;"
+    val countEl = document.createElement("div") as HTMLElement
+    countEl.style.cssText = "font:600 13px/1.15 ui-monospace,Menlo,monospace;letter-spacing:.02em;color:#cdd9ec;"
+    root.appendChild(nameEl)
+    root.appendChild(countEl)
+    spikeWarpBannerCol?.appendChild(root)
+    return WorldStatusBox(root, nameEl, countEl)
+}
+
+/**
+ * Reconciles the live [spikeWarpWorldBoxes] against [statuses] (the per-world tallies for this
+ * frame), called every frame by [tickWarpCoreOverlay] regardless of [spikeStatusIndication]:
+ *  - drops boxes for worlds that no longer have any activity,
+ *  - creates a box for each newly-active world,
+ *  - updates each box's name, its "N working • M waiting" line, and its accent-themed chrome
+ *    (border + name colour from that world's own theme, [resolvedThemeForWorld]) — but only
+ *    writes the DOM when a value actually changed (via the [WorldStatusBox] caches), so the
+ *    per-frame call is cheap while nothing moves, and
+ *  - re-orders the boxes to match the config's world order.
+ *
+ * @param statuses the active worlds' tallies for this frame (in world order).
+ * @see computeWorldStatuses @see buildWorldStatusBox
+ */
+private fun updateWarpWorldBoxes(statuses: List<WorldStatus>) {
+    if (spikeWarpBannerCol == null) return
+    val liveIds = statuses.map { it.id }.toSet()
+
+    // Drop boxes for worlds that fell quiet.
+    val gone = spikeWarpWorldBoxes.keys.filter { it !in liveIds }
+    for (id in gone) spikeWarpWorldBoxes.remove(id)?.root?.remove()
+
+    // Ensure + update a box per active world.
+    for (status in statuses) {
+        val box = spikeWarpWorldBoxes.getOrPut(status.id) { buildWorldStatusBox() }
+
+        val accent = runCatching { argbToCss(resolvedThemeForWorld(status.selection).accent) }
+            .getOrNull() ?: spikeChromeColors?.accent ?: "#4f8cf7"
+        if (box.lastAccent != accent) {
+            box.lastAccent = accent
+            // Everything in the box wears the world's accent — border, name, and count line
+            // (no per-state blue/amber tinting), so each box reads as one themed unit.
+            box.root.style.setProperty("border-color", accent)
+            box.nameEl.style.color = accent
+            box.countEl.style.color = accent
+        }
+        if (box.nameEl.textContent != status.name) box.nameEl.textContent = status.name
+
+        val text = countLineText(status.working, status.waiting)
+        if (box.lastText != text) {
+            box.lastText = text
+            box.countEl.textContent = text
+        }
     }
+
+    // Keep the boxes in world order (re-appending an existing node just moves it).
+    reorderWorldBoxes(statuses.map { it.id })
+}
+
+/**
+ * Re-orders the status boxes so their DOM order matches [orderedIds] (the config's world order),
+ * but only touches the DOM when the current order already differs — re-appending nodes every
+ * frame would thrash layout. Called at the tail of [updateWarpWorldBoxes].
+ *
+ * @param orderedIds the active world ids in the order their boxes should appear, top→down.
+ */
+private fun reorderWorldBoxes(orderedIds: List<String>) {
+    val col = spikeWarpBannerCol ?: return
+    var needsReorder = col.children.length != orderedIds.size
+    if (!needsReorder) {
+        for (i in orderedIds.indices) {
+            if (col.children.item(i) !== spikeWarpWorldBoxes[orderedIds[i]]?.root) {
+                needsReorder = true
+                break
+            }
+        }
+    }
+    if (!needsReorder) return
+    for (id in orderedIds) spikeWarpWorldBoxes[id]?.root?.let { col.appendChild(it) }
 }
 
 /**
@@ -439,9 +604,10 @@ internal fun clearWarpCore() {
     spikeWarpPings.clear()
     spikeWarpCanvas = null
     spikeWarpSkyTint = null
-    spikeWarpBannerRow = null
-    spikeWarpAwaitPill = null
-    spikeWarpWorkPill = null
+    // The banner column DOM goes down with spikeOverlay wholesale; just drop the references
+    // and the per-world box registry so a re-open rebuilds them clean.
+    spikeWarpBannerCol = null
+    spikeWarpWorldBoxes.clear()
     spikeWarpClock = 0.0
 }
 
@@ -531,38 +697,23 @@ private fun ensureWarpHud() {
 }
 
 /**
- * Lazily builds the top-left **status row** — shown **regardless of [spikeStatusIndication]**,
+ * Lazily builds the top-left **status column** — shown **regardless of [spikeStatusIndication]**,
  * since it reports agent status (how many await you / how many are running), not a reactor
- * visual. A flex row of two independent pills side by side: an amber "awaiting" pill and a
- * blue "working" pill, each `pointer-events:none` and hidden until [updateWarpBanner] shows
- * it. Anchored top-left (where the old reactor meter sat), nudged down to clear the macOS
- * traffic lights. No-op once built. @see updateWarpBanner
+ * visual. An empty vertical flex stack that [updateWarpWorldBoxes] fills with one box per active
+ * world. `pointer-events:none`. Anchored top-left (where the old reactor meter sat), nudged down
+ * to clear the macOS traffic lights. No-op once built. @see updateWarpWorldBoxes
  */
 private fun ensureWarpBanner() {
-    if (spikeWarpBannerRow != null) return
+    if (spikeWarpBannerCol != null) return
     val overlay = spikeOverlay ?: return
-    val row = document.createElement("div") as HTMLElement
-    // top:44px sits the pills clear below the macOS traffic-light cluster (which the 3D
-    // overlay covers at the very top-left) rather than tucked up against it.
-    row.style.cssText = "position:absolute;left:16px;top:44px;z-index:4;" +
-        "pointer-events:none;display:flex;align-items:center;gap:8px;"
-
-    /** One count pill with a fixed colour scheme; hidden until [updateWarpBanner] lights it. */
-    fun pill(bg: String, borderCol: String, textCol: String, glow: String): HTMLElement {
-        val el = document.createElement("div") as HTMLElement
-        el.style.cssText = "display:none;align-items:center;padding:9px 16px;border-radius:10px;" +
-            "background:$bg;border:1px solid $borderCol;color:$textCol;white-space:nowrap;" +
-            "font:600 13px/1 ui-monospace,Menlo,monospace;letter-spacing:.02em;box-shadow:$glow;"
-        row.appendChild(el)
-        return el
-    }
-    // Blue "working" pill first (left), then the amber "awaiting" pill (right) — the two read
-    // left-to-right as the natural progression running → then blocked-on-you.
-    spikeWarpWorkPill = pill("rgba(10,22,36,0.9)", "#2c5c86", "#bfe0ff", "0 0 20px rgba($WARP_CORE_COLOR,0.28)")
-    spikeWarpAwaitPill = pill("rgba(42,31,8,0.93)", "#6f5620", "#ffd77a", "0 0 22px rgba($WARP_AMBER_COLOR,0.33)")
-
-    overlay.appendChild(row)
-    spikeWarpBannerRow = row
+    val col = document.createElement("div") as HTMLElement
+    // top:44px sits the boxes high in the top-left, clear of the macOS traffic-light cluster
+    // (which the 3D overlay covers at the very top-left). The "now showing" pane/tab title now
+    // lives in the opposite (top-right) corner (see buildRingChrome), so nothing collides here.
+    col.style.cssText = "position:absolute;left:16px;top:44px;z-index:4;" +
+        "pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:8px;"
+    overlay.appendChild(col)
+    spikeWarpBannerCol = col
 }
 
 /**

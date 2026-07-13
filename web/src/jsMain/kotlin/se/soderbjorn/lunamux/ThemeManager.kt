@@ -52,12 +52,28 @@ import org.w3c.dom.events.Event
 internal val lunamuxThemeHost: ThemeManagerHost get() = LunamuxThemeManagerHost
 
 private object LunamuxThemeManagerHost : ThemeManagerHost {
+    // ── Per-world theme scoping ─────────────────────────────────────
+    // A world owns a dark+light theme *pair* ([WorldConfig.themeSelection]);
+    // the theme slots the sidebar reads and writes are therefore the ACTIVE
+    // world's, not a single global pair. A world with no override
+    // (`themeSelection == null`) follows the global slots, so we fall back to
+    // [AppBackingViewModel]'s global selection for both reads and the initial
+    // value of the *other* slot when only one is being changed. Appearance,
+    // custom-theme definitions and favorites stay global (see below). Writing
+    // routes through [WindowCommand.SetWorldTheme] so the change lands on the
+    // world the user is actually looking at (the server mirrors the default
+    // world's pair into the global key for pre-1.9 clients).
+
+    /** The active world's config, or `null` before the server reports worlds. */
+    private fun activeWorld(): WorldConfig? =
+        lunamuxClient.windowState.config.value?.activeWorldOrNull()
+
     override val appearance: Appearance
         get() = appVm.stateFlow.value.appearance
     override val lightThemeName: String
-        get() = appVm.stateFlow.value.lightThemeName
+        get() = activeWorld()?.themeSelection?.lightThemeName ?: appVm.stateFlow.value.lightThemeName
     override val darkThemeName: String
-        get() = appVm.stateFlow.value.darkThemeName
+        get() = activeWorld()?.themeSelection?.darkThemeName ?: appVm.stateFlow.value.darkThemeName
     override val customThemes: List<Theme>
         get() = appVm.stateFlow.value.customThemes
     override val favoriteThemeNames: Set<String>
@@ -77,10 +93,34 @@ private object LunamuxThemeManagerHost : ThemeManagerHost {
         launch { appVm.setAppearance(appearance) }
     }
     override fun setLightThemeName(name: String) {
-        launch { appVm.setLightThemeName(name) }
+        val world = activeWorld()
+        if (world != null) {
+            // Preserve the world's current dark slot (its override, or the global
+            // slot it inherits) while replacing only the light one.
+            val dark = world.themeSelection?.darkThemeName ?: appVm.stateFlow.value.darkThemeName
+            launchCmd(
+                WindowCommand.SetWorldTheme(
+                    worldId = world.id,
+                    selection = WorldThemeSelection(darkThemeName = dark, lightThemeName = name),
+                ),
+            )
+        } else {
+            launch { appVm.setLightThemeName(name) }
+        }
     }
     override fun setDarkThemeName(name: String) {
-        launch { appVm.setDarkThemeName(name) }
+        val world = activeWorld()
+        if (world != null) {
+            val light = world.themeSelection?.lightThemeName ?: appVm.stateFlow.value.lightThemeName
+            launchCmd(
+                WindowCommand.SetWorldTheme(
+                    worldId = world.id,
+                    selection = WorldThemeSelection(darkThemeName = name, lightThemeName = light),
+                ),
+            )
+        } else {
+            launch { appVm.setDarkThemeName(name) }
+        }
     }
     override fun saveCustomTheme(theme: Theme) { launch { appVm.saveCustomTheme(theme) } }
     override fun deleteCustomTheme(name: String) { launch { appVm.deleteCustomTheme(name) } }

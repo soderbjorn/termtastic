@@ -179,8 +179,13 @@ object SyntaxHighlighter {
     private val KOTLIN_PATTERNS = listOf(
         TokenPattern("""//[^\n]*""", "hl-comment"),
         TokenPattern("""/\*[\s\S]*?\*/""", "hl-comment"),
+        // Triple-quoted string FIRST so it wins over the single-quote-pair
+        // rule. Authored as a non-raw string: quotes need no regex escaping,
+        // and an escaped `\"` is an *invalid* escape under JS's unicode-mode
+        // (`/u`) regex — which crashed the very first time a Kotlin file was
+        // highlighted on the JS client (the demo's DarknessIRC `.kt` fixtures).
+        TokenPattern("\"\"\"[\\s\\S]*?\"\"\"", "hl-string"),
         TokenPattern(""""(?:[^"\\]|\\.)*"""", "hl-string"),
-        TokenPattern("""\"\"\"[\s\S]*?\"\"\"""", "hl-string"),
         TokenPattern("""'(?:[^'\\]|\\.)'""", "hl-string"),
         TokenPattern("""@\w+""", "hl-annotation"),
         TokenPattern("""\b(?:$KOTLIN_KEYWORDS)\b""", "hl-keyword"),

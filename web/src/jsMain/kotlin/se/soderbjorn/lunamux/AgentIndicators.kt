@@ -35,24 +35,33 @@ import org.w3c.dom.HTMLElement
  * @param config the dynamic (JSON-parsed) server [WindowConfig].
  */
 fun updateAgentBadges(config: dynamic) {
-    val tabs = config.tabs as? Array<dynamic> ?: return
-    for (tab in tabs) {
-        val panes = tab.panes as? Array<dynamic> ?: continue
-        for (p in panes) {
-            val paneId = p.leaf?.id as? String ?: continue
-            val note = p.leaf?.agentNote as? String
-            val cell = document.querySelector("[data-pane='$paneId']") as? HTMLElement ?: continue
-            val existing = cell.querySelector(":scope > .agent-badge") as? HTMLElement
-            if (note.isNullOrEmpty()) {
-                existing?.remove()
-            } else {
-                val badge = existing ?: (document.createElement("div") as HTMLElement).also {
-                    it.className = "agent-badge"
-                    it.setAttribute("title", "An MCP agent has been acting on this window")
-                    cell.appendChild(it)
+    // Iterate panes across ALL worlds (not just the legacy default-world
+    // `config.tabs`): a badge only lands on a mounted pane cell, so unmounted
+    // panes are harmlessly skipped, but the active world's panes — which may
+    // be a non-default world — must be reached. Falls back to the flat tabs
+    // for a world-less config.
+    val worlds = config.worlds as? Array<dynamic>
+    val tabGroups: Array<dynamic> = if (worlds != null && worlds.isNotEmpty()) worlds else arrayOf(config)
+    for (group in tabGroups) {
+        val tabs = group.tabs as? Array<dynamic> ?: continue
+        for (tab in tabs) {
+            val panes = tab.panes as? Array<dynamic> ?: continue
+            for (p in panes) {
+                val paneId = p.leaf?.id as? String ?: continue
+                val note = p.leaf?.agentNote as? String
+                val cell = document.querySelector("[data-pane='$paneId']") as? HTMLElement ?: continue
+                val existing = cell.querySelector(":scope > .agent-badge") as? HTMLElement
+                if (note.isNullOrEmpty()) {
+                    existing?.remove()
+                } else {
+                    val badge = existing ?: (document.createElement("div") as HTMLElement).also {
+                        it.className = "agent-badge"
+                        it.setAttribute("title", "An MCP agent has been acting on this window")
+                        cell.appendChild(it)
+                    }
+                    val label = "🤖 $note" // 🤖 prefix
+                    if (badge.textContent != label) badge.textContent = label
                 }
-                val label = "🤖 $note" // 🤖 prefix
-                if (badge.textContent != label) badge.textContent = label
             }
         }
     }

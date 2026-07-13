@@ -821,6 +821,78 @@ private fun sendDebugSetPaneState(mode: String) {
     win.webContents.send("debug-set-pane-state", mode)
 }
 
+// ── Web-Browser pane: guest popup / OAuth handling ───────────────────
+
+/**
+ * Install a **guest-scoped** new-window policy so Web-Browser pane
+ * `<webview>` guests can complete popup-based sign-ins ("Sign in with
+ * Google", SSO) that call `window.open`.
+ *
+ * Hooks `app.on("web-contents-created")` and acts **only** for guests
+ * (`webContents.getType() === "webview"`); the main window's own deny-all
+ * handler in [createWindow] is left untouched, so ordinary app-chrome links
+ * still open in the OS browser. For a guest popup we return `action: "allow"`
+ * and bind the child window to the **same** `persist:webpane` session
+ * partition as the pane, so `window.opener` / `postMessage` and cookies flow
+ * and the OAuth handshake can post its result back to the opener. Non-http(s)
+ * targets are denied.
+ *
+ * Called once from [main] inside the `app.whenReady` continuation.
+ *
+ * @see createWindow for the main window's deny-all handler that this
+ *   deliberately does not relax.
+ */
+private fun installGuestWindowOpenHandler() {
+    app.on("web-contents-created") { _, contents ->
+        // `contents` is already a `dynamic`, so access its members directly —
+        // calling `.asDynamic()` on a dynamic value compiles to a real (and
+        // absent) runtime member call, not the compiler intrinsic.
+        // Guests only. The main window (type "window") keeps its deny-all
+        // handler; other web-contents types are left at Electron's defaults.
+        if (contents.getType() != "webview") return@on
+        contents.setWindowOpenHandler({ details: dynamic ->
+            val url = details?.url as? String
+            val decision = js("({})")
+            if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
+                decision.action = "allow"
+                // Bind the popup to the guest's session so cookies/opener flow.
+                val webPrefs = js("({})")
+                webPrefs.partition = "persist:webpane"
+                webPrefs.contextIsolation = true
+                webPrefs.nodeIntegration = false
+                val overrides = js("({})")
+                overrides.webPreferences = webPrefs
+                overrides.width = 480
+                overrides.height = 640
+                decision.overrideBrowserWindowOptions = overrides
+            } else {
+                // Never route a guest's popup to the OS browser: an OAuth
+                // handshake that leaves the app can't post back to the opener.
+                decision.action = "deny"
+            }
+            decision
+        })
+
+        // Escape hatch for the 3D world's disengage chord. A `<webview>` guest is
+        // an out-of-process Chromium page: while it holds keyboard focus its
+        // keydowns fire in the guest's own document and never reach the host
+        // window's capture-phase key handler — so `⌥⌘X` (leave engage mode) is
+        // dead, and with it every navigate-mode chord. `before-input-event` fires
+        // in the main process *before* the key reaches the guest page, so it works
+        // regardless of guest focus. On the chord we swallow it and notify the host
+        // renderer, which blurs the guest and calls `disengage()`. Matched on the
+        // physical `code` because ⌥ rewrites the produced character.
+        contents.on("before-input-event") { event: dynamic, input: dynamic ->
+            if (input.type == "keyDown" && input.alt == true && input.meta == true &&
+                input.code == "KeyX"
+            ) {
+                event.preventDefault()
+                contents.hostWebContents?.send("web-pane-disengage")
+            }
+        }
+    }
+}
+
 // ── BrowserWindow ────────────────────────────────────────────────────
 
 private fun createWindow() {
@@ -852,6 +924,13 @@ private fun createWindow() {
     webPrefs.preload = NodePath.join(__dirname, "..", "..", "preload.js")
     webPrefs.contextIsolation = true
     webPrefs.nodeIntegration = false
+    // Allow the renderer to instantiate <webview> guests. Used only by the
+    // Web-Browser pane (see WebBrowserPane.kt), which embeds a live, navigable
+    // page on a CSS3D plane — the one thing a native WebContentsView can't do.
+    // The main window keeps its deny-all new-window handler (below); guest
+    // popups are opened by a separate, guest-scoped handler in
+    // installGuestWindowOpenHandler().
+    webPrefs.webviewTag = true
     // Opt-in cross-origin backend (see INSECURE_BACKEND). Lets a statically
     // served UI drive a different server's API; loopback-only, off by default.
     if (INSECURE_BACKEND) webPrefs.webSecurity = false
@@ -1489,6 +1568,10 @@ fun main() {
         session.defaultSession.setPermissionCheckHandler { _, permission ->
             permission == "notifications" || permission == "media"
         }
+
+        // Let Web-Browser pane guests (<webview>) open OAuth/SSO popups
+        // in-app. Scoped to guests only — the main window keeps its deny-all.
+        installGuestWindowOpenHandler()
 
         // Bind the `tt-file://` protocol handler now that the app is ready
         // (the privilege flags were registered synchronously up top, before

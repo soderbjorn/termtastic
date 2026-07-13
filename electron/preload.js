@@ -307,6 +307,26 @@ contextBridge.exposeInMainWorld("electronApi", {
   },
 
   /**
+   * Subscribes to the "web pane disengage" event sent by the main process
+   * when the 3D world's disengage chord (⌥⌘X) is pressed while a web-pane
+   * `<webview>` guest holds keyboard focus. Because guest keydowns never
+   * reach the host window's key handler, the main process intercepts the
+   * chord via `before-input-event` and forwards it here so the renderer can
+   * blur the guest and leave engage mode.
+   *
+   * Only the channel name is forwarded; the IPC event object itself is not
+   * leaked into the renderer for context-isolation safety.
+   *
+   * @param {() => void} handler - Called with no arguments on each event.
+   * @returns {() => void} Unsubscribe function that detaches the listener.
+   */
+  onWebPaneDisengage: (handler) => {
+    const wrapped = () => handler();
+    ipcRenderer.on("web-pane-disengage", wrapped);
+    return () => ipcRenderer.removeListener("web-pane-disengage", wrapped);
+  },
+
+  /**
    * Subscribes to the "debug set pane state" event sent by the main
    * process when the user picks "Pane state: Working/Waiting/Clear"
    * from the macOS Debug submenu. The handler receives the requested

@@ -117,7 +117,10 @@ internal fun startSpikeLoop() {
         // front pane stays 1:1 through window resizes.
         val camH = window.innerHeight
         val defaultZ = RING_R + perspDistance(camH)
-        if (spikeFlyMode && !spikeCamReturning) applyFlyStep()
+        // A world transit fully owns the camera by hand ([tickWorldTransit]); don't let free-flight
+        // integration fight its per-frame pose writes. [spikeFlyMode] is preserved (not cleared)
+        // across the warp so it can be restored on arrival, so gate on the transit, not the flag.
+        if (spikeFlyMode && !spikeCamReturning && spikeWorldTransit == null) applyFlyStep()
         if (spikeCamReturning) {
             // Cinematic tour: advance normalized progress, ease it with a smootherstep
             // (soft launch + soft landing), and trace a quadratic Bézier start → apex →
@@ -683,6 +686,14 @@ internal fun startSpikeLoop() {
                 // half-focus a pane you can't type in yet.
                 val interactiveFront = isFront && (spikeEngaged || spikeSelectionMode)
                 p.wrapper.style.setProperty("pointer-events", if (interactiveFront) "auto" else "none")
+                // Whole-pane click target ([onPaneClicked]): the dim veil catches body
+                // clicks over any pane that ISN'T the currently-engaged one — in command
+                // center a click centres/engages it, in free flight it engages it. The
+                // engaged pane leaves the veil click-through so its content stays usable,
+                // and the front pane does too during selection mode (drag-select).
+                val isEngagedPane = spikeEngaged && spikeLastEngagedPane == p.paneId
+                val dimCatches = !isEngagedPane && !(spikeSelectionMode && isFront)
+                p.dim.style.setProperty("pointer-events", if (dimCatches) "auto" else "none")
                 p.dim.style.opacity = (PANE_DIM_OPACITY * (1.0 - lit)).toString()
                 val chrome = spikeChromeColors
                 val frontCol = chrome?.accent ?: "#3f5f8f"
@@ -864,23 +875,34 @@ internal fun startSpikeLoop() {
             // this frame (unlike the phaser's post-render screen-space pass). Inside the
             // try so a throw here can never break the RAF chain and freeze the world.
             tickWormhole(camera)
-            // Freeze-to-canvas: swap the live terminal body of any pane currently flying to /
-            // from the stash shelf (a lone pane, or a whole tab bundle including its front
-            // sheet) for a one-shot static snapshot, so the moving CSS3D plane re-samples one
-            // cached raster instead of re-rasterizing live DOM every frame — a direct relief on
-            // the compositor tile budget. Restored to live at rest. Runs after tickBundles /
-            // tickWormhole so every pane's flight state is final, and is a single idempotent
-            // pass so the render loop and tickBundles can't churn the snapshot. @see tickPaneFreeze
-            tickPaneFreeze()
-            css.render(scene, camera)
-            // Phaser-fire close (feature-flagged): drawn in screen space over the freshly
-            // rendered scene, so the camera matrices its projection uses are current.
-            // Inside the try so a throw here can never break the RAF chain and freeze the world.
-            tickPhaser(camera)
-            // Warp-core (runtime-toggled): discharge blooms, thruster plumes, sonar pings
-            // and the reactor-load HUD, all in screen space over the rendered scene — so
-            // its projection uses current camera matrices, exactly like the phaser pass.
-            tickWarpCoreOverlay(camera)
+            // World transit (feature-flagged): the fly-through-the-wormhole cinematic between
+            // the home and other command centers. Owns the camera + moves the vortex disc, so
+            // it must run BEFORE render (like tickWormhole) for its writes to take this frame.
+            tickWorldTransit(camera)
+            // While riding the opaque tunnel ([spikeWorldTransitOccluding]) the whole 3D scene
+            // is hidden behind the full-screen tunnel canvas, so skip the CSS3D render and the
+            // screen-space overlays entirely — re-compositing hundreds of hidden 3D-transformed
+            // pane layers each frame is exactly the churn that made the ride jerk. tickWorldTransit
+            // still drew the tunnel canvas itself (a single cheap 2D pass) above.
+            if (!spikeWorldTransitOccluding) {
+                // Freeze-to-canvas: swap the live terminal body of any pane currently flying to /
+                // from the stash shelf (a lone pane, or a whole tab bundle including its front
+                // sheet) for a one-shot static snapshot, so the moving CSS3D plane re-samples one
+                // cached raster instead of re-rasterizing live DOM every frame — a direct relief on
+                // the compositor tile budget. Restored to live at rest. Runs after tickBundles /
+                // tickWormhole so every pane's flight state is final, and is a single idempotent
+                // pass so the render loop and tickBundles can't churn the snapshot. @see tickPaneFreeze
+                tickPaneFreeze()
+                css.render(scene, camera)
+                // Phaser-fire close (feature-flagged): drawn in screen space over the freshly
+                // rendered scene, so the camera matrices its projection uses are current.
+                // Inside the try so a throw here can never break the RAF chain and freeze the world.
+                tickPhaser(camera)
+                // Warp-core (runtime-toggled): discharge blooms, thruster plumes, sonar pings
+                // and the reactor-load HUD, all in screen space over the rendered scene — so
+                // its projection uses current camera matrices, exactly like the phaser pass.
+                tickWarpCoreOverlay(camera)
+            }
         } catch (t: Throwable) {
             window.asDynamic().console.error("[world3d-spike] frame error", t)
         }

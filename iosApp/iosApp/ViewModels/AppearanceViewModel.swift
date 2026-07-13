@@ -20,9 +20,25 @@ final class ThemeStore {
     /// The process-wide store. `Palette` and the appearance picker share it.
     static let shared = ThemeStore()
 
-    /// The active dual-slot theme config (or `nil` before the first fetch).
-    /// Stored, not computed, so `Palette` reads a plain value off the main store.
-    var config: Client.LunamuxThemeConfig?
+    /// The *effective* dual-slot theme config `Palette` resolves against (or
+    /// `nil` before the first fetch): the global base ``globalConfig`` with the
+    /// active world's theme pair overlaid by ``applyWorldTheme(_:)``. Stored,
+    /// not computed, so `Palette` reads a plain value off the main store.
+    private(set) var config: Client.LunamuxThemeConfig?
+
+    /// The GLOBAL base config — the appearance mode (Auto/Dark/Light), custom
+    /// themes, favourites, and the *global* slot selection. Set by the
+    /// connect-time fetch (`HostsViewModel` via `Palette.config`) and by the
+    /// appearance picker; never touched by a per-world override. Kept separate
+    /// so re-overlaying a world pair can't corrupt the base the next world
+    /// switch overlays onto (mirrors the web client's `activeWorldTheme` living
+    /// beside the global `appVm` snapshot).
+    private var globalConfig: Client.LunamuxThemeConfig?
+
+    /// The active world's theme **pair** override (dark + light slot names), or
+    /// `nil` to follow ``globalConfig``. Purely a client-side paint override —
+    /// never persisted.
+    private var activeWorldTheme: Client.WorldThemeSelection?
 
     /// Bumped on every theme/appearance change. Views read it inside their body
     /// (e.g. via `.id`) so an explicit switch rebuilds them even though the
@@ -31,11 +47,57 @@ final class ThemeStore {
 
     private init() {}
 
-    /// Replace the active config and bump ``generation`` to trigger a repaint.
+    /// Replace the GLOBAL base config (a server fetch or an appearance-picker
+    /// edit) and recompute the effective palette, preserving any active world
+    /// override. Called via `Palette.config`'s setter, `HostsViewModel`, and
+    /// `AppearanceViewModel`.
     ///
-    /// - Parameter config: the new selection (from a server fetch or a local edit).
+    /// - Parameter config: the new global selection.
     func apply(_ config: Client.LunamuxThemeConfig?) {
-        self.config = config
+        globalConfig = config
+        recompute()
+    }
+
+    /// Overlay (or clear) the active world's theme pair on top of the global
+    /// base without persisting it, then recompute. Called by `TreeViewModel` on
+    /// every config push / world switch. No-op-safe: `selection == nil` clears
+    /// the override so the world follows the global selection.
+    ///
+    /// - Parameter selection: the world's dark + light slot names, or `nil`.
+    func applyWorldTheme(_ selection: Client.WorldThemeSelection?) {
+        // Cheap identity guard so ordinary config pushes (a pane moved, a title
+        // ticked) that carry the same world theme don't force a repaint.
+        if selection?.darkThemeName == activeWorldTheme?.darkThemeName,
+           selection?.lightThemeName == activeWorldTheme?.lightThemeName {
+            return
+        }
+        activeWorldTheme = selection
+        recompute()
+    }
+
+    /// Rebuild ``config`` from ``globalConfig`` with ``activeWorldTheme``
+    /// overlaid, then bump ``generation`` to trigger a repaint. Overlaying only
+    /// substitutes the two slot names on a copy of the global snapshot — the
+    /// appearance, custom themes and favourites stay global.
+    private func recompute() {
+        guard let base = globalConfig else {
+            config = nil
+            generation &+= 1
+            return
+        }
+        if let world = activeWorldTheme {
+            let studio = base.studio
+            let overlaid = Client.ThemeSnapshotV2(
+                darkThemeName: world.darkThemeName,
+                lightThemeName: world.lightThemeName,
+                customThemes: studio.customThemes,
+                appearance: studio.appearance,
+                favorites: studio.favorites
+            )
+            config = Client.LunamuxThemeConfig(studio: overlaid)
+        } else {
+            config = base
+        }
         generation &+= 1
     }
 }

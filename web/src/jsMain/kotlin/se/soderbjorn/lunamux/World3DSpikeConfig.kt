@@ -1167,6 +1167,140 @@ internal const val WORMHOLE_CORE_HOT = "#fff2dc" // white-hot centre of the eye
 internal const val WORMHOLE_CORE_WARM = "#ff9a5a" // warm orange the eye falls off through
 
 /**
+ * **Feature flag** for the "other world" command center — a second command center reached by
+ * flying the camera *through* a wormhole ([enterOrExitOtherWorld]). It mirrors the exact same
+ * ring of tabs/panes (no separate scene — the destination is the same rotunda re-skinned), so
+ * it reads as "the same command center, elsewhere," and ⌥⌘O cycles the **active world** on to
+ * the next real world ([se.soderbjorn.lunamux.WorldConfig]). When `false` the ⌥⌘O hotkey
+ * no-ops. @see enterOrExitOtherWorld @see tickWorldTransit
+ */
+internal const val OTHER_WORLD_ENABLED = true
+
+// Both world skies and both worlds' pane chrome are derived from a theme, not hardcoded: the
+// home world paints from the live active theme and the destination world from the world it is
+// cycling to (its [se.soderbjorn.lunamux.WorldThemeSelection] pair, resolved against the global
+// appearance), both through [currentWorldTheme]. There is no hardcoded WORLD_HOME_* / WORLD_OTHER_*
+// sky or accent — the sky comes from the theme's bg/surfaceAlt tokens ([applyWorldSky]) and the
+// accent/border from the theme's own tokens ([spikeChrome]). @see currentWorldTheme @see applyWorldSky
+
+/**
+ * The **world transit** cinematic — a four-leg journey through the wormhole to the other
+ * command center, all in 60fps-equivalent frames (advanced by [spikeDtFrames] like every
+ * other spike clock). You fly it like a spaceship:
+ *  1. **open** ([WORLD_TRANSIT_OPEN_FRAMES]) — the vortex spirals open some distance ahead
+ *     while the camera eases *back* ([WORLD_TRANSIT_PULLBACK]) so the rift sits out in front
+ *     of you, winding up for the run.
+ *  2. **approach** ([WORLD_TRANSIT_APPROACH_FRAMES]) — the camera *charges forward* into the
+ *     rift (accelerating), the vortex swelling to fill the whole view; over the tail the
+ *     full-screen **tunnel canvas** fades up as you cross the threshold.
+ *  3. **tunnel** ([WORLD_TRANSIT_TUNNEL_FRAMES]) — a few seconds *inside*: an opaque
+ *     high-tech light tunnel rushing past ([tickWorldTransit]/[drawTransitTunnel]). The
+ *     palette swaps at the tunnel's midpoint (its colour shifting toward the destination sky)
+ *     so you exit into the new world; the 3D scene is hidden behind the canvas the whole time.
+ *  4. **arrive** ([WORLD_TRANSIT_ARRIVE_FRAMES]) — the tunnel fades out far back in the new
+ *     world ([WORLD_TRANSIT_ARRIVE_RUNWAY] behind the ring) and the camera *flies forward
+ *     toward the command center*, landing at the pristine 1:1 home pose.
+ *
+ * The rift opens far out in empty sky, high and off to the side ([WORLD_TRANSIT_RIFT_X]/
+ * [WORLD_TRANSIT_RIFT_Y]/[WORLD_TRANSIT_RIFT_Z]) — so you turn toward it and fly in on a
+ * **swooping, banking curve** (a quadratic Bézier bulged sideways + up by [WORLD_TRANSIT_SWOOP_SIDE]
+ * / [WORLD_TRANSIT_SWOOP_UP], the ship rolling through [WORLD_TRANSIT_APPROACH_ROLL] as it
+ * weaves), not a dead-straight charge. The approach stops [WORLD_TRANSIT_STOP_GAP] world-units
+ * short of the disc (never crossing the plane — that would CSS-3D-clip). [WORLD_TRANSIT_TILT]
+ * is a gentle cant so the portal reads with depth rather than dead-flat. @see tickWorldTransit
+ */
+internal const val WORLD_TRANSIT_OPEN_FRAMES = 65.0
+internal const val WORLD_TRANSIT_APPROACH_FRAMES = 165.0
+internal const val WORLD_TRANSIT_TUNNEL_FRAMES = 209.0
+internal const val WORLD_TRANSIT_ARRIVE_FRAMES = 155.0
+internal const val WORLD_TRANSIT_STOP_GAP = 90.0
+internal const val WORLD_TRANSIT_TILT = 0.22
+
+/**
+ * Where the transit rift opens — far out in empty sky, high and to the upper-left of the ring
+ * (its own point, independent of the spawn wormhole's [WORMHOLE_POS_X], so it can sit further
+ * and in a different direction). The camera turns toward it during the open leg and swoops in.
+ * @see tickWorldTransit
+ */
+internal const val WORLD_TRANSIT_RIFT_X = -2300.0
+internal const val WORLD_TRANSIT_RIFT_Y = 1300.0
+internal const val WORLD_TRANSIT_RIFT_Z = -600.0
+
+/** World-units the camera eases *back* (away from the rift) during the open leg, winding up. */
+internal const val WORLD_TRANSIT_PULLBACK = 420.0
+
+/**
+ * The approach **swoop** — how far the curved flight-path bulges sideways ([WORLD_TRANSIT_SWOOP_SIDE],
+ * along the horizontal perpendicular of the home→rift line) and upward ([WORLD_TRANSIT_SWOOP_UP])
+ * at its midpoint, and the peak **bank** ([WORLD_TRANSIT_APPROACH_ROLL], radians) the ship rolls
+ * through as it weaves in — level at both ends, tilting a few ways in between. @see tickWorldTransit
+ */
+internal const val WORLD_TRANSIT_SWOOP_SIDE = 950.0
+internal const val WORLD_TRANSIT_SWOOP_UP = 680.0
+internal const val WORLD_TRANSIT_APPROACH_ROLL = 0.42
+
+/**
+ * The **violence** of the tunnel ride: [WORLD_TRANSIT_TUNNEL_SHAKE] is the peak lurch of the
+ * whole tube (as a fraction of the screen diagonal) as the ship is thrown up/down/sideways,
+ * and [WORLD_TRANSIT_TUNNEL_ROLL] the peak back-and-forth **roll** (radians). Both are jittered
+ * per-frame so the ride reads as a rough, irregular passage rather than a smooth glide.
+ * [WORLD_TRANSIT_ARRIVE_SHAKE] is the world-unit camera rattle that decays as you burst out the
+ * far end and the new world stabilises. @see drawTransitTunnel
+ */
+internal const val WORLD_TRANSIT_TUNNEL_SHAKE = 0.013
+internal const val WORLD_TRANSIT_TUNNEL_ROLL = 0.09
+internal const val WORLD_TRANSIT_ARRIVE_SHAKE = 11.0
+
+/**
+ * The **curve of the tunnel** — what makes it read as a bending pipe system that makes soft
+ * turns in different directions rather than a dead-straight tube. [drawTransitTunnel] traces a
+ * wandering *spine* (a vanishing point that drifts along a smooth, non-repeating sum-of-sines
+ * path): everything down the tube — the glowing throat, the hoop rings, the warp streaks and the
+ * core — is displaced sideways by how far *ahead* it sits, so the far end of the tube swings off
+ * to one side (a bend rounding away) while whatever is right at the viewer stays dead ahead.
+ *
+ *  - [WORLD_TRANSIT_TUNNEL_BEND_X] / [_Y][WORLD_TRANSIT_TUNNEL_BEND_Y] — peak sideways / vertical
+ *    swing of the *far* end of the tube, as a fraction of the screen diagonal-based `maxR`. X is
+ *    larger than Y so the pipe banks more left/right than up/down (screens are wider than tall).
+ *  - [WORLD_TRANSIT_TUNNEL_BEND_SPAN] — how much wander-phase separates the viewer end from the
+ *    far end, i.e. how much the tube curves *across its visible length* (bigger → more of an
+ *    S-bend down the tube; smaller → the whole tube just tilts as one).
+ *  - [WORLD_TRANSIT_TUNNEL_BEND_RATE] — how fast the bends flow toward you as you travel (scaled
+ *    by the ride `speed`), i.e. how many turns you round over the length of the tunnel.
+ *
+ * @see drawTransitTunnel @see WorldTransit.tunnelTravel
+ */
+internal const val WORLD_TRANSIT_TUNNEL_BEND_X = 0.34
+internal const val WORLD_TRANSIT_TUNNEL_BEND_Y = 0.26
+internal const val WORLD_TRANSIT_TUNNEL_BEND_SPAN = 3.0
+internal const val WORLD_TRANSIT_TUNNEL_BEND_RATE = 0.03
+
+/**
+ * Feature flag: draw the bright **core ball** — the tight "light at the end of the tube" glow at
+ * the vanishing point. Off by default: as a distinct ball it reads as a separate object floating
+ * *inside* the tunnel rather than part of it; the throat glow plus the [WORLD_TRANSIT_TUNNEL_PULSE]
+ * energy pulse carry the "far light" without it. Flip on to restore the ball. @see drawTransitTunnel
+ */
+internal const val WORLD_TRANSIT_TUNNEL_CORE = false
+
+/**
+ * Peak intensity of the tunnel's **cosmic energy pulse** — a throat-centred additive glow that
+ * throbs and flickers on an irregular rhythm, with rare surges that flare toward white across the
+ * whole screen, so the ride feels *alive* and cosmic rather than a static tube. `0` disables it;
+ * higher pulses brighter. Milder at the tunnel mouths, full in the belly (scaled by the ride
+ * `shake` envelope). @see drawTransitTunnel
+ */
+internal const val WORLD_TRANSIT_TUNNEL_PULSE = 0.85
+
+/**
+ * World-units *behind* the ring the camera exits the tunnel at, then flies forward across
+ * to reach the command-center home pose — the "physically travel to the other world's
+ * command center" arrival leg. Kept well inside [FLY_FADE_FULL] so the ring is fully lit
+ * the whole approach. @see tickWorldTransit
+ */
+internal const val WORLD_TRANSIT_ARRIVE_RUNWAY = 2600.0
+
+/**
  * **Feature flag** for how a *working* (agent-running) pane signals itself:
  *  - `true`  → an **animated jagged border** — a spiky, electric outline whose dashes
  *    "run" around the pane's perimeter each frame (see [WorkingBorder] / [jaggedRectPath]).

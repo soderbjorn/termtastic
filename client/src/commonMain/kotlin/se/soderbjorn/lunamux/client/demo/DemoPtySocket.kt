@@ -1,10 +1,11 @@
 /**
- * Demo-mode [PtySocket]: streams a [DemoTerminalSession]'s canned scrollback
- * and live simulated output to the consumer, and feeds typed bytes back into
- * the session's line discipline. No network involved.
+ * Demo-mode [PtySocket]: streams a [DemoSession]'s snapshot + live simulated
+ * output to the consumer, and feeds typed bytes back into the session (a
+ * scripted [DemoTerminalSession] or an interactive [DemoIrcSession]). No
+ * network involved.
  *
  * @see PtySocket
- * @see DemoTerminalSession
+ * @see DemoSession
  * @see se.soderbjorn.lunamux.client.LunamuxClient.openPtySocket
  */
 package se.soderbjorn.lunamux.client.demo
@@ -39,7 +40,7 @@ class DemoPtySocket internal constructor(
     server: DemoServer,
     private val scope: CoroutineScope,
 ) : PtySocket {
-    private val session: DemoTerminalSession = server.session(sessionId)
+    private val session: DemoSession = server.session(sessionId)
 
     private val _output = MutableSharedFlow<ByteArray>(
         replay = 64,
@@ -63,11 +64,13 @@ class DemoPtySocket internal constructor(
     @Throws(CancellationException::class, Exception::class)
     override suspend fun resize(cols: Int, rows: Int) {
         _ptySize.value = Pair(cols, rows)
+        session.resize(cols, rows)
     }
 
     @Throws(CancellationException::class, Exception::class)
     override suspend fun forceResize(cols: Int, rows: Int) {
         _ptySize.value = Pair(cols, rows)
+        session.resize(cols, rows)
     }
 
     @Throws(CancellationException::class, Exception::class)

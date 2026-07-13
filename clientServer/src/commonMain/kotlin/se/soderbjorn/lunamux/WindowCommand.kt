@@ -341,6 +341,96 @@ sealed class WindowCommand {
     @SerialName("setTabHiddenFromSidebar")
     data class SetTabHiddenFromSidebar(val tabId: String, val hidden: Boolean) : WindowCommand()
 
+    // ---- World lifecycle (world-aware ≥1.9 clients) --------------------
+    // These mutate the container one level above tabs. Sent only by
+    // world-aware clients; an old client never sends them (and would ignore
+    // them if echoed back — its frame decode drops unknown "type"s). The
+    // server routes all *tab*-level commands into the world that owns the
+    // referenced tab (by id lookup), or, for tab-*creating* commands, into
+    // the resolved active world (old clients always resolve to the first
+    // world). So tab commands need no worldId field. See handleWindowCommand.
+
+    /**
+     * Create a new world and make it active. The server mints its id
+     * (`"w<n>-<nonce>"`), seeds one empty tab, and copies the current
+     * default/global theme pair into the new world's [WorldConfig.themeSelection].
+     *
+     * @param name the display name for the new world.
+     * @see WorldConfig
+     */
+    @Serializable
+    @SerialName("addWorld")
+    data class AddWorld(val name: String) : WindowCommand()
+
+    /**
+     * Rename an existing world.
+     *
+     * @param worldId the id of the world to rename.
+     * @param name    the new display name.
+     */
+    @Serializable
+    @SerialName("renameWorld")
+    data class RenameWorld(val worldId: String, val name: String) : WindowCommand()
+
+    /**
+     * Switch the active world. Changes which world's tabs a world-aware
+     * client renders; the legacy tab mirror (for old clients) is unaffected
+     * because it always tracks the *default* world, never the active one.
+     *
+     * @param worldId the id of the world to activate.
+     */
+    @Serializable
+    @SerialName("setActiveWorld")
+    data class SetActiveWorld(val worldId: String) : WindowCommand()
+
+    /**
+     * Set a world's theme **pair** (dark + light slots). Applies to the
+     * target world only; if the target is the default world the server also
+     * mirrors it into the legacy global `THEME_V2_SELECTION` key so old
+     * clients follow along. Appearance (Auto/Dark/Light) is global and not
+     * carried here.
+     *
+     * @param worldId   the id of the world whose theme pair is being set.
+     * @param selection the dark + light theme names.
+     * @see WorldThemeSelection
+     */
+    @Serializable
+    @SerialName("setWorldTheme")
+    data class SetWorldTheme(
+        val worldId: String,
+        val selection: WorldThemeSelection,
+    ) : WindowCommand()
+
+    /**
+     * Close a world, cascading to every tab and PTY session inside it
+     * (reusing the same per-tab teardown [CloseTab] uses). The server
+     * refuses to close the last remaining world.
+     *
+     * @param worldId the id of the world to close.
+     */
+    @Serializable
+    @SerialName("closeWorld")
+    data class CloseWorld(val worldId: String) : WindowCommand()
+
+    /**
+     * Move an entire tab (with all its panes and their live PTY sessions) out
+     * of the world that currently owns it and into another world, appending it
+     * to that world's tab list. Sessions are untouched — only the tab's
+     * ownership changes — so a running agent keeps running as the tab travels.
+     *
+     * Dispatched from a tab's dot-menu "Move to world" submenu. The server
+     * refuses to move a world's last remaining tab (that would leave the source
+     * world empty) and ignores a move into the tab's current world or an
+     * unknown world. If the moved tab was the active tab of its source world,
+     * the server promotes a surviving sibling to active there.
+     *
+     * @param tabId   the id of the tab to move.
+     * @param worldId the id of the destination world.
+     */
+    @Serializable
+    @SerialName("moveTabToWorld")
+    data class MoveTabToWorld(val tabId: String, val worldId: String) : WindowCommand()
+
     /**
      * Add a new terminal pane to an existing tab (creates a new PTY session).
      *
@@ -387,6 +477,48 @@ sealed class WindowCommand {
     data class AddGitToTab(
         val tabId: String,
         val cwd: String? = null,
+    ) : WindowCommand()
+
+    /**
+     * Add a new web browser pane to an existing tab.
+     *
+     * Unlike the other `add*ToTab` commands there is no `cwd` — a web pane is
+     * not rooted in the filesystem. `url` seeds the pane's initial page; the
+     * "New Web Browser" menu item dispatches this with `url = null` so the
+     * pane opens on the client's blank start page and the user types a URL in
+     * the pane's own address bar.
+     *
+     * @param tabId the id of the tab to add the web browser to
+     * @param url the initial URL to load, or `null` for the blank start page
+     * @see WebBrowserContent
+     */
+    @Serializable
+    @SerialName("addWebBrowserToTab")
+    data class AddWebBrowserToTab(
+        val tabId: String,
+        val url: String? = null,
+    ) : WindowCommand()
+
+    /**
+     * Persist a web pane's current navigation state (client → server).
+     *
+     * Dispatched by the Electron webview view whenever the guest commits a
+     * navigation (`did-navigate` / `did-navigate-in-page`) or the page title
+     * changes, so the pane restores at its last URL after a restart and the
+     * ring/overview labels stay current. The server only mutates the leaf's
+     * [WebBrowserContent]; it starts no process.
+     *
+     * @param paneId the web pane to update
+     * @param url the newly committed URL
+     * @param title the current page title, or `null` if unknown
+     * @see WebBrowserContent
+     */
+    @Serializable
+    @SerialName("webBrowserSetUrl")
+    data class WebBrowserSetUrl(
+        val paneId: String,
+        val url: String,
+        val title: String? = null,
     ) : WindowCommand()
 
     /**
@@ -439,6 +571,33 @@ sealed class WindowCommand {
     @Serializable
     @SerialName("setPaneZoom")
     data class SetPaneZoom(val paneId: String, val zoom: Double) : WindowCommand()
+
+    /**
+     * Set (or clear) the pane's persisted **3D-world grid override**. Sent by
+     * the 3D world whenever the user grows/shrinks a pane's grid there, so the
+     * chosen size survives app restarts and re-entering the world, and cleared
+     * (both [cols] and [rows] `null`) by the 3D world's "restore native grid"
+     * hotkey.
+     *
+     * Unlike [SetPaneZoom] this override *reflows* the PTY — but only while the
+     * 3D world is the active size-driving view (via [SizePriority.THREE_D] size
+     * votes); the 2D and mobile clients ignore [Pane.grid3d] entirely. The
+     * server just clamps and stores it in [Pane.grid3d]; the actual reflow is
+     * driven separately by the 3D world's size votes over the `/pty` socket.
+     *
+     * @param paneId the pane whose 3D grid override changed
+     * @param cols the override column count, or `null` to clear the override
+     * @param rows the override row count, or `null` to clear the override
+     * @see Pane.grid3d
+     * @see SizePriority.THREE_D
+     */
+    @Serializable
+    @SerialName("setPaneGrid3d")
+    data class SetPaneGrid3d(
+        val paneId: String,
+        val cols: Int? = null,
+        val rows: Int? = null,
+    ) : WindowCommand()
 
     /**
      * Bring a pane to the top of the stacking order (raise its z-index to
@@ -627,6 +786,35 @@ sealed class WindowCommand {
 }
 
 /**
+ * The **priority tier** a client's size vote carries in the server's PTY-size
+ * aggregation. The server picks the single highest tier present among all live
+ * votes and takes `min()` *within* that tier — so a higher tier fully overrides
+ * every lower one rather than being clamped down by it (plain `min()` across all
+ * clients would let any small viewport shrink a deliberately-enlarged one).
+ *
+ * Tiers, low → high (ordinal order is the ranking):
+ *  - [NORMAL] — an ordinary 2D client fitting a terminal to its viewport. The
+ *    historical behaviour: all-NORMAL votes reduce to the classic
+ *    "smallest attached viewport wins" min().
+ *  - [THREE_D] — the 3D world asserting a pane's [Pane.grid3d] override. Beats
+ *    the 2D clients so the 3D size actually takes, without evicting anyone; the
+ *    vote lives only as long as the 3D socket, so leaving/crashing 3D drops it
+ *    and the PTY falls back to the 2D size automatically.
+ *  - [MOBILE] — a phone/tablet client (classified server-side from the reported
+ *    client type). A small mobile viewport must always win so the terminal
+ *    stays readable on the phone, overriding even a 3D override.
+ *
+ * Only [NORMAL] and [THREE_D] ever travel on the wire (from web/desktop
+ * clients); the server elevates a vote to [MOBILE] itself based on the
+ * connection's client type, so mobile clients need no protocol change.
+ *
+ * @see PtyControl.Resize.priority
+ * @see Pane.grid3d
+ */
+@Serializable
+enum class SizePriority { NORMAL, THREE_D, MOBILE }
+
+/**
  * Control-frame message sent client → server over the `/pty/{id}` websocket
  * as a JSON Text frame. The only control message today is `resize`. Uses
  * `"type"` as the discriminator (same reasoning as [WindowCommand]).
@@ -637,13 +825,23 @@ sealed class WindowCommand {
 sealed class PtyControl {
     /**
      * Normal resize from the client's layout: updates this client's
-     * contribution to the server's min()-across-clients aggregation.
-     * Other clients' sizes are left alone, so the smallest attached
-     * viewport still dictates the PTY's wrap width.
+     * contribution to the server's size aggregation. Other clients' sizes are
+     * left alone.
+     *
+     * The [priority] tier decides how this vote competes with other clients'
+     * (see [SizePriority]): a [SizePriority.NORMAL] vote is the classic
+     * "smallest attached viewport wins" behaviour, while the 3D world sends
+     * [SizePriority.THREE_D] to assert a pane's [Pane.grid3d] override over the
+     * 2D clients. Old clients omit the field, so it defaults to
+     * [SizePriority.NORMAL] and their votes behave exactly as before.
      */
     @Serializable
     @SerialName("resize")
-    data class Resize(val cols: Int, val rows: Int) : PtyControl()
+    data class Resize(
+        val cols: Int,
+        val rows: Int,
+        val priority: SizePriority = SizePriority.NORMAL,
+    ) : PtyControl()
 
     /**
      * "Reformat" from the client's UI: force the PTY to this client's

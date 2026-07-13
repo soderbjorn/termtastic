@@ -132,6 +132,35 @@ internal fun seedZoomFromConfig(cfg: WindowConfig) {
     }
 }
 
+/**
+ * Seeds [spikeGrid3dByPane] from the persisted [Pane.grid3d] overrides in [cfg],
+ * for panes the map does not know yet — the grid-override twin of
+ * [seedZoomFromConfig] and just as local-first, so an override made this session
+ * (including the config echo of our own [WindowCommand.SetPaneGrid3d]) is never
+ * reverted by a server push; the persisted value only matters on a fresh app run.
+ * Panes with no override (`grid3d == null`) are skipped — absence already means
+ * "use native".
+ *
+ * Scans both the legacy [WindowConfig.tabs] mirror and every world's tabs so an
+ * override is restored whichever world the pane lives in.
+ *
+ * Called from [openWorld3dSpike]'s reset block (before the panes are presented)
+ * and its config collector (panes can be created while the world is open).
+ *
+ * @param cfg the window config to read persisted overrides from.
+ * @see seedZoomFromConfig @see ensureGrid3dApplied
+ */
+internal fun seedGrid3dFromConfig(cfg: WindowConfig) {
+    fun seed(pane: Pane) {
+        val g = pane.grid3d ?: return
+        if (pane.leaf.id !in spikeGrid3dByPane) {
+            spikeGrid3dByPane[pane.leaf.id] = g.cols to g.rows
+        }
+    }
+    for (tab in cfg.tabs) for (pane in tab.panes) seed(pane)
+    for (world in cfg.worlds) for (tab in world.tabs) for (pane in tab.panes) seed(pane)
+}
+
 /** Whether [p] is currently stashed (up on / heading to the shelf). @see toggleStash */
 internal fun isStashed(p: RingPane): Boolean = p.paneId in spikeStashed
 
@@ -182,6 +211,31 @@ internal fun switchTab(delta: Int) {
     leaveFrontPane()
     spikeTabIndex = next
     spikePaneScroll = spikeTabSel[spikeTabIndex].toDouble()
+    loadFrontZoom()
+    showNavLabel()
+    spikeSettledIndex = -1
+}
+
+/**
+ * Bring pane [p] to the front of the ring — the click-a-title-bar counterpart of the
+ * ←/→ (within a tab) and ↑/↓ (between tabs) keyboard navigation: climb to [p]'s tab
+ * floor and select it within that tab, letting the render loop animate the ring there.
+ * No-op if [p] is already the front pane. Snaps the horizontal scroll only on a tab
+ * change (as [switchTab] does) so a same-tab retarget eases across rather than jumping.
+ * Clears [spikeSettledIndex] so callers can await the ring settling on the new front.
+ *
+ * @param p the pane to centre.
+ * @see se.soderbjorn.lunamux.onPaneClicked @see rotatePane @see switchTab
+ */
+internal fun frontPane(p: RingPane) {
+    if (p.tabOrd !in spikeTabSel.indices) return
+    val tabChanged = p.tabOrd != spikeTabIndex
+    val paneChanged = spikeTabSel[p.tabOrd] != p.paneOrdInTab
+    if (!tabChanged && !paneChanged) return // already the front pane
+    leaveFrontPane()
+    spikeTabIndex = p.tabOrd
+    spikeTabSel[p.tabOrd] = p.paneOrdInTab
+    if (tabChanged) spikePaneScroll = p.paneOrdInTab.toDouble()
     loadFrontZoom()
     showNavLabel()
     spikeSettledIndex = -1
@@ -388,9 +442,10 @@ internal fun confirmRemove() {
         leaveFrontPane()
         // Under the phaser-fire feature flag the pane isn't shrunk out at once: it
         // lingers at the front getting shot for several seconds, then [tickPhaser] sets
-        // it dying. Otherwise it's the classic optimistic shrink-out; either way the
-        // config round-trip confirms the close.
-        if (PHASER_CLOSE_ENABLED) startPhaserDeath(p) else p.dying = true
+        // it dying. Otherwise (or when fancy animations are turned off) it's the classic
+        // optimistic shrink-out — the pane just disappears; either way the config
+        // round-trip confirms the close.
+        if (PHASER_CLOSE_ENABLED && spikeFancyAnimations) startPhaserDeath(p) else p.dying = true
         launchCmd(WindowCommand.Close(p.paneId))
         return
     }

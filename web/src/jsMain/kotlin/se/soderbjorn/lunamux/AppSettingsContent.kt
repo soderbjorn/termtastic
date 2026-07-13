@@ -83,6 +83,34 @@ private const val KEY_EXPERIMENTAL_FILE_BROWSER = "experimentalFileBrowser"
 /** Persistence key for the experimental Git-view flag. */
 private const val KEY_EXPERIMENTAL_GIT_VIEW = "experimentalGitView"
 
+/** Persistence key for the experimental Web-Browser pane flag. */
+private const val KEY_EXPERIMENTAL_WEB_BROWSER = "experimentalWebBrowser"
+
+/**
+ * **Feature flag** — a compile-time master switch for *creating* web-browser
+ * panes. This gates the App Settings toggle on top of the persisted
+ * [KEY_EXPERIMENTAL_WEB_BROWSER] user preference: BOTH must be true for
+ * creation to be offered.
+ *
+ * When `false` (the current state — the feature is held back until we decide to
+ * ship it):
+ *  - the "Enable web browser" row is **not rendered** in App Settings at all
+ *    ([buildExperimentalSection]), so the user can't flip the preference, and
+ *  - [isExperimentalWebBrowserEnabled] short-circuits to `false`, so the "New
+ *    Web Browser" entry never appears in the topbar "New pane" dropdown
+ *    ([LunamuxTabSource]) — web-browser pane *creation* is fully disabled.
+ *
+ * It deliberately gates **creation only**. Web-browser panes that already exist
+ * keep working: their rendering (the Electron `<webview>` vs. the "Open in
+ * browser" link fallback) keys off `isElectronWebHost` and the pane's
+ * `WebBrowserContent` type, never off this flag — so an existing pane is fully
+ * handled regardless of this switch.
+ *
+ * @see isExperimentalWebBrowserEnabled
+ * @see buildExperimentalSection
+ */
+internal const val WEB_BROWSER_PANE_CREATION_ENABLED = false
+
 /** Persistence key for the experimental 3D world mode flag. */
 private const val KEY_EXPERIMENTAL_WORLD3D = "experimentalWorld3d"
 
@@ -127,6 +155,9 @@ private const val KEY_WORLD3D_WINDOW_BOBBING = "world3dWindowBobbing"
  * @see world3dStatusIndication
  */
 private const val KEY_WORLD3D_STATUS_INDICATION = "world3dStatusIndication"
+
+/** Persistence key for the 3D-world **fancy animations** toggle. @see isFancyAnimationsEnabled */
+private const val KEY_WORLD3D_FANCY_ANIMATIONS = "world3dFancyAnimations"
 
 // The opt-in "use program-set terminal titles" flag persists under
 // TERMINAL_PROGRAM_TITLE_KEY from the shared clientServer module — the server
@@ -229,6 +260,33 @@ fun isExperimentalGitViewEnabled(): Boolean =
     snapshotBoolean(KEY_EXPERIMENTAL_GIT_VIEW)
 
 /**
+ * Whether the "Web browser" pane flavour should appear in the topbar "New
+ * pane" hover dropdown. Read live from [toolkitSettingsSnapshot] on every call
+ * so flipping the toggle takes effect on the next menu hover without a rerender.
+ *
+ * Ships **on by default** (mirroring [isExperimentalWorld3dEnabled]): when the
+ * key is unset this returns `true`, so the "New Web Browser" menu entry is
+ * offered. A user who turns the App Settings toggle off persists an explicit
+ * `false`, which overrides the default.
+ *
+ * A live page renders only in the Electron client; the web/mobile clients
+ * still show the pane, but as an "Open in browser" link button. The flag only
+ * gates whether the menu entry is offered, not which renderer is used.
+ *
+ * Gated on the compile-time [WEB_BROWSER_PANE_CREATION_ENABLED] master switch:
+ * while that is `false` this always returns `false` (creation disabled)
+ * regardless of the persisted preference.
+ *
+ * @return `true` only when creation is enabled at compile time AND the user
+ *   has not explicitly opted out.
+ * @see KEY_EXPERIMENTAL_WEB_BROWSER
+ * @see WEB_BROWSER_PANE_CREATION_ENABLED
+ */
+fun isExperimentalWebBrowserEnabled(): Boolean =
+    WEB_BROWSER_PANE_CREATION_ENABLED &&
+        snapshotBoolean(KEY_EXPERIMENTAL_WEB_BROWSER, default = true)
+
+/**
  * Whether the experimental **3D world** mode is enabled — the interactive
  * panes-on-3D-planes overview reached via the topbar cube button and the ⌥⌘←
  * hotkey.
@@ -322,6 +380,20 @@ fun isTerminalProgramTitleEnabled(): Boolean =
  */
 fun isWindowBobbingEnabled(): Boolean =
     snapshotBoolean(KEY_WORLD3D_WINDOW_BOBBING, default = true)
+
+/**
+ * Whether the 3D world plays its **fancy cinematic animations** — the wormhole a new
+ * pane emerges from, the fly-through-the-wormhole world switch (⌥⌘O), the phaser
+ * shoot-out that kills a pane, and the camera chase that follows a pane/tab up to the
+ * cargo-ship dock when it is stashed. Ships **on by default**. When turned off, each of
+ * those plays its plain instant fallback instead (the pane just appears / the world just
+ * changes / the pane just disappears / the stash just vanishes to the dock). Read at open
+ * by [syncWorld3dRuntimeFromSettings] to seed [spikeFancyAnimations], and live by the
+ * in-world settings panel so a change takes effect on the running world immediately.
+ * @see KEY_WORLD3D_FANCY_ANIMATIONS @see spikeFancyAnimations
+ */
+fun isFancyAnimationsEnabled(): Boolean =
+    snapshotBoolean(KEY_WORLD3D_FANCY_ANIMATIONS, default = true)
 
 /**
  * The 3D world's chosen **status indication** style, one of [StatusIndication].
@@ -715,6 +787,21 @@ fun buildWorld3dSettingsRows(container: HTMLElement, onChanged: () -> Unit = {})
         descriptionText = "Gently floats unfocused windows up and down — and, in free " +
             "flight, makes the spaceship camera bob so it feels like it's hovering.",
     ))
+    container.appendChild(buildToggleRow(
+        labelText = "Fancy animations",
+        initialValue = isFancyAnimationsEnabled(),
+        onChange = { v ->
+            updateSnapshotBoolean(KEY_WORLD3D_FANCY_ANIMATIONS, v)
+            putJsonBoolean(KEY_WORLD3D_FANCY_ANIMATIONS, v)
+            onChanged()
+        },
+        descriptionText = "Plays the cinematic touches — new panes arriving through a " +
+            "wormhole, the fly-through world switch (⌥⌘O), the phaser shoot-out when a pane " +
+            "is closed, and the camera chase up to the cargo ship when a pane or tab is " +
+            "stashed. Turn off to make each of those instant: the pane just appears, the " +
+            "world just changes, the pane just disappears, and the stash just vanishes to " +
+            "the dock.",
+    ))
     container.appendChild(buildChoiceRow(
         labelText = "Status indication",
         options = listOf(
@@ -769,6 +856,19 @@ private fun buildExperimentalSection(): HTMLElement {
             putJsonBoolean(KEY_EXPERIMENTAL_GIT_VIEW, v)
         },
     ))
+    // The web-browser toggle is only offered while the compile-time master
+    // switch is on; with it off the setting is hidden entirely and web-browser
+    // pane creation stays disabled (see [WEB_BROWSER_PANE_CREATION_ENABLED]).
+    if (WEB_BROWSER_PANE_CREATION_ENABLED) {
+        section.appendChild(buildToggleRow(
+            labelText = "Enable web browser (Electron only)",
+            initialValue = isExperimentalWebBrowserEnabled(),
+            onChange = { v ->
+                updateSnapshotBoolean(KEY_EXPERIMENTAL_WEB_BROWSER, v)
+                putJsonBoolean(KEY_EXPERIMENTAL_WEB_BROWSER, v)
+            },
+        ))
+    }
     // "Enable 3D mode" now lives in its own "3D world" section ([buildWorld3dSection]).
 
     return section

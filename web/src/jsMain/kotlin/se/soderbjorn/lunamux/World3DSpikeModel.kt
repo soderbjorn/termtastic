@@ -452,7 +452,7 @@ internal fun roundedRectPath(w: Double, h: Double, pad: Double, r: Double): Stri
  *
  * @see collectPaneSpecs @see buildRingPane @see disposeRingPane
  */
-internal enum class PaneKind { TERMINAL, GIT, FILE_BROWSER }
+internal enum class PaneKind { TERMINAL, GIT, FILE_BROWSER, WEB_BROWSER }
 
 /** A pane the ring should show, before it is reparented onto a plane. */
 internal class PaneSpec(

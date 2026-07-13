@@ -47,7 +47,11 @@ class SettingsPersisterAdapter(
      * underlying content. Missing keys return null.
      */
     override suspend fun read(key: String): String? {
-        val element = snapshot()[key] ?: return null
+        // Route per-world layout keys to their server key (the default world's
+        // aliases back onto flat LAYOUT_STATE) so the toolkit's world-uniform
+        // keys resolve to the old-client-compatible storage. Non-layout keys
+        // pass through unchanged. See [WorldLayoutKeys].
+        val element = snapshot()[serverKeyForToolkitKey(key)] ?: return null
         return when (element) {
             is JsonPrimitive -> if (element.isString) element.content else element.toString()
             else -> element.toString()
@@ -73,6 +77,10 @@ class SettingsPersisterAdapter(
             kotlinx.browser.window.asDynamic().console
                 .log("[settings-adapter] write key=$key (len=${value.length})")
         }
-        settingsPersister.putSetting(key, value)
+        // Alias the default world's per-world layout key onto flat LAYOUT_STATE
+        // (non-default worlds and non-layout keys pass through) so old clients
+        // and existing saved data keep reading the default world's layout under
+        // the legacy key. See [WorldLayoutKeys.serverKeyForToolkitKey].
+        settingsPersister.putSetting(serverKeyForToolkitKey(key), value)
     }
 }

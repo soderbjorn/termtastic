@@ -42,12 +42,16 @@ import se.soderbjorn.lunamux.LeafContent
 import se.soderbjorn.lunamux.LeafNode
 import se.soderbjorn.lunamux.Pane
 import se.soderbjorn.lunamux.PaneGeometry
+import se.soderbjorn.lunamux.PaneGrid
 import se.soderbjorn.lunamux.SyntaxHighlighter
 import se.soderbjorn.lunamux.TabConfig
 import se.soderbjorn.lunamux.TerminalContent
+import se.soderbjorn.lunamux.WebBrowserContent
 import se.soderbjorn.lunamux.WindowCommand
 import se.soderbjorn.lunamux.WindowConfig
 import se.soderbjorn.lunamux.WindowEnvelope
+import se.soderbjorn.lunamux.WorldConfig
+import se.soderbjorn.lunamux.WorldThemeSelection
 import se.soderbjorn.lunamux.client.WindowStateRepository
 
 /**
@@ -89,7 +93,7 @@ class DemoServer internal constructor(
     val envelopes: SharedFlow<WindowEnvelope> = _envelopes.asSharedFlow()
 
     /** Live demo PTY sessions keyed by session id. */
-    private val sessions = mutableMapOf<String, DemoTerminalSession>()
+    private val sessions = mutableMapOf<String, DemoSession>()
 
     /** Deterministic id counter for panes/tabs/sessions created at runtime. */
     private var nextId = 100
@@ -110,6 +114,11 @@ class DemoServer internal constructor(
         for (spec in demoSessionSpecs()) {
             sessions[spec.sessionId] = createSession(spec)
         }
+        // The DarknessIRC world's channel panes (World 2) are driven by
+        // interactive IRC TUI sessions, seeded the same way as the scripted ones.
+        for (spec in DemoIrcContent.channelSpecs()) {
+            sessions[spec.sessionId] = DemoIrcSession(spec, scope)
+        }
         windowState.updateConfig(config)
         windowState.updateStates(states.toMap())
         // Push the canned Claude usage as soon as anything subscribes to the
@@ -129,7 +138,7 @@ class DemoServer internal constructor(
      * @param sessionId the session to attach to.
      * @return the simulated session.
      */
-    fun session(sessionId: String): DemoTerminalSession =
+    fun session(sessionId: String): DemoSession =
         sessions.getOrPut(sessionId) { createSession(newShellSessionSpec(sessionId)) }
 
     /**
@@ -248,6 +257,13 @@ class DemoServer internal constructor(
                 if (existing == null) sessions[spec.sessionId] = createSession(spec)
                 else existing.restart()
             }
+            // Same in-place rewind for the DarknessIRC channel sessions, so the
+            // ambient chatter replays from its seeded start with the tour.
+            for (spec in DemoIrcContent.channelSpecs()) {
+                val existing = sessions[spec.sessionId]
+                if (existing == null) sessions[spec.sessionId] = DemoIrcSession(spec, scope)
+                else existing.restart()
+            }
             if (uiSettings.isNotEmpty()) {
                 uiSettings.clear()
                 val empty = JsonObject(emptyMap())
@@ -276,11 +292,38 @@ class DemoServer internal constructor(
      * closer to production.
      */
     private suspend fun publish(newConfig: WindowConfig) {
-        if (newConfig == config) return
-        config = newConfig
-        windowState.updateConfig(newConfig)
-        emit(WindowEnvelope.Config(newConfig))
+        // The dispatch mutates the top-level `tabs` (which mirror the ACTIVE
+        // world's tabs); fold that back into the active world so the client —
+        // which reads `worlds[active].tabs` — sees the change. No-op when the
+        // config carries no worlds (a legacy flat fixture).
+        val synced = newConfig.syncActiveWorld()
+        if (synced == config) return
+        config = synced
+        windowState.updateConfig(synced)
+        emit(WindowEnvelope.Config(synced))
     }
+
+    /** The active world (by [WindowConfig.activeWorldId]), falling back to the first. */
+    private val WindowConfig.activeWorld: WorldConfig?
+        get() = worlds.firstOrNull { it.id == activeWorldId } ?: worlds.firstOrNull()
+
+    /**
+     * Fold the top-level `tabs`/`activeTabId` working set back into the active
+     * world's [WorldConfig] so `worlds[active].tabs` (what the client renders)
+     * always reflects the latest mutation. Returns unchanged when there are no
+     * worlds.
+     */
+    private fun WindowConfig.syncActiveWorld(): WindowConfig {
+        val aw = activeWorld ?: return this
+        val newWorlds = worlds.map {
+            if (it.id == aw.id) it.copy(tabs = tabs, activeTabId = activeTabId) else it
+        }
+        return copy(worlds = newWorlds)
+    }
+
+    /** Every tab across every world (or the flat tabs when world-less). */
+    private fun allWorldTabs(): List<TabConfig> =
+        config.worlds.ifEmpty { null }?.flatMap { it.tabs } ?: config.tabs
 
     /** Mirror and broadcast the state map after a mutation. */
     private suspend fun publishStates() {
@@ -312,6 +355,35 @@ class DemoServer internal constructor(
     /** Find the tab containing [paneId], or `null`. */
     private fun findTabOf(paneId: String): TabConfig? =
         config.tabs.firstOrNull { tab -> tab.panes.any { it.leaf.id == paneId } }
+
+    /**
+     * Whether [paneId] belongs to the DarknessIRC world's repo (by its cwd).
+     * The demo's file-browser/git fixtures are two per-repo sets sharing one set
+     * of RPC handlers; the pane's cwd picks which repo's tree/diffs to serve, so
+     * lastlight (World 1) and DarknessIRC (World 2) panes never see each other's
+     * files even though both request the same relative paths (e.g. the root `""`).
+     *
+     * @param paneId the pane whose fixtures are being resolved.
+     * @return `true` for a DarknessIRC pane, `false` for a lastlight (or unknown) one.
+     */
+    private fun isDarknessPane(paneId: String): Boolean =
+        findPane(paneId)?.leaf?.cwd == DemoFixtures.DARKNESS_CWD
+
+    /** The directory listings for [paneId]'s repo. */
+    private fun dirListingsFor(paneId: String) =
+        if (isDarknessPane(paneId)) DemoFixtures.darknessDirListings else DemoFixtures.dirListings
+
+    /** The rendered file contents for [paneId]'s repo. */
+    private fun fileContentsFor(paneId: String) =
+        if (isDarknessPane(paneId)) DemoFixtures.darknessFileContents else DemoFixtures.fileContents
+
+    /** The git change list for [paneId]'s repo. */
+    private fun gitEntriesFor(paneId: String) =
+        if (isDarknessPane(paneId)) DemoFixtures.darknessGitEntries else DemoFixtures.gitEntries
+
+    /** The pre-computed git diffs for [paneId]'s repo. */
+    private fun gitDiffsFor(paneId: String) =
+        if (isDarknessPane(paneId)) DemoFixtures.darknessGitDiffs else DemoFixtures.gitDiffs
 
     /** Next deterministic id with the given prefix (`demo-p104`, …). */
     private fun allocId(prefix: String): String = "demo-$prefix${nextId++}"
@@ -363,7 +435,9 @@ class DemoServer internal constructor(
      * session was `working`/`waiting` would otherwise keep pulsing forever.
      */
     private suspend fun reapOrphanSessions() {
-        val referenced = config.tabs.asSequence()
+        // Span every world so a session living in an inactive world (its tabs
+        // aren't in the top-level mirror) isn't reaped as an orphan.
+        val referenced = allWorldTabs().asSequence()
             .flatMap { it.panes }
             .map { it.leaf.sessionId }
             .filter { it.isNotEmpty() }
@@ -433,6 +507,127 @@ class DemoServer internal constructor(
             is WindowCommand.SetTabHiddenFromSidebar ->
                 updateTab(command.tabId) { it.copy(isHiddenFromSidebar = command.hidden) }
             is WindowCommand.SetActiveTab -> publish(config.copy(activeTabId = command.tabId))
+
+            // --- worlds ---
+            is WindowCommand.SetActiveWorld -> {
+                if (command.worldId == config.activeWorldId) return
+                val target = config.worlds.firstOrNull { it.id == command.worldId } ?: return
+                // config.tabs already mirrors the outgoing active world (kept in
+                // sync by publish); load the target world's tabs into the
+                // working mirror and flip the active id.
+                publish(
+                    config.copy(
+                        tabs = target.tabs,
+                        activeTabId = target.activeTabId,
+                        activeWorldId = command.worldId,
+                    ),
+                )
+            }
+            is WindowCommand.AddWorld -> {
+                val worldId = allocId("w")
+                val sessionId = allocId("s")
+                session(sessionId)
+                val tab = TabConfig(
+                    id = allocId("t"),
+                    title = "Tab 1",
+                    panes = listOf(
+                        Pane(
+                            leaf = LeafNode(
+                                id = allocId("p"),
+                                sessionId = sessionId,
+                                title = titleFor(DemoFixtures.CWD),
+                                cwd = DemoFixtures.CWD,
+                                content = TerminalContent(sessionId = sessionId),
+                            ),
+                            x = 0.0, y = 0.0, width = 1.0, height = 1.0, z = 1L,
+                        ),
+                    ),
+                    focusedPaneId = null,
+                    layoutPreset = LayoutPreset.Auto.key,
+                )
+                val seedTheme = config.activeWorld?.themeSelection
+                val world = WorldConfig(
+                    id = worldId,
+                    name = command.name.ifBlank { "World" },
+                    tabs = listOf(tab),
+                    activeTabId = tab.id,
+                    themeSelection = seedTheme,
+                )
+                // Append the world and switch to it (load its tabs into the mirror).
+                publish(
+                    config.copy(
+                        worlds = config.worlds + world,
+                        tabs = world.tabs,
+                        activeTabId = world.activeTabId,
+                        activeWorldId = worldId,
+                    ),
+                )
+            }
+            is WindowCommand.RenameWorld -> {
+                val name = command.name.trim().ifEmpty { return }
+                publish(
+                    config.copy(
+                        worlds = config.worlds.map {
+                            if (it.id == command.worldId) it.copy(name = name) else it
+                        },
+                    ),
+                )
+            }
+            is WindowCommand.SetWorldTheme -> publish(
+                config.copy(
+                    worlds = config.worlds.map {
+                        if (it.id == command.worldId) it.copy(themeSelection = command.selection) else it
+                    },
+                ),
+            )
+            is WindowCommand.CloseWorld -> {
+                if (config.worlds.size <= 1) return
+                val idx = config.worlds.indexOfFirst { it.id == command.worldId }
+                if (idx < 0) return
+                val remaining = config.worlds.filterNot { it.id == command.worldId }
+                val newActive = if (config.activeWorldId == command.worldId) {
+                    remaining.getOrNull(idx.coerceAtMost(remaining.size - 1)) ?: remaining.first()
+                } else {
+                    remaining.firstOrNull { it.id == config.activeWorldId } ?: remaining.first()
+                }
+                publish(
+                    config.copy(
+                        worlds = remaining,
+                        tabs = newActive.tabs,
+                        activeTabId = newActive.activeTabId,
+                        activeWorldId = newActive.id,
+                    ),
+                )
+                reapOrphanSessions()
+            }
+            is WindowCommand.MoveTabToWorld -> {
+                // Find the world that owns the tab (any world; the dot menu only
+                // exposes this on active-world tabs, but stay robust).
+                val src = config.worlds.firstOrNull { w -> w.tabs.any { it.id == command.tabId } } ?: return
+                val dest = config.worlds.firstOrNull { it.id == command.worldId } ?: return
+                if (src.id == dest.id) return // already there
+                if (src.tabs.size <= 1) return // don't strand the source world with no tabs
+                val moving = src.tabs.first { it.id == command.tabId }
+                val srcRemaining = src.tabs.filterNot { it.id == command.tabId }
+                // Promote a sibling if the moved tab was the source world's active one.
+                val srcActive = if (src.activeTabId == command.tabId) srcRemaining.first().id else src.activeTabId
+                val newWorlds = config.worlds.map { w ->
+                    when (w.id) {
+                        src.id -> w.copy(tabs = srcRemaining, activeTabId = srcActive)
+                        dest.id -> w.copy(tabs = w.tabs + moving)
+                        else -> w
+                    }
+                }
+                // Refresh the top-level mirror from the (possibly changed) active world.
+                val active = newWorlds.firstOrNull { it.id == config.activeWorldId } ?: newWorlds.firstOrNull()
+                publish(
+                    config.copy(
+                        worlds = newWorlds,
+                        tabs = active?.tabs ?: config.tabs,
+                        activeTabId = active?.activeTabId ?: config.activeTabId,
+                    ),
+                )
+            }
             is WindowCommand.SetFocusedPane ->
                 updateTab(command.tabId) { it.copy(focusedPaneId = command.paneId) }
 
@@ -471,6 +666,19 @@ class DemoServer internal constructor(
                     content = GitContent(),
                 ),
             )
+            is WindowCommand.AddWebBrowserToTab -> addLeafToTab(
+                command.tabId,
+                LeafNode(
+                    id = allocId("p"),
+                    sessionId = "",
+                    title = "Web",
+                    cwd = DemoFixtures.CWD,
+                    content = WebBrowserContent(url = command.url),
+                ),
+            )
+            is WindowCommand.WebBrowserSetUrl -> updateContent<WebBrowserContent>(command.paneId) {
+                it.copy(url = command.url, title = command.title ?: it.title)
+            }
             is WindowCommand.AddLinkToTab -> {
                 val original = config.tabs.asSequence().flatMap { it.panes }
                     .firstOrNull { it.leaf.sessionId == command.targetSessionId && !it.leaf.isLink }
@@ -528,6 +736,14 @@ class DemoServer internal constructor(
                 if (command.zoom.isFinite()) {
                     updatePane(command.paneId) { it.copy(zoom = command.zoom.coerceIn(0.01, 100.0)) }
                 }
+            }
+            is WindowCommand.SetPaneGrid3d -> {
+                // Mirror `PaneManager.setPaneGrid3d`: both dims null clears the
+                // 3D-world grid override, otherwise clamp to the same sane range.
+                val target =
+                    if (command.cols == null || command.rows == null) null
+                    else PaneGrid(command.cols!!.coerceIn(1, 1000), command.rows!!.coerceIn(1, 1000))
+                updatePane(command.paneId) { it.copy(grid3d = target) }
             }
             is WindowCommand.RaisePane -> {
                 val tab = findTabOf(command.paneId) ?: return
@@ -646,7 +862,7 @@ class DemoServer internal constructor(
             // --- file browser RPCs ---
             is WindowCommand.FileBrowserListDir -> replyListDir(command.paneId, command.dirRelPath)
             is WindowCommand.FileBrowserOpenFile -> {
-                val content = DemoFixtures.fileContents[command.relPath]
+                val content = fileContentsFor(command.paneId)[command.relPath]
                 if (content == null) {
                     emit(WindowEnvelope.FileBrowserError(command.paneId, "No demo content for ${command.relPath}"))
                 } else {
@@ -674,9 +890,10 @@ class DemoServer internal constructor(
                 )
             }
             is WindowCommand.FileBrowserExpandAll -> {
-                for (dir in DemoFixtures.dirListings.keys) replyListDir(command.paneId, dir)
+                val listings = dirListingsFor(command.paneId)
+                for (dir in listings.keys) replyListDir(command.paneId, dir)
                 updateContent<FileBrowserContent>(command.paneId) {
-                    it.copy(expandedDirs = DemoFixtures.dirListings.keys)
+                    it.copy(expandedDirs = listings.keys)
                 }
             }
             is WindowCommand.FileBrowserCollapseAll -> updateContent<FileBrowserContent>(command.paneId) {
@@ -684,9 +901,9 @@ class DemoServer internal constructor(
             }
 
             // --- git RPCs ---
-            is WindowCommand.GitList -> emit(WindowEnvelope.GitList(command.paneId, DemoFixtures.gitEntries))
+            is WindowCommand.GitList -> emit(WindowEnvelope.GitList(command.paneId, gitEntriesFor(command.paneId)))
             is WindowCommand.GitDiff -> {
-                val diff = DemoFixtures.gitDiffs[command.filePath]
+                val diff = gitDiffsFor(command.paneId)[command.filePath]
                 if (diff == null) {
                     emit(WindowEnvelope.GitError(command.paneId, "No demo diff for ${command.filePath}"))
                 } else {
@@ -779,7 +996,7 @@ class DemoServer internal constructor(
      * sort applied) or a demo error for unknown directories.
      */
     private suspend fun replyListDir(paneId: String, dirRelPath: String) {
-        val raw = DemoFixtures.dirListings[dirRelPath]
+        val raw = dirListingsFor(paneId)[dirRelPath]
         if (raw == null) {
             emit(WindowEnvelope.FileBrowserError(paneId, "No demo directory at \"$dirRelPath\""))
             return

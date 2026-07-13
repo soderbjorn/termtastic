@@ -40,6 +40,9 @@ import se.soderbjorn.lunamux.PaneGeometry
 import se.soderbjorn.lunamux.TabConfig
 import se.soderbjorn.lunamux.WindowCommand
 import se.soderbjorn.lunamux.WindowConfig
+import se.soderbjorn.lunamux.activeWorldOrNull
+import se.soderbjorn.lunamux.effectiveActiveTabId
+import se.soderbjorn.lunamux.effectiveTabs
 import se.soderbjorn.lunamux.client.LayoutGeom
 import se.soderbjorn.lunamux.client.ToolkitPaneGeometry
 import se.soderbjorn.lunamux.client.WindowLayoutState
@@ -123,11 +126,18 @@ class OverviewBackingViewModel(
      *   overview's "unlisted tabs" affordance so the user can re-activate
      *   them; tapping one fires the normal select path, after which it shows
      *   temporarily in the strip. Mirrors the web/Mac far-right `⋮` menu.
+     * @property worldId the id of the world these [tabs] belong to (the active
+     *   world), or `null` for a pre-1.9 world-unaware config. Front-ends key
+     *   any per-world view state (e.g. Android's pager position) on this so a
+     *   world switch resets that state instead of carrying a stale index from
+     *   the previous world's disjoint tab list — the root cause of the
+     *   post-world-switch active-tab oscillation.
      */
     data class State(
         val tabs: List<OverviewTab> = emptyList(),
         val activeTabId: String? = null,
         val unlistedTabs: List<UnlistedTab> = emptyList(),
+        val worldId: String? = null,
     )
 
     /**
@@ -392,7 +402,7 @@ class OverviewBackingViewModel(
      * @param preset the layout preset to apply.
      */
     suspend fun applyLayout(tabId: String, preset: LayoutPreset) {
-        val tab = latestConfig?.tabs?.firstOrNull { it.id == tabId } ?: return
+        val tab = latestConfig?.effectiveTabs?.firstOrNull { it.id == tabId } ?: return
         val geom = fullGeomForTab(tabId)
         val visible = tab.panes.map { it.leaf.id }.filter { geom[it]?.isMinimized != true }
         if (visible.isEmpty()) return
@@ -520,7 +530,7 @@ class OverviewBackingViewModel(
      * seeds consistent geometry on first edit).
      */
     private fun fullGeomForTab(tabId: String): MutableMap<String, LayoutGeom> {
-        val tab = latestConfig?.tabs?.firstOrNull { it.id == tabId } ?: return mutableMapOf()
+        val tab = latestConfig?.effectiveTabs?.firstOrNull { it.id == tabId } ?: return mutableMapOf()
         val serverTab = latestGeometry[tabId].orEmpty()
         // Prefer any not-yet-echoed optimistic override so successive actions
         // build on the latest local state, then server geometry, then the
@@ -595,14 +605,20 @@ class OverviewBackingViewModel(
         geometry: Map<String, Map<String, ToolkitPaneGeometry>>,
         localGeom: Map<String, Map<String, LayoutGeom>>,
     ): State {
+        // Resolve the *active world's* tabs, not the legacy flat mirror
+        // (`config.tabs`), which only ever reflects the first world and so left
+        // the overview stuck on that world after a world switch. `effectiveTabs`
+        // / `effectiveActiveTabId` fall back to the flat fields for pre-1.9
+        // world-unaware configs.
+        val worldTabs = config.effectiveTabs
         // A hidden ("unlisted") tab is surfaced in the strip only while it is
         // the active tab — so the user can always see and act on the tab they
         // are actually looking at. It drops back out of the strip once another
         // tab is activated. Mirrors the web/Mac tab strip behaviour.
-        val activeTabId = config.activeTabId
-            ?.takeIf { id -> config.tabs.any { it.id == id } }
-            ?: config.tabs.firstOrNull { !it.isHidden }?.id
-        val visibleTabs = config.tabs.filter { !it.isHidden || it.id == activeTabId }
+        val activeTabId = config.effectiveActiveTabId
+            ?.takeIf { id -> worldTabs.any { it.id == id } }
+            ?: worldTabs.firstOrNull { !it.isHidden }?.id
+        val visibleTabs = worldTabs.filter { !it.isHidden || it.id == activeTabId }
 
         val tabs = visibleTabs.map { tab ->
             // Server geometry overlaid by any optimistic local override.
@@ -620,10 +636,15 @@ class OverviewBackingViewModel(
         }
         // Hidden tabs other than the active one — offered via the overview's
         // "unlisted tabs" affordance so they stay reachable.
-        val unlistedTabs = config.tabs
+        val unlistedTabs = worldTabs
             .filter { it.isHidden && it.id != activeTabId }
             .map { UnlistedTab(id = it.id, title = it.title) }
-        return State(tabs = tabs, activeTabId = activeTabId, unlistedTabs = unlistedTabs)
+        return State(
+            tabs = tabs,
+            activeTabId = activeTabId,
+            unlistedTabs = unlistedTabs,
+            worldId = config.activeWorldOrNull()?.id,
+        )
     }
 
     /** Server geometry (as [LayoutGeom]) with the optimistic local override

@@ -77,6 +77,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -161,7 +162,16 @@ fun OverviewContent(
 
     val tabs = state.tabs
     val activeIndex = tabs.indexOfFirst { it.isActive }.coerceAtLeast(0)
-    val pagerState = rememberPagerState(initialPage = activeIndex, pageCount = { tabs.size })
+    // Re-key the pager on the active world. Each world shows a disjoint tab
+    // list, so a world switch must give the pager a *fresh* state seeded to the
+    // new world's active index. Without this the pager retains the previous
+    // world's settled page; on switching back, that stale index reports through
+    // the pager→server effect below (line ~174) as a spurious `setActiveTab`,
+    // which then ping-pongs with the server→pager effect — the "active tab
+    // flips back and forth every few seconds after a world round-trip" bug.
+    val pagerState = key(state.worldId) {
+        rememberPagerState(initialPage = activeIndex, pageCount = { tabs.size })
+    }
 
     LaunchedEffect(activeIndex) {
         if (activeIndex in tabs.indices && activeIndex != pagerState.currentPage) {

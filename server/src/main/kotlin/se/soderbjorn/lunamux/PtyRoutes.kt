@@ -60,6 +60,12 @@ internal fun Route.ptyRoutes(settingsRepo: SettingsRepository) {
         }
 
         val clientId = java.util.UUID.randomUUID().toString()
+        // A phone/tablet on this session must always win the PTY size so the
+        // terminal stays readable there (see [SizePriority.MOBILE]); we classify
+        // it once here from the reported client type and elevate all of its size
+        // votes accordingly in [handleControl]. Desktop/web clients keep the
+        // per-vote priority they send (NORMAL, or THREE_D from the 3D world).
+        val mobile = isMobileClientType(info.type)
 
         val (initialCols, initialRows) = session.sizeEvents.value
         send(
@@ -94,7 +100,7 @@ internal fun Route.ptyRoutes(settingsRepo: SettingsRepository) {
             for (frame in incoming) {
                 when (frame) {
                     is Frame.Binary -> session.write(frame.readBytes())
-                    is Frame.Text -> handleControl(session, clientId, frame.readText())
+                    is Frame.Text -> handleControl(session, clientId, mobile, frame.readText())
                     else -> Unit
                 }
             }
@@ -113,13 +119,44 @@ internal fun Route.ptyRoutes(settingsRepo: SettingsRepository) {
  * to the [TerminalSession]. Unknown or malformed messages are silently
  * dropped.
  */
-internal fun handleControl(session: TermSession, clientId: String, text: String) {
+internal fun handleControl(session: TermSession, clientId: String, mobile: Boolean, text: String) {
     val control = runCatching {
         controlJson.decodeFromString<PtyControl>(text)
     }.getOrNull() ?: return
     when (control) {
-        is PtyControl.Resize -> session.setClientSize(clientId, control.cols, control.rows)
-        is PtyControl.ForceResize -> session.forceClientSize(clientId, control.cols, control.rows)
+        // A mobile client's votes are elevated to the MOBILE tier so they win
+        // over any 2D/3D size; a desktop/web client keeps the tier it sent
+        // (NORMAL, or THREE_D when the 3D world asserts a Pane.grid3d override).
+        is PtyControl.Resize -> {
+            val priority = if (mobile) SizePriority.MOBILE else control.priority
+            session.setClientSize(clientId, control.cols, control.rows, priority)
+        }
+        is PtyControl.ForceResize -> {
+            val priority = if (mobile) SizePriority.MOBILE else SizePriority.NORMAL
+            session.forceClientSize(clientId, control.cols, control.rows, priority)
+        }
         is PtyControl.ResetModes -> session.resetTerminalModes()
     }
+}
+
+/**
+ * Classify a reported client [type] (the `X-Termtastic-Client-Type` /
+ * `clientType` value — e.g. `"Web"`, `"Computer"`, `"Android"`, `"iOS"`) as a
+ * phone/tablet. Mobile clients have their PTY-size votes elevated to
+ * [SizePriority.MOBILE] so their smaller viewport always drives the shared
+ * grid. Matched leniently (substring, case-insensitive) so future mobile type
+ * strings (`"iPhone"`, `"iPad"`, …) are covered without another code change.
+ *
+ * @param type the self-reported client type, possibly `"Unknown"`.
+ * @return `true` if [type] denotes a mobile client.
+ */
+internal fun isMobileClientType(type: String): Boolean {
+    val t = type.lowercase()
+    return t.contains("android") ||
+        t.contains("ios") ||
+        t.contains("iphone") ||
+        t.contains("ipad") ||
+        t.contains("phone") ||
+        t.contains("mobile") ||
+        t.contains("tablet")
 }

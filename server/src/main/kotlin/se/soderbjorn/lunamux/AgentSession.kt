@@ -342,13 +342,16 @@ class AgentSession(
     private val _sizeEvents = MutableStateFlow(Pair(initialCols, initialRows))
     override val sizeEvents: StateFlow<Pair<Int, Int>> = _sizeEvents.asStateFlow()
 
-    override fun setClientSize(clientId: String, cols: Int, rows: Int) {
+    // Agent consoles have no 3D-grid override, so the [priority] tier is
+    // ignored here — the min()-across-clients aggregation (or a fixed
+    // agent-requested grid) is authoritative.
+    override fun setClientSize(clientId: String, cols: Int, rows: Int, priority: SizePriority) {
         if (fixedGrid) return // agent-requested grid is authoritative
         clientSizes[clientId] = Pair(max(1, cols), max(1, rows))
         applyEffectiveSize()
     }
 
-    override fun forceClientSize(clientId: String, cols: Int, rows: Int) {
+    override fun forceClientSize(clientId: String, cols: Int, rows: Int, priority: SizePriority) {
         if (fixedGrid) return // agent-requested grid is authoritative
         clientSizes.clear()
         clientSizes[clientId] = Pair(max(1, cols), max(1, rows))

@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import se.soderbjorn.lunamux.WindowCommand
 import se.soderbjorn.lunamux.WindowConfig
+import se.soderbjorn.lunamux.effectiveTabs
 
 /**
  * Walk [config] and return every leaf ID across all tabs. Used by the sidebar
@@ -87,7 +88,11 @@ fun resolveCwdForNewPane(
     anchorPaneId: String? = null,
 ): String? {
     if (config == null) return null
-    val tab = config.tabs.firstOrNull { it.id == tabId }
+    // Resolve within the active world's tabs (falls back to the flat legacy
+    // tabs for pre-1.9 configs) so adding a pane while on a non-default world
+    // finds the right tab's cwd rather than defaulting.
+    val worldTabs = config.effectiveTabs
+    val tab = worldTabs.firstOrNull { it.id == tabId }
     if (tab != null) {
         anchorPaneId
             ?.let { id -> tab.panes.firstOrNull { it.leaf.id == id }?.leaf?.cwd }
@@ -101,7 +106,7 @@ fun resolveCwdForNewPane(
             .firstNotNullOfOrNull { it.leaf.cwd?.takeIf { c -> c.isNotBlank() } }
             ?.let { return it }
     }
-    return config.tabs.firstNotNullOfOrNull { t ->
+    return worldTabs.firstNotNullOfOrNull { t ->
         t.panes.firstNotNullOfOrNull { it.leaf.cwd?.takeIf { c -> c.isNotBlank() } }
     }
 }

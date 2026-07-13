@@ -1,0 +1,144 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "url": "../../toolkit-compose/0.2.26/toolkit-compose-0.2.26.module",
+    "group": "se.soderbjorn.darkness",
+    "module": "toolkit-compose",
+    "version": "0.2.26",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.14.3"
+    }
+  },
+  "variants": [
+    {
+      "name": "jvmApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "se.soderbjorn.darkness",
+          "module": "toolkit-core",
+          "version": {
+            "requires": "0.2.26"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.3.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "toolkit-compose-jvm-0.2.26.jar",
+          "url": "toolkit-compose-jvm-0.2.26.jar",
+          "size": 30806,
+          "sha512": "fa95f55b5506687609019be93b68437c2b5358e144e5aab146ddeaa2bd573ebfba6c534b2a87aa979ee1bf6aa5431c368bcf74e8d02a97790942bb42da31a608",
+          "sha256": "c20306160d6de7d3c15aba6a0c5e43de7f69e33ec7c5ec7490ccb6e33f84f5b0",
+          "sha1": "9af2424d51568d3785733b93b7c23c59e6e3244b",
+          "md5": "998a3ba83b62b1b9c3c22b80479dcdc2"
+        }
+      ]
+    },
+    {
+      "name": "jvmRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "se.soderbjorn.darkness",
+          "module": "toolkit-core",
+          "version": {
+            "requires": "0.2.26"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.3.20"
+          }
+        },
+        {
+          "group": "org.jetbrains.compose.runtime",
+          "module": "runtime",
+          "version": {
+            "requires": "1.10.3"
+          }
+        },
+        {
+          "group": "org.jetbrains.compose.foundation",
+          "module": "foundation",
+          "version": {
+            "requires": "1.10.3"
+          }
+        },
+        {
+          "group": "org.jetbrains.compose.material3",
+          "module": "material3",
+          "version": {
+            "requires": "1.9.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.compose.ui",
+          "module": "ui",
+          "version": {
+            "requires": "1.10.3"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "toolkit-compose-jvm-0.2.26.jar",
+          "url": "toolkit-compose-jvm-0.2.26.jar",
+          "size": 30806,
+          "sha512": "fa95f55b5506687609019be93b68437c2b5358e144e5aab146ddeaa2bd573ebfba6c534b2a87aa979ee1bf6aa5431c368bcf74e8d02a97790942bb42da31a608",
+          "sha256": "c20306160d6de7d3c15aba6a0c5e43de7f69e33ec7c5ec7490ccb6e33f84f5b0",
+          "sha1": "9af2424d51568d3785733b93b7c23c59e6e3244b",
+          "md5": "998a3ba83b62b1b9c3c22b80479dcdc2"
+        }
+      ]
+    },
+    {
+      "name": "jvmSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "files": [
+        {
+          "name": "toolkit-compose-jvm-0.2.26-sources.jar",
+          "url": "toolkit-compose-jvm-0.2.26-sources.jar",
+          "size": 5238,
+          "sha512": "d4da4ed92db69c392e2e32cbe21ab2d882f667b33553129a4695489d255104814e8d054dc143db38792d7e41fa43ab09efdfffcbb324e8fb134a7afb79297954",
+          "sha256": "e07f32c0cb95863ee4c1111a6a6d7b07c29b17de180b1dbd34bd8d7df1e76260",
+          "sha1": "8d52ebfaf4738574f67d0f106a9a8c5aae5049dc",
+          "md5": "0043615e43dc74c01b372a6190d96d5e"
+        }
+      ]
+    }
+  ]
+}
