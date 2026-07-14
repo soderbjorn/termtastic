@@ -66,13 +66,19 @@ import se.soderbjorn.lunamux.three.Scene
  * ([AppShellHandle.currentLayoutStateJson] — includes gestures not yet echoed by the
  * server) and falls back to the last server broadcast
  * ([se.soderbjorn.lunamux.client.WindowStateRepository.rawLayoutState], which may
- * arrive as a [JsonObject] or a JSON-string [JsonPrimitive] — same duality
- * [toolkitPaneOrder] handles).
+ * arrive as a [JsonObject] or a JSON-string [JsonPrimitive] — both are normalised to
+ * a JSON string here, so callers never see the duality).
+ *
+ * This is the **single read source** for every consumer of the blob — including
+ * [toolkitPaneOrder], which the ring sorts by. Reading `rawLayoutState` directly
+ * instead would miss writes this session has already applied to the shell but whose
+ * server round-trip hasn't landed yet, and would read the *default* world's blob
+ * while a non-default world is active. @see toolkitPaneOrder
  *
  * @return the blob JSON, or `null` if the shell isn't mounted and no broadcast has
  *   arrived. @see minimizedPaneIds @see persistPaneMinimized
  */
-private fun layoutStateJson(): String? {
+internal fun layoutStateJson(): String? {
     appShellHandle?.let { h -> runCatching { h.currentLayoutStateJson() }.getOrNull()?.let { return it } }
     // Fallback (shell not mounted): read the ACTIVE world's layout blob, not
     // the flat rawLayoutState — which now holds only the default world.

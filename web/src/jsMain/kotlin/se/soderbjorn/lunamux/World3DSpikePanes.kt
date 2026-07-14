@@ -50,27 +50,60 @@ import se.soderbjorn.lunamux.three.Scene
  * Why this exists: the server's [TabConfig.panes] is a *creation-ordered* free-form
  * list (there is no split tree), while the toolkit keeps its own per-tab pane order
  * (head = primary) that the user can drag-reorder in the sidebar. That order is
- * persisted into `LAYOUT_STATE` and surfaced live on
- * [se.soderbjorn.lunamux.client.WindowStateRepository.rawLayoutState]. Reading it
- * here lets the ring match the sidebar after a manual rearrange, instead of showing
- * the original creation order. The blob may arrive either as a [JsonObject] or as a
- * JSON-string [JsonPrimitive] (server settings round-trip), so both are handled.
+ * persisted into `LAYOUT_STATE`. Reading it here lets the ring match the sidebar
+ * after a manual rearrange, instead of showing the original creation order.
+ *
+ * Read through [layoutStateJson] — the same source [persistPaneOrder] writes to —
+ * **not** `rawLayoutState` directly. `rawLayoutState` is only the last *server
+ * broadcast*, so reading it here would have re-sorted the ring from a stale order in
+ * two cases:
+ *  - [movePaneSlot] (⇧←/⇧→) writes the new order to the shell and then to the server
+ *    settings key, but its accompanying [WindowCommand.MovePaneWithinTab] re-broadcasts
+ *    the *config* first — and [reconcileRing] runs on that config emission, before the
+ *    settings round-trip lands. The stale rank then renumbered the panes straight back
+ *    and the move appeared to do nothing;
+ *  - `rawLayoutState` tracks the flat `LAYOUT_STATE` key, which holds only the
+ *    **default** world's layout, so in a non-default world it was the wrong blob
+ *    entirely. @see se.soderbjorn.lunamux.LunamuxToolkitBootstrap
+ *
+ * [layoutStateJson] prefers the mounted shell's live state, which already reflects the
+ * [persistPaneOrder] write, so the order is correct on the very next reconcile.
  *
  * @param tabId the tab whose pane order to read.
  * @return the pane ids in the sidebar's display order, or an empty list when no blob
  *   or no entry exists (callers then fall back to [TabConfig.panes] order).
- * @see collectPaneSpecs
+ * @see collectPaneSpecs @see layoutStateJson @see persistPaneOrder
  */
-internal fun toolkitPaneOrder(tabId: String): List<String> {
-    val raw = runCatching { lunamuxClient.windowState.rawLayoutState.value }.getOrNull() ?: return emptyList()
-    val obj: JsonObject = when {
-        raw is JsonObject -> raw
-        raw is JsonPrimitive && raw.isString ->
-            runCatching { Json.parseToJsonElement(raw.content).jsonObject }.getOrNull() ?: return emptyList()
-        else -> return emptyList()
-    }
-    val orderByTab = obj["paneOrderByTab"] as? JsonObject ?: return emptyList()
-    val arr = orderByTab[tabId] as? JsonArray ?: return emptyList()
+internal fun toolkitPaneOrder(tabId: String): List<String> =
+    paneOrderByTabBlob()?.paneOrderFor(tabId) ?: emptyList()
+
+/**
+ * The whole `paneOrderByTab` map from the current `LAYOUT_STATE` blob, parsed once.
+ *
+ * Exists so a caller ranking **several** tabs ([collectPaneSpecs], which runs on every
+ * config emission) parses the blob once rather than once per tab — [layoutStateJson]
+ * hands back the blob as an unparsed string, so the per-tab [toolkitPaneOrder] would
+ * otherwise re-parse the entire layout for each tab on the ring.
+ *
+ * @return the `paneOrderByTab` object, or `null` when there is no blob, it doesn't
+ *   parse, or it has no such key (the key only appears after the first reorder).
+ * @see toolkitPaneOrder @see paneOrderFor
+ */
+private fun paneOrderByTabBlob(): JsonObject? {
+    val raw = layoutStateJson() ?: return null
+    val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+    return obj["paneOrderByTab"] as? JsonObject
+}
+
+/**
+ * Reads one tab's pane-id list out of an already-parsed [paneOrderByTabBlob].
+ *
+ * @param tabId the tab whose pane order to read.
+ * @return the pane ids in display order, or an empty list when this tab has no entry.
+ * @see paneOrderByTabBlob
+ */
+private fun JsonObject.paneOrderFor(tabId: String): List<String> {
+    val arr = this[tabId] as? JsonArray ?: return emptyList()
     return arr.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() }
 }
 
@@ -99,10 +132,13 @@ internal fun collectPaneSpecs(): List<PaneSpec> {
     // still owns a latitude on the sphere — its slot is filled by an [EmptyTabCard]
     // rather than compacted away. Ordering matches [orderedTabs].
     val specs = mutableListOf<PaneSpec>()
+    // Parsed once for the whole sweep, not per tab — see [paneOrderByTabBlob].
+    val orderByTab = paneOrderByTabBlob()
     cfg.tabs.filter { !it.isHidden }.forEachIndexed { tabOrd, tab ->
         // Sort this tab's panes into the sidebar's display order (stable → unknown
         // panes keep config order at the tail), so the ring matches what the user sees.
-        val orderRank = toolkitPaneOrder(tab.id).withIndex().associate { (i, id) -> id to i }
+        val orderRank = orderByTab?.paneOrderFor(tab.id).orEmpty()
+            .withIndex().associate { (i, id) -> id to i }
         val orderedPanes = tab.panes.sortedBy { orderRank[it.leaf.id] ?: Int.MAX_VALUE }
         var ord = 0
         for (pane in orderedPanes) {
