@@ -187,7 +187,10 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     padding: 8px 12px;
     font-size: 11px;
     font-weight: 500;
-    color: var(--t-text, var(--text-secondary));
+    /* Chrome zone: the footer sits inside the sidebar, so it reads the chrome
+       text token — which falls back to `--t-text` for themes that don't split
+       their chrome from their content. */
+    color: var(--t-chrome-text, var(--text-secondary));
     white-space: nowrap;
     user-select: none;
     flex-shrink: 0;
@@ -220,13 +223,17 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     flex: 0 0 auto;
     min-width: 48px;
 }
-/* Mini fill bar: a rounded track (a faint wash of the current text colour)
-   with a severity-coloured fill whose width is the percentage (set inline). */
+/* Mini fill bar: a rounded track with a severity-coloured fill whose width is
+   the percentage (set inline). The track is the chrome's dedicated
+   `--t-chrome-track` token — the one surface a split theme needs to control
+   here, since a wash of the current text colour reads wrong on a chrome whose
+   background is nothing like the pane background. Falls back to the old wash
+   for themes that don't split their chrome. */
 .claude-usage-bar .usage-bar {
     flex: 1 1 auto;
     height: 5px;
     border-radius: 3px;
-    background: color-mix(in srgb, currentColor 16%, transparent);
+    background: var(--t-chrome-track, color-mix(in srgb, currentColor 16%, transparent));
     overflow: hidden;
 }
 .claude-usage-bar .usage-bar-fill {
@@ -282,7 +289,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     padding: 8px 12px 0;
     font-size: 11px;
     font-weight: 500;
-    color: var(--t-text, var(--text-secondary));
+    color: var(--t-chrome-text, var(--text-secondary));
     white-space: nowrap;
     user-select: none;
     flex-shrink: 0;
@@ -291,7 +298,7 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
        matching the `.tt-sidebar-footer` divider that sits above the usage bar.
        The 8px gap over the line comes from the footer's own `gap`, so no
        extra margin here (that would double the spacing). */
-    border-top: 1px solid var(--t-border, color-mix(in srgb, currentColor 12%, transparent));
+    border-top: 1px solid var(--t-chrome-border, color-mix(in srgb, currentColor 12%, transparent));
 }
 /* No active world → collapse to nothing (padding + divider) so an idle footer
    shows only the usage bar with no stray hairline. */
@@ -460,17 +467,23 @@ body.appearance-light *::-webkit-scrollbar-thumb:hover {
     overflow: hidden;
 }
 
-/* Terminal content panes paint the cell with the same colour as the
-   xterm canvas so the 4px inset strip on the left/bottom blends in
-   instead of reading as a slightly darker chrome frame. The resolver
-   derives `chrome.titlebar = mix(bg, BLACK, 0.06)` in light mode (and
-   mix(bg, fg, 0.12) in dark mode), so for a single-pane terminal app
-   that small offset is visible as a mismatched border around the
-   canvas — not what users expect. File-browser and git panes keep the
-   default chrome frame because their visual hierarchy benefits from
-   the contrast. */
+/* Terminal content panes paint the cell with the same colour as the xterm
+   canvas so the 4px inset strip on the left/right/bottom blends in instead of
+   reading as a mismatched frame around the canvas — not what users expect for
+   a single-pane terminal. File-browser and git panes keep the default chrome
+   frame because their visual hierarchy benefits from the contrast.
+
+   This MUST track `buildXtermTheme`, which sets the xterm background to
+   `theme.surface` (WebStateActions.kt) — hence `--t-surface` here. It is
+   deliberately restated rather than left to `.terminal-cell`'s own
+   `--t-surface` default: the two are coupled to xterm, not to each other, so
+   the rule is the place that documents the coupling.
+
+   (This previously read `--t-bg`, matching an older xterm theme that painted
+   the canvas from `bg`. When the canvas moved to `surface` this rule was left
+   behind, so the strip has been a visibly darker band ever since.) */
 .terminal-cell[data-content-kind='terminal'] {
-    background: var(--t-bg, var(--terminal-bg));
+    background: var(--t-surface, var(--surface));
 }
 
 /* Inset body kinds on left + bottom to reveal the cell's chrome-titlebar
@@ -2748,7 +2761,7 @@ body.appearance-light .lunamux-hotkeys-cap {
     flex-direction: column;
     gap: 8px;
     padding: 8px 0 12px;
-    border-top: 1px solid var(--t-border, color-mix(in srgb, currentColor 12%, transparent));
+    border-top: 1px solid var(--t-chrome-border, color-mix(in srgb, currentColor 12%, transparent));
 }
 
 .app-logo-wordmark {
@@ -2765,8 +2778,11 @@ body.appearance-light .lunamux-hotkeys-cap {
     text-transform: none;
     /* Brand wordmark uses the theme's MAIN foreground text token so it adopts
        the appearance's primary text colour — e.g. the phosphor green-ish
-       foreground in "Termtastic Dark" — rather than a neutral bright-white. */
-    color: var(--t-text, #F5F5F5);
+       foreground in "Termtastic Dark" — rather than a neutral bright-white.
+       Reads the chrome token so a split theme's sidebar keeps the wordmark
+       legible against its own chrome; it falls back to `--t-text` for every
+       theme that doesn't split its chrome, preserving the behaviour above. */
+    color: var(--t-chrome-text, #F5F5F5);
     line-height: 1;
 }
 
@@ -2838,10 +2854,10 @@ body[data-tt-news-pulse="1"] .tt-news-topbar {
    the inline declaration and match the toolkit siblings' dimmed tint (and their
    brighten-on-hover), so the icon row reads as one consistent cluster. */
 #tt-topbar-about {
-    color: var(--t-text-dim, #b8b8b8) !important;
+    color: var(--t-chrome-text-dim, #b8b8b8) !important;
 }
 #tt-topbar-about:hover {
-    color: var(--t-text, #e6e6e6) !important;
+    color: var(--t-chrome-text, #e6e6e6) !important;
 }
 
 /* The aggregate "global" status dot next to the sidebar wordmark. Idle is the
@@ -3027,8 +3043,8 @@ body[data-tt-news-pulse="1"] .tt-news-topbar {
     padding: 0 4px;
     font: inherit;
     color: inherit;
-    background: var(--t-surface-alt, rgba(255, 255, 255, 0.08));
-    border: 1px solid var(--t-border, rgba(255, 255, 255, 0.28));
+    background: var(--t-chrome-track, rgba(255, 255, 255, 0.08));
+    border: 1px solid var(--t-chrome-border, rgba(255, 255, 255, 0.28));
     border-radius: 4px;
     outline: none;
 }

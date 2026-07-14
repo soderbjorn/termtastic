@@ -125,10 +125,21 @@ private func buildDiffHtml(_ result: Client.WindowEnvelope.GitDiffResult, theme:
     let c = { (v: Int64) -> String in Client.ColorMathKt.argbToCss(argb: v) }
 
     // Emit the flat `--t-*` token vars (matching the web client), plus the
-    // diff-specific aliases the stylesheet below references.
+    // diff-specific aliases the stylesheet below references. The chrome/canvas
+    // vars carry no fallback logic here — `ResolvedTheme` has already applied
+    // each optional token's fallback.
     let cssBlock = """
       :root {
         --t-bg: \(c(t.bg));
+        --t-canvas: \(c(t.canvas));
+        --t-chrome-bg: \(c(t.chromeBg));
+        --t-chrome-text: \(c(t.chromeText));
+        --t-chrome-text-dim: \(c(t.chromeTextDim));
+        --t-chrome-text-bright: \(c(t.chromeTextBright));
+        --t-chrome-border: \(c(t.chromeBorder));
+        --t-chrome-accent: \(c(t.chromeAccent));
+        --t-chrome-accent-soft: \(c(t.chromeAccentSoft));
+        --t-chrome-track: \(c(t.chromeTrack));
         --t-surface: \(c(t.surface));
         --t-surface-alt: \(c(t.surfaceAlt));
         --t-border: \(c(t.border));

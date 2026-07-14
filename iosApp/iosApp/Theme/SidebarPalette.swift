@@ -8,7 +8,7 @@ import Client
 /// config has not been loaded yet (e.g. before the first server fetch), falls
 /// back to the default theme. Under the new theme system there is a single flat
 /// ``ResolvedTheme`` per appearance — no per-pane scheme map — so every accessor
-/// reads its colour straight off the resolved theme's 19 semantic tokens.
+/// reads its colour straight off the resolved theme's 32 semantic tokens.
 ///
 /// ``config`` is set at connect time (in `HostsViewModel`) so that all views
 /// pick up the user's theme from the start.
@@ -35,7 +35,7 @@ enum Palette {
     /// config has been fetched yet.
     ///
     /// - Parameter isDark: the current system "prefers dark" flag.
-    /// - Returns: the resolved 19-token palette for the active slot.
+    /// - Returns: the resolved 32-token palette for the active slot.
     static func resolved(isDark: Bool) -> Client.ResolvedTheme {
         let cfg = config ?? Client.ThemeConfigKt.defaultThemeConfig()
         return cfg.resolve(systemIsDark: isDark)

@@ -112,11 +112,22 @@ private struct FileWebView: UIViewRepresentable {
 /// Generates CSS custom property declarations from a resolved theme.
 ///
 /// Emits the flat `--t-*` token names (matching the web client) so the
-/// stylesheet below can reference them directly.
+/// stylesheet below can reference them directly. The chrome/canvas vars carry
+/// no fallback logic here — `ResolvedTheme` has already applied each optional
+/// token's fallback.
 private func paletteVars(_ t: Client.ResolvedTheme) -> String {
     let c = { (v: Int64) -> String in Client.ColorMathKt.argbToCss(argb: v) }
     return """
         --t-bg: \(c(t.bg));
+        --t-canvas: \(c(t.canvas));
+        --t-chrome-bg: \(c(t.chromeBg));
+        --t-chrome-text: \(c(t.chromeText));
+        --t-chrome-text-dim: \(c(t.chromeTextDim));
+        --t-chrome-text-bright: \(c(t.chromeTextBright));
+        --t-chrome-border: \(c(t.chromeBorder));
+        --t-chrome-accent: \(c(t.chromeAccent));
+        --t-chrome-accent-soft: \(c(t.chromeAccentSoft));
+        --t-chrome-track: \(c(t.chromeTrack));
         --t-surface: \(c(t.surface));
         --t-surface-alt: \(c(t.surfaceAlt));
         --t-border: \(c(t.border));
