@@ -94,18 +94,35 @@ final class OverviewViewModel {
     /// Start projecting config/state pushes and observing the result. Called
     /// from `OverviewView.onAppear`.
     func start() {
-        guard let backing else { return }
+        guard let backing else {
+            NSLog("[Overview] start(): no backing — client=%@ windowSocket=%@ (renders \"Disconnected\")",
+                  ConnectionHolder.shared.client == nil ? "nil" : "set",
+                  ConnectionHolder.shared.windowSocket == nil ? "nil" : "set")
+            return
+        }
         if runTask == nil {
             // `run()` suspends forever (it collects the config/state/geometry
             // combine); hold the Task so `stop()` can cancel the coroutine.
-            runTask = Task { try? await backing.run() }
+            // The `try?` would otherwise swallow a projection failure whole,
+            // leaving `stateFlow` parked on its empty default — which the view
+            // renders as "No tabs", the same as a genuinely empty config.
+            runTask = Task {
+                do { try await backing.run() } catch {
+                    NSLog("[Overview] backing.run() threw: %@", String(describing: error))
+                }
+            }
         }
         flowObserver = Client.FlowObserver()
         flowObserver.observe(flow: backing.stateFlow) { [weak self] value in
-            guard let state = value as? Client.OverviewBackingViewModel.State else { return }
+            guard let state = value as? Client.OverviewBackingViewModel.State else {
+                NSLog("[Overview] stateFlow emitted a non-State value: %@", String(describing: value))
+                return
+            }
             let tabs = state.tabs
             let active = state.activeTabId
             let unlisted = state.unlistedTabs
+            NSLog("[Overview] state: tabs=%d activeTabId=%@ worldId=%@ unlisted=%d",
+                  tabs.count, active ?? "nil", state.worldId ?? "nil", unlisted.count)
             DispatchQueue.main.async {
                 self?.tabs = tabs
                 self?.activeTabId = active

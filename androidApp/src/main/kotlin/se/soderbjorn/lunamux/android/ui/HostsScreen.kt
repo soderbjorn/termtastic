@@ -114,10 +114,10 @@ import se.soderbjorn.lunamux.android.data.AppLocalRepository
 import se.soderbjorn.lunamux.client.CandidateConnector
 import se.soderbjorn.lunamux.client.HostEntry
 import se.soderbjorn.lunamux.android.net.ConnectionHolder
-import se.soderbjorn.lunamux.android.net.ServerUnreachableException
 import se.soderbjorn.lunamux.android.net.NewsUpdatesController
 import se.soderbjorn.lunamux.client.ServerUrl
 import se.soderbjorn.lunamux.client.demo.DEMO_HOST
+import se.soderbjorn.lunamux.client.viewmodel.ConnectFailureCopy
 
 /**
  * Sentinel id used in the `connectingId` state for the built-in demo row —
@@ -285,7 +285,14 @@ fun HostsScreen(
                     e is CancellationException -> Unit
                     ConnectionHolder.isPinMismatch(e) -> pinMismatchEntry = entry
                     else -> {
-                        val msg = connectFailureMessage(e)
+                        // Classification and copy are shared with iOS — see
+                        // ConnectFailureCopy. The snackbar has no title field,
+                        // so render both parts as one line.
+                        val msg = ConnectFailureCopy.classify(
+                            throwable = e,
+                            rawMessage = e.message,
+                            deviceNoun = "phone",
+                        ).oneLine
                         scope.launch {
                             snackbarHostState.showSnackbar(
                                 message = msg,
@@ -1565,53 +1572,6 @@ private fun DeleteHostDialog(
         },
     )
 }
-
-/**
- * Build a connection-failure message that explains the likely cause instead
- * of echoing a transport error.
- *
- * Deliberately does not inspect the phone's transport. Mobile data used to
- * get its own "you can't reach a LAN host from here" message, but that is not
- * true — a VPN reaches the Mac over cellular perfectly well — and a message
- * that blames the connection reads as though the app refused to try. It never
- * refused: the connect is always attempted, and this only ever runs once one
- * has already failed. The same reachability advice covers every transport.
- *
- * Called from the hosts screen's connect failure path (non-pin-mismatch).
- *
- * @param e the connect failure, used verbatim when the server was reached.
- * @return a user-facing message for the snackbar.
- */
-private fun connectFailureMessage(e: Throwable): String = when {
-    // A device-auth rejection reaches the server but is turned away before the
-    // first config (expired/foreign pairing token, allow-remote off, or a
-    // revoked device). Its raw exception text is developer-facing ("…before
-    // sending a config… check the server's log for…"), so translate the known
-    // case into something the user can act on.
-    isDeviceAuthRejection(e) ->
-        "The server declined this connection. On your Mac, in Lunamux, go to " +
-            "\"Settings > Server & Security… > Devices\" to re-pair or approve this device."
-    // Reachability advice only when we genuinely couldn't reach the server. A
-    // phase-2 failure (reached, but the server rejected the device / never
-    // sent a config) carries a descriptive message that we must not mask.
-    e !is ServerUnreachableException -> e.message ?: "Connection failed"
-    else ->
-        "Couldn't reach the Lunamux server. Make sure this phone is on the same Wi-Fi " +
-            "network as your computer, or on a VPN that can reach it."
-}
-
-/**
- * Whether [e] is the post-handshake device-auth rejection thrown by
- * [se.soderbjorn.termtastic.client.WindowSocket.awaitInitialConfig] when the
- * server accepts the socket but closes it before the first config. Matched on
- * the exception's distinctive phrase rather than its type so [connectMulti]'s
- * phase-2 failure keeps a friendly, actionable message.
- *
- * @param e the connect failure surfaced to [connectFailureMessage].
- * @return true when the failure is a device-auth rejection.
- */
-private fun isDeviceAuthRejection(e: Throwable): Boolean =
-    e.message?.contains("before sending a config") == true
 
 /** Small 16dp terminal-pane glyph, inlined from TreeScreen's PaneIcon (non-floating variant). */
 @Composable

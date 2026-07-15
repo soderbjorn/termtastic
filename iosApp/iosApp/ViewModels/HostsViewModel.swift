@@ -50,16 +50,46 @@ final class HostsViewModel {
     /// Backs Cancel — a three-address walk is over half a minute, which the
     /// user must be able to abort without force-quitting.
     private var connectTask: Task<Void, Never>?
-    var errorMessage: String?
+    /// Contents of the failure alert, or `nil` when none is showing. Carries
+    /// its own title so a refusal can be named as one — see the shared
+    /// `Client.ConnectFailureText`.
+    var errorAlert: Client.ConnectFailureText?
     /// Set when the latest connect attempt failed because the server's leaf
     /// cert no longer matches the stored pin. The view binds a dedicated
     /// alert to this so the user gets Re-pair / Forget / Cancel instead of
-    /// the generic "Connection failed" message. Mirrors the
-    /// `PinMismatchDialog` shown on Android.
+    /// the generic failure alert. Mirrors the `PinMismatchDialog` shown on
+    /// Android.
     var pinMismatchEntry: HostEntryLocal?
     /// Set when a scan matched a host already in the list; the view binds an
     /// alert to this. See `RePairResult`.
     var rePairResult: RePairResult?
+
+    /// Fallback alert title, used when no classified failure is showing.
+    /// The strings themselves live in the shared `Client.ConnectFailureCopy`
+    /// so iOS and Android cannot drift apart.
+    static var failedTitle: String { Client.ConnectFailureCopy.shared.FAILED_TITLE }
+
+    /// A connect failure awaiting presentation, or `nil`. See `raise(_:)` for
+    /// why a failure ever has to wait.
+    enum ConnectFailure {
+        /// A titled failure, shown by the generic failure alert.
+        case text(Client.ConnectFailureText)
+        /// A TLS pin mismatch, shown by the dedicated Re-pair / Forget alert.
+        case pinMismatch(HostEntryLocal)
+    }
+
+    /// A failure raised while `ConnectingSheet` was still on screen, held back
+    /// until that sheet has finished dismissing. Flushed by
+    /// `presentPendingFailure()` from the sheet's `onDismiss`.
+    ///
+    /// SwiftUI refuses to present an alert while another presentation is in
+    /// progress and does **not** retry — it logs "Attempt to present ... while
+    /// a presentation is in progress" and drops the alert on the floor. Setting
+    /// `errorAlert` in the same main-actor turn that clears `connectingEntry`
+    /// hit exactly that: the connect failure was diagnosed correctly and then
+    /// silently discarded, leaving the user on an empty sessions list that
+    /// claimed they had no tabs.
+    private var pendingFailure: ConnectFailure?
     var waitingForApproval: Bool { ConnectionHolder.shared.pendingApproval }
 
     /// Sentinel id used in `connectingId` for the built-in demo row, which
@@ -90,7 +120,7 @@ final class HostsViewModel {
     /// saved host entry.
     func connectDemo() {
         connectingId = Self.demoConnectingId
-        errorMessage = nil
+        errorAlert = nil
         Task {
             do {
                 let serverUrl = Client.ServerUrl(host: DemoModeKt.DEMO_HOST, port: 0)
@@ -108,8 +138,10 @@ final class HostsViewModel {
                 await MainActor.run { connectingId = nil }
             } catch {
                 await MainActor.run {
-                    connectingId = nil
-                    errorMessage = error.localizedDescription
+                    raise(.text(Client.ConnectFailureText(
+                        title: Self.failedTitle,
+                        message: error.localizedDescription
+                    )))
                 }
             }
         }
@@ -132,7 +164,7 @@ final class HostsViewModel {
         connectingEntry = entry
         connectingWalk = walk
         attemptingAddress = nil
-        errorMessage = nil
+        errorAlert = nil
         connectTask = Task {
             do {
                 let token = try await repository.getOrCreateAuthToken()
@@ -168,15 +200,17 @@ final class HostsViewModel {
                 await MainActor.run { clearConnecting() }
             } catch {
                 await MainActor.run {
-                    clearConnecting()
                     // The user pressed Cancel; they already know. Saying
                     // "couldn't reach the Mac" would blame the network for
                     // something they did on purpose.
-                    if error is CancellationError || Task.isCancelled { return }
+                    if error is CancellationError || Task.isCancelled {
+                        clearConnecting()
+                        return
+                    }
                     if ConnectionHolder.shared.lastPinMismatch {
-                        pinMismatchEntry = entry
+                        raise(.pinMismatch(entry))
                     } else {
-                        errorMessage = Self.connectFailureMessage(error)
+                        raise(.text(Self.connectFailureText(error)))
                     }
                 }
             }
@@ -206,6 +240,50 @@ final class HostsViewModel {
         connectTask = nil
     }
 
+    /// Surface a connect failure, tearing down the progress UI first.
+    ///
+    /// When `ConnectingSheet` is up (every real host connect), the alert cannot
+    /// be presented in the same turn that dismisses it, so the failure is
+    /// stashed in `pendingFailure` and the sheet's `onDismiss` presents it once
+    /// the screen is free. When no sheet is up (the demo path, which has no
+    /// progress UI) there is nothing to wait for and it presents immediately.
+    ///
+    /// Called from every connect catch block. Use this rather than assigning
+    /// `errorAlert` / `pinMismatchEntry` directly, so no failure can be lost
+    /// to a presentation conflict again.
+    ///
+    /// - Parameter failure: what to tell the user.
+    /// - SeeAlso: `presentPendingFailure()`
+    private func raise(_ failure: ConnectFailure) {
+        let sheetWasUp = connectingEntry != nil
+        clearConnecting()
+        if sheetWasUp {
+            pendingFailure = failure
+        } else {
+            present(failure)
+        }
+    }
+
+    /// Bind `failure` to the alert state the view observes.
+    private func present(_ failure: ConnectFailure) {
+        switch failure {
+        case .text(let text): errorAlert = text
+        case .pinMismatch(let entry): pinMismatchEntry = entry
+        }
+    }
+
+    /// Present a failure that `raise(_:)` held back while the progress sheet
+    /// was still dismissing. Called from `ConnectingSheet`'s `onDismiss`, which
+    /// fires after the dismissal completes — the point at which presenting an
+    /// alert is safe. No-op when the connect succeeded or was cancelled.
+    ///
+    /// - SeeAlso: `raise(_:)`
+    func presentPendingFailure() {
+        guard let failure = pendingFailure else { return }
+        pendingFailure = nil
+        present(failure)
+    }
+
     /// Handle a scanned QR / deep-linked pairing URI: parse, dedupe against
     /// existing entries, save, and connect straight away. Mirrors the Android
     /// `handlePairingUri` lambda.
@@ -219,7 +297,10 @@ final class HostsViewModel {
     func handlePairingUri(_ uri: String) {
         guard let payload = Client.PairingPayload.companion.parse(uri: uri),
               !payload.candidates.isEmpty else {
-            errorMessage = "That doesn't look like a Lunamux pairing code"
+            errorAlert = Client.ConnectFailureText(
+                title: Self.failedTitle,
+                message: "That doesn't look like a Lunamux pairing code"
+            )
             return
         }
         Task {
@@ -269,7 +350,12 @@ final class HostsViewModel {
                     pairingToken: payload.token
                 )
                 guard let created else {
-                    await MainActor.run { errorMessage = "Couldn't save the paired server" }
+                    await MainActor.run {
+                        errorAlert = Client.ConnectFailureText(
+                            title: Self.failedTitle,
+                            message: "Couldn't save the paired server"
+                        )
+                    }
                     return
                 }
                 // A brand-new host keeps the scan → connected promise: the new
@@ -279,38 +365,30 @@ final class HostsViewModel {
         }
     }
 
-    /// Build a connection-failure message that explains the likely cause
-    /// instead of echoing a transport error.
+    /// Classify a connect failure into the alert's title and message.
     ///
-    /// Deliberately does not inspect the device's transport. Mobile data used
-    /// to get its own "you can't reach a LAN host from here" message, but that
-    /// is not true — a VPN reaches the Mac over cellular perfectly well — and a
-    /// message that blames the connection reads as though the app refused to
-    /// try. It never refused: the connect is always attempted, and this only
-    /// ever runs once one has already failed. The same reachability advice
-    /// covers every transport.
+    /// The connect itself runs in shared code, so shared code already knows what
+    /// went wrong and throws a typed failure for each case. Both the rules and
+    /// every string they can produce therefore live in
+    /// `Client.ConnectFailureCopy`, and Android renders identical wording from
+    /// identical rules. All this wrapper does is unwrap the Kotlin throwable
+    /// that Kotlin/Native boxes inside the bridged `NSError` — the same move
+    /// `ConnectionHolder.isPinMismatch(_:)` makes for the same reason.
     ///
-    /// Mirrors the Android `connectFailureMessage`.
+    /// `KotlinException` is absent for failures raised in Swift itself (the
+    /// connect timeout in `ConnectionHolder.withTimeout`); `classify` takes the
+    /// throwable as optional and falls back to the message for exactly that.
     ///
     /// - Parameter error: the connect failure (non-pin-mismatch).
-    /// - Returns: a user-facing message for the alert.
-    private static func connectFailureMessage(_ error: Error) -> String {
-        // A device-auth rejection reaches the server but is turned away before
-        // the first config (expired/foreign pairing token, allow-remote off, or
-        // a revoked device). Its raw text is developer-facing, so translate the
-        // known case into something the user can act on.
-        if error.localizedDescription.contains("before sending a config") {
-            return "The server declined this connection. On your Mac, in Lunamux, go to "
-                + "\"Settings > Server & Security… > Devices\" to re-pair or approve this device."
-        }
-        // Reachability advice only when we genuinely couldn't reach the server.
-        // A phase-2 failure (reached, but the server rejected the device /
-        // never sent a config) carries a descriptive message we must not mask.
-        guard error is ServerUnreachableError else {
-            return error.localizedDescription
-        }
-        return "Couldn't reach the Lunamux server. Make sure this iPhone is on the same Wi-Fi "
-            + "network as your computer, or on a VPN that can reach it."
+    /// - Returns: the title and message for the alert.
+    /// - SeeAlso: `Client.ConnectFailureCopy.classify`
+    private static func connectFailureText(_ error: Error) -> Client.ConnectFailureText {
+        let thrown = (error as NSError).userInfo["KotlinException"] as? Client.KotlinThrowable
+        return Client.ConnectFailureCopy.shared.classify(
+            throwable: thrown,
+            rawMessage: error.localizedDescription,
+            deviceNoun: "iPhone"
+        )
     }
 
     /// Save a manually-typed host. The edit sheet guarantees at least one

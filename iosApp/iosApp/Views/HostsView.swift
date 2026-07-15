@@ -53,7 +53,12 @@ struct HostsView: View {
             // The in-flight connect owns the screen while it runs: a walk can
             // take the per-address budget several times over, so it needs room
             // to say what it is doing and a way to be called off.
-            .sheet(item: $viewModel.connectingEntry) { entry in
+            // `onDismiss` is where a failed connect surfaces: the alert cannot
+            // be presented while this sheet is still on screen, so the view
+            // model holds the failure back until the dismissal completes.
+            .sheet(item: $viewModel.connectingEntry, onDismiss: {
+                viewModel.presentPendingFailure()
+            }) { entry in
                 ConnectingSheet(
                     entry: entry,
                     walk: viewModel.connectingWalk,
@@ -62,8 +67,11 @@ struct HostsView: View {
                     onCancel: { viewModel.cancelConnect() }
                 )
             }
-            .onChange(of: ConnectionHolder.shared.client != nil) { _, connected in
-                if connected { onConnected() }
+            // Navigate on `isReady`, never on `client != nil`: the client is
+            // published before the initial-config wait, so the latter is true
+            // for a connect the server may still reject.
+            .onChange(of: ConnectionHolder.shared.isReady) { _, ready in
+                if ready { onConnected() }
             }
             // Pairing deep link (system camera / browser → lunamux://pair).
             // `onAppear` catches a cold-launch link posted before this screen
@@ -872,14 +880,17 @@ private struct HostsAlertsModifier: ViewModifier {
                     Text("\"\(entry.label)\" will be removed from this device.")
                 }
             }
-            .alert("Connection failed", isPresented: .init(
-                get: { viewModel.errorMessage != nil },
-                set: { if !$0 { viewModel.errorMessage = nil } }
+            // Title comes from the failure, not the modifier: a server that
+            // refused us is titled "Connection refused", not "Connection
+            // failed", so the first line already says retrying won't help.
+            .alert(viewModel.errorAlert?.title ?? HostsViewModel.failedTitle, isPresented: .init(
+                get: { viewModel.errorAlert != nil },
+                set: { if !$0 { viewModel.errorAlert = nil } }
             )) {
-                Button("OK", role: .cancel) { viewModel.errorMessage = nil }
+                Button("OK", role: .cancel) { viewModel.errorAlert = nil }
             } message: {
-                if let msg = viewModel.errorMessage {
-                    Text(msg)
+                if let alert = viewModel.errorAlert {
+                    Text(alert.message)
                 }
             }
             .alert("Server certificate changed", isPresented: .init(

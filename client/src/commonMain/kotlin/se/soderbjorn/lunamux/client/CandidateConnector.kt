@@ -64,6 +64,23 @@ data class CandidateConnection(
  * @param cause the underlying transport failure.
  * @see isPinMismatch
  */
+/**
+ * Thrown by [CandidateConnector.connectFirstReachable] when no candidate
+ * endpoint answered — every address timed out or failed at the transport level.
+ * This is the one failure for which "check your Wi-Fi" advice is correct.
+ *
+ * Deliberately *not* thrown for a pin mismatch (the server answered; see
+ * [PinMismatchException]) nor for a post-handshake device-auth rejection (the
+ * server answered and refused us; see [DeviceAuthRejectedException]) — those
+ * would each be misdiagnosed as a network problem.
+ *
+ * @param cause the last endpoint's underlying transport failure.
+ * @see se.soderbjorn.lunamux.client.viewmodel.ConnectFailureCopy.classify
+ */
+class ServerUnreachableException(
+    cause: Throwable,
+) : Exception("no candidate endpoint could be reached", cause)
+
 class PinMismatchException(
     val observedFingerprintHex: String?,
     cause: Throwable?,
@@ -193,7 +210,18 @@ object CandidateConnector {
                 }
             }
         }
-        throw pinMismatch ?: lastFailure ?: IllegalStateException("no candidates attempted")
+        // A pin mismatch outranks reachability: the server answered, it just
+        // presented the wrong cert, and the UI owes the user the cert-changed
+        // dialog rather than "check your Wi-Fi".
+        pinMismatch?.let { throw it }
+        // Every endpoint failed for a non-pin reason — which *is* the
+        // definition of "server unreachable", and this is where that becomes
+        // known. Typing it here is what lets the UI layers dispatch on the
+        // failure instead of each platform re-deriving it by wrapping at its
+        // own phase-1 catch (which is how the two hosts screens ended up with
+        // separate ServerUnreachable types and duplicate copy).
+        lastFailure?.let { throw ServerUnreachableException(it) }
+        throw IllegalStateException("no candidates attempted")
     }
 
     /**

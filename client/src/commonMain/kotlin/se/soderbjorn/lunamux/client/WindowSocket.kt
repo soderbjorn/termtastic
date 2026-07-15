@@ -45,6 +45,28 @@ import se.soderbjorn.lunamux.WindowEnvelope
  * [se.soderbjorn.lunamux.client.demo.DemoWindowSocket] (in-process
  * simulation).
  */
+/**
+ * Thrown by [WindowSocket.awaitInitialConfig] when the server accepts the
+ * WebSocket upgrade but closes the channel before sending any config — i.e. it
+ * reached us and refused this device (a revoked/denied device, an expired or
+ * foreign pairing token, or allow-remote switched off server-side).
+ *
+ * A distinct type rather than a message string: this condition is detected
+ * *here*, in shared code, so every UI layer can dispatch on the type instead of
+ * pattern-matching prose. It previously travelled as an [IllegalStateException]
+ * whose text both the iOS and Android hosts screens matched on with
+ * `contains("before sending a config")` — the classification was thereby
+ * duplicated per platform and coupled to wording no one could safely edit.
+ *
+ * @param message developer-facing detail, kept for logs and crash reports.
+ *   User-facing copy comes from
+ *   [se.soderbjorn.lunamux.client.viewmodel.ConnectFailureCopy] instead.
+ * @see se.soderbjorn.lunamux.client.viewmodel.ConnectFailureCopy.classify
+ */
+class DeviceAuthRejectedException(
+    message: String,
+) : Exception(message)
+
 interface WindowSocket {
     /** The latest authoritative window layout, `null` before the first push. */
     val config: StateFlow<WindowConfig?>
@@ -65,8 +87,8 @@ interface WindowSocket {
     /**
      * Waits for either the first [WindowEnvelope.Config] to arrive or the
      * channel to close post-handshake. Returns normally on config, throws
-     * [IllegalStateException] if the channel closed before any config was
-     * received (the server rejected us after the WS upgrade — typically
+     * [DeviceAuthRejectedException] if the channel closed before any config
+     * was received (the server rejected us after the WS upgrade — typically
      * because device auth returned REJECTED or HEADLESS).
      */
     @Throws(CancellationException::class, Exception::class)

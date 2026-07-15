@@ -42,6 +42,8 @@ import kotlinx.serialization.encodeToString
 import se.soderbjorn.lunamux.WindowCommand
 import se.soderbjorn.lunamux.WindowConfig
 import se.soderbjorn.lunamux.WindowEnvelope
+import se.soderbjorn.lunamux.effectiveActiveTabId
+import se.soderbjorn.lunamux.effectiveTabs
 
 /**
  * Live WebSocket connection to `/window`. See [WindowSocket] for the contract.
@@ -154,11 +156,41 @@ class RealWindowSocket internal constructor(
                     session.incoming.consumeEach { frame ->
                         lastTrafficAtMillis = Clock.System.now().toEpochMilliseconds()
                         if (frame !is Frame.Text) return@consumeEach
+                        val text = frame.readText()
                         val envelope = runCatching {
-                            client.json.decodeFromString<WindowEnvelope>(frame.readText())
-                        }.getOrNull() ?: return@consumeEach
+                            client.json.decodeFromString<WindowEnvelope>(text)
+                        }.getOrElse { t ->
+                            // A frame this build cannot decode is a real signal,
+                            // not noise: an envelope or pane `kind` newer than
+                            // the app (the server gates only `agent`/`webBrowser`
+                            // panes and `worlds`, on the *self-reported* version)
+                            // otherwise vanishes here indistinguishably from the
+                            // server never having sent it. Log the head of the
+                            // payload — enough to name the offending `kind`.
+                            println(
+                                "WindowSocket: DROPPED undecodable frame " +
+                                    "(${t::class.simpleName}: ${t.message}); " +
+                                    "head=${text.take(240)}"
+                            )
+                            return@consumeEach
+                        }
                         when (envelope) {
-                            is WindowEnvelope.Config -> client.windowState.updateConfig(envelope.config)
+                            is WindowEnvelope.Config -> {
+                                // Log the *shape* the projection actually keys on
+                                // (`effectiveTabs` = active world's tabs), so an
+                                // empty sessions list can be attributed to the
+                                // wire config rather than to the UI layer.
+                                val cfg = envelope.config
+                                println(
+                                    "WindowSocket: Config worlds=${cfg.worlds.size} " +
+                                        "activeWorldId=${cfg.activeWorldId} " +
+                                        "legacyTabs=${cfg.tabs.size} " +
+                                        "effectiveTabs=${cfg.effectiveTabs.size} " +
+                                        "effectiveActiveTabId=${cfg.effectiveActiveTabId} " +
+                                        "worldTabCounts=${cfg.worlds.map { "${it.id}:${it.tabs.size}" }}"
+                                )
+                                client.windowState.updateConfig(cfg)
+                            }
                             is WindowEnvelope.State -> client.windowState.updateStates(envelope.states)
                             is WindowEnvelope.PendingApproval -> client.windowState.setPendingApproval()
                             // Carries the merged flat-KV blob (incl. the
@@ -258,7 +290,7 @@ class RealWindowSocket internal constructor(
             closedDeferred.cancel()
         }
         if (client.windowState.config.value == null) {
-            throw IllegalStateException(
+            throw DeviceAuthRejectedException(
                 "Server closed the /window socket before sending a config — " +
                     "likely device-auth rejection. Check the server's log for " +
                     "\"rejecting non-loopback\" or \"headless\".",

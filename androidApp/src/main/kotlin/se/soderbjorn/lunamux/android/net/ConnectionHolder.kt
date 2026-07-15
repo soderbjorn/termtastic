@@ -24,16 +24,6 @@ import java.net.NetworkInterface
  * [LunamuxApp] rebuilds this whenever the user commits a new host/port
  * from the Connect screen.
  */
-/**
- * Thrown by [ConnectionHolder.connectMulti] when no candidate endpoint could
- * be reached (phase-1 failure that is not a pin mismatch). Distinguishes a
- * reachability problem — the case where "check your Wi-Fi" advice is correct —
- * from a phase-2 failure where the server WAS reached but rejected the device.
- *
- * @param cause the last underlying transport failure.
- */
-class ServerUnreachableException(cause: Throwable) : Exception(cause)
-
 object ConnectionHolder {
     @Volatile
     private var currentClient: LunamuxClient? = null
@@ -100,26 +90,20 @@ object ConnectionHolder {
     ): CandidateConnection {
         disconnect()
         Log.i("ConnectionHolder", "connectMulti: ${addresses.size} address(es)")
-        // Phase 1 — reach an address. A pin mismatch propagates unwrapped so
-        // the UI can show the cert-changed dialog; any other phase-1 failure
-        // means no address answered, which is a reachability problem, so we
-        // tag it as such. Phase-2 failures below are the opposite (we reached
-        // the server but it didn't send a config — an auth rejection), and
-        // must NOT be mislabelled as a network problem.
-        val connection = try {
-            CandidateConnector.connectFirstReachable(
-                endpoints = addresses,
-                authToken = authToken,
-                // Real hosts only — the demo never reaches connectMulti.
-                identity = androidIdentity(demo = false),
-                pinnedFingerprintHex = pinnedFingerprintHex,
-                pairingToken = pairingToken,
-                onAttempt = onAttempt,
-            )
-        } catch (t: Throwable) {
-            if (t is kotlinx.coroutines.CancellationException || isPinMismatch(t)) throw t
-            throw ServerUnreachableException(t)
-        }
+        // Phase 1 — reach an address. Every failure is already typed by the
+        // shared connector: a pin mismatch propagates for the cert-changed
+        // dialog, and an unreachable walk arrives as ServerUnreachableException.
+        // Nothing is re-wrapped here — doing so was what forced the hosts screen
+        // to re-derive, in Android code, a fact shared code had established.
+        val connection = CandidateConnector.connectFirstReachable(
+            endpoints = addresses,
+            authToken = authToken,
+            // Real hosts only — the demo never reaches connectMulti.
+            identity = androidIdentity(demo = false),
+            pinnedFingerprintHex = pinnedFingerprintHex,
+            pairingToken = pairingToken,
+            onAttempt = onAttempt,
+        )
         // Publish before the config wait so the approval-pending flow is
         // observable while the server-side dialog (if any) is up.
         currentClient = connection.client

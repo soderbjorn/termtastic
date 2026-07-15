@@ -1,16 +1,6 @@
 import Foundation
 import Client
 
-/// Thrown by `ConnectionHolder.connectMulti` when no candidate endpoint could
-/// be reached (a phase-1 failure that is not a pin mismatch). Distinguishes a
-/// reachability problem — the case where "check your Wi-Fi" advice is correct
-/// — from a phase-2 failure where the server WAS reached but rejected the
-/// device. Mirrors the Android `ServerUnreachableException`.
-struct ServerUnreachableError: Error {
-    /// The last underlying transport failure.
-    let underlying: Error
-}
-
 /// Process-scoped singleton holding the live `LunamuxClient` and
 /// `WindowSocket`. Mirrors the Android `ConnectionHolder` singleton.
 @Observable
@@ -19,6 +9,21 @@ final class ConnectionHolder {
 
     private(set) var client: Client.LunamuxClient?
     private(set) var windowSocket: Client.WindowSocket?
+
+    /// Whether a connection is fully established: the client is live **and** the
+    /// server's initial config has arrived.
+    ///
+    /// Deliberately distinct from `client != nil`. `connectMulti` publishes the
+    /// client *before* it waits for the config, so the approval-pending flow is
+    /// observable while the server-side dialog is up — which means `client`
+    /// becomes non-nil during a connect that may still be rejected. Navigation
+    /// must key on this flag instead: keying on `client != nil` pushed the
+    /// sessions screen the moment the socket opened, and a phase-2 rejection
+    /// then cleared the client without ever popping that screen, stranding the
+    /// user on an empty session list behind the failure alert.
+    ///
+    /// Read by `HostsView` to decide when to navigate to the sessions screen.
+    private(set) var isReady: Bool = false
 
     private init() {
         client = nil
@@ -120,6 +125,8 @@ final class ConnectionHolder {
         approvalObserver = nil
         self.client = fresh
         self.windowSocket = socket
+        // Both phases passed — safe to navigate.
+        self.isReady = true
     }
 
     /// Try every candidate endpoint of a host entry in order and keep the
@@ -151,9 +158,11 @@ final class ConnectionHolder {
     ///     re-parse.
     /// - Returns: the winning `CandidateConnection`; the caller promotes its
     ///   endpoint to the head of the entry's address list.
-    /// - Throws: `ServerUnreachableError` when no address answered, or the
-    ///   underlying failure otherwise. Pin mismatches propagate so the caller
-    ///   can check `lastPinMismatch`.
+    /// - Throws: the shared `ServerUnreachableException` when no address
+    ///   answered, `DeviceAuthRejectedException` when the server refused the
+    ///   device, or the underlying failure otherwise — all typed by shared code
+    ///   and classified for the user by `ConnectFailureCopy`. Pin mismatches
+    ///   propagate so the caller can check `lastPinMismatch`.
     @MainActor
     @discardableResult
     func connectMulti(
@@ -171,11 +180,12 @@ final class ConnectionHolder {
         let identity = Self.identity(demo: false)
 
         // Phase 1 — reach an address. A pin mismatch is re-surfaced through
-        // `lastPinMismatch` so the UI can show the cert-changed dialog; any
-        // other phase-1 failure means no address answered, which is a
-        // reachability problem, so tag it as such. Phase-2 failures below are
-        // the opposite (we reached the server but it didn't send a config —
-        // an auth rejection) and must NOT be mislabelled as a network problem.
+        // `lastPinMismatch` so the UI can show the cert-changed dialog. Every
+        // other failure is already typed by the shared connector — an
+        // unreachable walk arrives as `ServerUnreachableException` — so it is
+        // rethrown untouched rather than re-wrapped here; wrapping it in a
+        // Swift type was what forced the hosts screen to re-derive, in Swift,
+        // a fact shared code had already established.
         let connection: Client.CandidateConnection
         do {
             connection = try await Client.CandidateConnector.shared.connectFirstReachable(
@@ -191,9 +201,8 @@ final class ConnectionHolder {
         } catch {
             if Self.isPinMismatch(error) {
                 lastPinMismatch = true
-                throw error
             }
-            throw ServerUnreachableError(underlying: error)
+            throw error
         }
 
         // Publish before the config wait so the approval-pending flow is
@@ -224,6 +233,9 @@ final class ConnectionHolder {
         pendingApproval = false
         observer.clear()
         approvalObserver = nil
+        // The config landed — this connection is real. Only now may the UI
+        // leave the hosts screen.
+        isReady = true
         return connection
     }
 
@@ -252,6 +264,7 @@ final class ConnectionHolder {
     @MainActor
     func disconnect() {
         let ws = windowSocket
+        isReady = false
         windowSocket = nil
         client?.close()
         client = nil
