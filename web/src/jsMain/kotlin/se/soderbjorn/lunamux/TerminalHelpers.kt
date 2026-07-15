@@ -89,6 +89,20 @@ external class ResizeObserver(callback: (dynamic, dynamic) -> Unit) {
  *   null when no vote is pending (lives on the entry, not in a
  *   per-connection closure, so the handler can be registered once per
  *   xterm instance)
+ * @property restoreSettling true on a cold-restore first attach, from socket
+ *   open until the pane's split geometry and webfont metrics settle. While
+ *   set, the automatic fit/vote paths hold the grid at the server-restored
+ *   width instead of refitting, so a transient startup width can't be voted
+ *   back and reflow the just-replayed transcript — the split-pane "mangled
+ *   restore" bug, where xterm's lossy reflow of cursor-positioned TUI output
+ *   scrambled it. Cleared by [finishRestoreSettle] after the single
+ *   reconciling fit + vote.
+ * @property settleTimer debounce timer handle for the restore-settle pass, or
+ *   null when none is pending (see [scheduleRestoreSettle])
+ * @property settleAttempts number of settle reschedules spent waiting for the
+ *   webfont to finish loading; capped ([RESTORE_SETTLE_MAX_ATTEMPTS]) so a
+ *   font that never reports "loaded" cannot strand the pane in
+ *   [restoreSettling] forever
  */
 class TerminalEntry(
     val paneId: String,
@@ -113,6 +127,9 @@ class TerminalEntry(
     var awaitingSnapshot: Boolean = false,
     var replaying: Boolean = false,
     var pendingResizeTimer: Int? = null,
+    var restoreSettling: Boolean = false,
+    var settleTimer: Int? = null,
+    var settleAttempts: Int = 0,
 )
 
 /**
@@ -443,6 +460,12 @@ fun forceReassert(entry: TerminalEntry) {
     // would lock the PTY at the size it just told us it has, defeating
     // the purpose of the reassert (forcing the PTY to match our grid).
     if (entry.applyingServerSize) return
+    // Hold off while a cold-restored pane is still settling: its grid is
+    // pinned to the server-restored width and a reassert here would fit to a
+    // transient container size and reflow the just-replayed transcript. The
+    // one-shot [finishRestoreSettle] pass does the reconciling fit + vote once
+    // the geometry is stable. See [TerminalEntry.restoreSettling].
+    if (entry.restoreSettling) return
     // Stand down while the 3D world is open — for ANY pane, not just one the ring
     // currently holds. While the world is up it is the sole size authority
     // (setPaneGrid sends its own ForceResize) and the 2D shell is hidden, so every

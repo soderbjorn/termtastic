@@ -84,6 +84,15 @@ fun attachDragDrop(container: HTMLElement, term: Terminal) {
  */
 fun sendResize(entry: TerminalEntry) {
     if (entry.applyingServerSize) return
+    // Cold-restore settling window: swallow the vote. The stale fit sampled at
+    // socket open (before the split geometry / webfont settled) debounces
+    // through here ~200 ms later — after the server has already restored the
+    // pane to its persisted width and the snapshot has rendered at it. Voting
+    // that transient width would make the arbiter rebroadcast it and xterm
+    // reflow the transcript to the wrong width (lossy for TUI output). The
+    // single [finishRestoreSettle] pass casts the one authoritative vote once
+    // the pane is stable. See [TerminalEntry.restoreSettling].
+    if (entry.restoreSettling) return
     // Per-pane "stop automatic reflow": when off, never push a resize to
     // the PTY automatically. This is the single chokepoint every
     // automatic local refit funnels through (via `term.onResize`), so
@@ -145,6 +154,94 @@ fun sendResize(entry: TerminalEntry) {
  */
 private fun entryOpen(entry: TerminalEntry): Boolean =
     entry.socket?.readyState?.toInt() == org.w3c.dom.WebSocket.OPEN.toInt()
+
+/** Quiet period (ms) the container must hold before a restored pane is refit. */
+private const val RESTORE_SETTLE_QUIET_MS = 250
+
+/**
+ * Max [scheduleRestoreSettle] reschedules spent waiting for the webfont to
+ * finish loading before settling anyway (≈ [RESTORE_SETTLE_QUIET_MS] × this ≈
+ * 3 s), so a font that never reports `"loaded"` can't strand a pane in the
+ * settling state forever.
+ */
+private const val RESTORE_SETTLE_MAX_ATTEMPTS = 12
+
+/**
+ * (Re)arm the post-restore settle debounce for [entry].
+ *
+ * Called from every path that changes a freshly cold-restored pane's geometry
+ * or metrics during the startup window — the snapshot-draw completion
+ * ([connectPane]'s message handler), the webfont-load callback, and the
+ * container `ResizeObserver` (including a tab's first activation). Each call
+ * resets the timer, so the pane is only treated as "settled" once the
+ * container has been quiet for [RESTORE_SETTLE_QUIET_MS]; then
+ * [finishRestoreSettle] runs the single reconciling fit + vote. A no-op once
+ * settling has ended (guarding against a stray late `ResizeObserver` fire).
+ *
+ * @param entry the restored pane whose settle to (re)schedule.
+ * @see finishRestoreSettle @see TerminalEntry.restoreSettling
+ */
+fun scheduleRestoreSettle(entry: TerminalEntry) {
+    if (!entry.restoreSettling) return
+    entry.settleTimer?.let { window.clearTimeout(it) }
+    entry.settleTimer = window.setTimeout({
+        entry.settleTimer = null
+        finishRestoreSettle(entry)
+    }, RESTORE_SETTLE_QUIET_MS)
+}
+
+/**
+ * End the cold-restore settling window for [entry] with a single fit + soft
+ * size vote, so the restored transcript is reflowed at most once and only to
+ * the pane's genuinely-settled width.
+ *
+ * Preconditions are checked here rather than by callers:
+ *  - the container must be visible (`offsetParent != null`); a pane restored
+ *    into a not-yet-activated tab has no real dimensions until first
+ *    activation, so it stays [TerminalEntry.restoreSettling] and the
+ *    `ResizeObserver`'s hidden→visible edge re-arms it via
+ *    [scheduleRestoreSettle];
+ *  - the webfont should have loaded (`document.fonts.status == "loaded"`),
+ *    else the fit would measure fallback-font cells and land on the wrong
+ *    column count; reschedule up to [RESTORE_SETTLE_MAX_ATTEMPTS] times, then
+ *    proceed regardless so a stuck font can't hang the pane.
+ *
+ * When the layout matches the pre-quit session the fitted width equals the
+ * restored width and [fitPreservingScroll] is a no-op — no reflow. If the
+ * window reopened at a different size it reflows exactly once, to the correct
+ * width, and [sendResize] propagates it to the PTY. The soft vote (not
+ * `forceReassert`) mirrors `onopen`'s multi-client reasoning: it must not evict
+ * other clients' votes.
+ *
+ * @param entry the restored pane to settle.
+ * @see scheduleRestoreSettle @see sendResize @see connectPane
+ */
+fun finishRestoreSettle(entry: TerminalEntry) {
+    if (!entry.restoreSettling) return
+    if (entry.container.offsetParent == null) return // wait for first-visible edge
+    val fontsLoaded = document.asDynamic().fonts?.status == "loaded"
+    if (!fontsLoaded && entry.settleAttempts < RESTORE_SETTLE_MAX_ATTEMPTS) {
+        entry.settleAttempts++
+        entry.settleTimer?.let { window.clearTimeout(it) }
+        entry.settleTimer = window.setTimeout({
+            entry.settleTimer = null
+            finishRestoreSettle(entry)
+        }, RESTORE_SETTLE_QUIET_MS)
+        return
+    }
+    entry.restoreSettling = false
+    entry.settleTimer = null
+    if (entry.autoReflow && !isRidingSpikePlane(entry)) {
+        // The single reconciling fit: changes term.cols/rows only when the
+        // settled width differs from the restored one (a genuine size change),
+        // in which case this is the one intentional reflow.
+        try { fitPreservingScroll(entry.term, entry.fit) } catch (_: Throwable) {}
+        // Vote the settled grid. A no-op on the server when it equals the
+        // restored width (the common case); otherwise it propagates the one
+        // real resize to the PTY.
+        sendResize(entry)
+    }
+}
 
 /**
  * Establishes a WebSocket connection to the server's PTY endpoint for a terminal pane.
@@ -234,11 +331,33 @@ fun connectPane(entry: TerminalEntry) {
         // server restored it to rather than re-asserting the current grid.
         // (`sendResize` would self-gate too, but bail early for clarity.)
         if (entry.autoReflow) {
-            if (entry.container.offsetParent != null) {
-                // No local fit while the pane rides a 3D-world plane: there the
-                // container is grid-derived, so a fit would propose a slightly
-                // smaller grid (padding allowance) — the current grid IS the
-                // truth to vote. See [isRidingSpikePlane].
+            if (!entry.everConnected) {
+                // First attach = cold restore. The pane's split geometry and
+                // webfont metrics are still settling, so a fit sampled now can
+                // land a column or two off the width the scrollback was
+                // persisted at. Fitting + voting that transient width makes the
+                // server rebroadcast it and xterm reflow the just-replayed
+                // transcript to the wrong width — and that reflow is lossy for
+                // cursor-positioned TUI output (Claude Code, top, vim), which
+                // is the "mangled restore in split panes" bug. So don't fit or
+                // vote here: hold the grid, let the server's Size + snapshot
+                // render at the persisted width, and defer to a single
+                // reconciling fit + vote once the geometry is stable
+                // ([scheduleRestoreSettle], armed after the snapshot draws /
+                // on first tab activation → [finishRestoreSettle]). When the
+                // layout is unchanged the settled fit equals the restored width
+                // and nothing reflows; a genuine size change reflows exactly
+                // once, to the correct width. A single full-window pane always
+                // hit W_c == W_p here, which is why it never showed the bug.
+                entry.restoreSettling = true
+                entry.settleAttempts = 0
+            } else if (entry.container.offsetParent != null) {
+                // Reconnect (the transcript is already settled at the live
+                // width): re-fit and soft-vote as before. No local fit while
+                // the pane rides a 3D-world plane — there the container is
+                // grid-derived, so a fit would propose a slightly smaller grid
+                // (padding allowance) and the current grid IS the truth to
+                // vote. See [isRidingSpikePlane].
                 if (!isRidingSpikePlane(entry)) {
                     try { fitPreservingScroll(entry.term, entry.fit) } catch (_: Throwable) {}
                 }
@@ -281,6 +400,14 @@ fun connectPane(entry: TerminalEntry) {
                 entry.term.asDynamic().write(bytes) {
                     entry.replaying = false
                     updateScrollButton(entry)
+                    // Cold restore: the transcript is now on screen at the
+                    // server-restored width. Start the settle debounce — once
+                    // the container has been quiet for a beat (and the webfont
+                    // has loaded), the single reconciling fit + vote runs. A
+                    // pane restored into an inactive tab draws here too but
+                    // stays settling until first activation. See
+                    // [scheduleRestoreSettle].
+                    if (entry.restoreSettling) scheduleRestoreSettle(entry)
                 }
             } else {
                 // Write while holding the viewport when the user has scrolled
@@ -394,7 +521,15 @@ fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
         fontsApi.ready.then({ _: dynamic ->
             try {
                 term.options.fontFamily = resolveFontFamilyCss(appVm.stateFlow.value.paneFontFamily)
-                if (container.offsetParent != null) {
+                val settling = terminals[paneId]?.restoreSettling == true
+                if (settling) {
+                    // Mid cold-restore: the bundled webfont just replaced the
+                    // fallback, changing cell metrics. Don't fit or reassert
+                    // now — that would reflow the drawn transcript at a
+                    // transient grid. Re-arm the settle debounce so the single
+                    // reconciling fit runs against the correct metrics.
+                    terminals[paneId]?.let { scheduleRestoreSettle(it) }
+                } else if (container.offsetParent != null) {
                     fitPreservingScroll(term, fit)
                     // Cell metrics changed when the bundled webfont
                     // replaced the fallback; the refit above updated
@@ -560,19 +695,31 @@ fun ensureTerminal(paneId: String, sessionId: String): TerminalEntry {
                 // smaller container, ratcheting the pane (on every client)
                 // down to the minimum. See [isRidingSpikePlane].
                 if (entry.autoReflow && !isRidingSpikePlane(entry)) {
-                    fitPreservingScroll(entry.term, entry.fit)
-                    // Hidden→visible transition: the toolkit's pane-chrome
-                    // cache reattaches inactive-tab content on first tab
-                    // activation, so a pane that was restored at startup
-                    // into a not-yet-opened tab gets its first real
-                    // dimensions here. Fire a one-shot reassert on each
-                    // false→true edge so the PTY catches up to the grid
-                    // — same fix as the startup-active-tab case in
-                    // `connectPane.onopen`, just deferred to first
-                    // activation. Tracking visibility across fires means
-                    // a quick hide/show cycle re-fires correctly.
-                    if (!entry.wasContainerVisible) {
-                        forceReassert(entry)
+                    if (entry.restoreSettling) {
+                        // Cold restore still settling: the container is still
+                        // changing (split geometry applying, or this being the
+                        // tab's first activation). Don't fit — that would
+                        // reflow the drawn transcript at a transient width.
+                        // Each change just extends the quiet period; the
+                        // debounce firing is the "settled" signal that runs the
+                        // single fit ([finishRestoreSettle], which also handles
+                        // the not-yet-visible → visible case).
+                        scheduleRestoreSettle(entry)
+                    } else {
+                        fitPreservingScroll(entry.term, entry.fit)
+                        // Hidden→visible transition: the toolkit's pane-chrome
+                        // cache reattaches inactive-tab content on first tab
+                        // activation, so a pane that was restored at startup
+                        // into a not-yet-opened tab gets its first real
+                        // dimensions here. Fire a one-shot reassert on each
+                        // false→true edge so the PTY catches up to the grid
+                        // — same fix as the startup-active-tab case in
+                        // `connectPane.onopen`, just deferred to first
+                        // activation. Tracking visibility across fires means
+                        // a quick hide/show cycle re-fires correctly.
+                        if (!entry.wasContainerVisible) {
+                            forceReassert(entry)
+                        }
                     }
                 }
                 // Hidden→visible edge: the toolkit reattaches the cached pane
@@ -707,7 +854,14 @@ fun mountPaneContent(paneId: String): HTMLElement {
                 // See the terminal branch below: don't steal the container off a
                 // 3D plane while the world is open. @see closeWorld3dSpike
                 if (!spikeOpen) {
-                    try { safeFit(entry.term, entry.fit) } catch (_: Throwable) {}
+                    // Skip the mount refit while a cold-restored pane is still
+                    // settling: a tab switch onto it would otherwise reflow the
+                    // drawn transcript at a transient width before
+                    // [finishRestoreSettle] reconciles it. The initial mount
+                    // (before onopen sets the flag) still fits normally.
+                    if (!entry.restoreSettling) {
+                        try { safeFit(entry.term, entry.fit) } catch (_: Throwable) {}
+                    }
                     cell.appendChild(entry.container)
                 }
             } else {
@@ -742,7 +896,11 @@ fun mountPaneContent(paneId: String): HTMLElement {
                 // Skip the mount-time refit for frozen panes so re-rendering the
                 // chrome (tab switch, sidebar toggle) doesn't silently reformat a
                 // terminal the user pinned; auto-reflow panes refit as before.
-                if (entry.autoReflow) {
+                // Also skip while a cold-restored pane is still settling: a tab
+                // switch onto it would reflow the drawn transcript at a
+                // transient width ahead of [finishRestoreSettle]. The initial
+                // mount (before onopen sets the flag) is unaffected.
+                if (entry.autoReflow && !entry.restoreSettling) {
                     try { safeFit(entry.term, entry.fit) } catch (_: Throwable) {}
                 }
                 cell.appendChild(entry.container)
