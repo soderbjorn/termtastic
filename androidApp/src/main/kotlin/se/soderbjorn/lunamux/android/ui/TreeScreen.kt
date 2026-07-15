@@ -772,7 +772,7 @@ fun TreeScreen(
                                 text = {
                                     Text(
                                         when (viewMode) {
-                                            SessionsViewMode.LIST -> "Switch to overview"
+                                            SessionsViewMode.LIST -> "Switch to tiled"
                                             SessionsViewMode.OVERVIEW -> "Switch to list"
                                         }
                                     )

@@ -183,27 +183,20 @@ struct TreeView: View {
                 viewModel.disconnect()
                 onDisconnect()
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.backward")
-                    Text("Servers")
-                }
-                // Same tint as every other bar action — mixed per-icon tints
-                // read as a bug on light themes (issue #96).
-                .foregroundStyle(Palette.textPrimary)
+                // A bare chevron: the "Servers" label cost roughly a button's
+                // width on the one bar that cannot afford it. Past ~5 trailing
+                // items iOS folds the whole cluster into an overflow of its
+                // own, which nests with this screen's "…" menu and turns every
+                // secondary action into three taps.
+                Image(systemName: "chevron.backward")
+                    // Same tint as every other bar action — mixed per-icon
+                    // tints read as a bug on light themes (issue #96).
+                    .foregroundStyle(Palette.textPrimary)
             }
+            .accessibilityLabel("Servers")
         }
-        // World switcher (globe). Only shown on world-aware (>=1.9) servers —
-        // `viewModel.worlds` is empty on legacy servers, where the app falls
-        // back to the single top-level tab list and a switcher would be
-        // meaningless. Lists every world with a checkmark on the active one,
-        // then New / Rename / Close actions. Mirrors the desktop/web world
-        // switcher; placed first in the trailing cluster so worlds — the
-        // outermost workspace concept — read before the per-tab "+".
-        if !viewModel.worlds.isEmpty {
-            ToolbarItem(placement: .topBarTrailing) {
-                worldSwitcherMenu
-            }
-        }
+        // Trailing cluster order mirrors the Android `TreeScreen` toolbar:
+        // "+", layout, world switcher, news bell, overflow.
         ToolbarItem(placement: .topBarTrailing) {
             // Combined "+" menu: always offers "New Tab"; in overview mode it
             // also offers adding a pane to the current tab (issue #58).
@@ -271,14 +264,25 @@ struct TreeView: View {
                 .accessibilityLabel("Layout")
             }
         }
+        // World switcher (globe). Only shown on world-aware (>=1.9) servers —
+        // `viewModel.worlds` is empty on legacy servers, where the app falls
+        // back to the single top-level tab list and a switcher would be
+        // meaningless. Lists every world with a checkmark on the active one,
+        // then New / Rename / Close actions. Mirrors the desktop/web world
+        // switcher.
+        if !viewModel.worlds.isEmpty {
+            ToolbarItem(placement: .topBarTrailing) {
+                worldSwitcherMenu
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             NewsBellButton(action: onOpenNews)
         }
         // Overflow ("ellipsis") menu. The secondary bar actions — the
-        // list/overview toggle, the appearance & theme picker, and the
-        // about/links — are collected here behind a single control so the
-        // compact toolbar isn't overcrowded. Mirrors the Android `TreeScreen`
-        // overflow (creation lives on the "+" instead).
+        // list/tiled toggle, the appearance & theme picker, and the about/links
+        // — are collected here behind a single control so the compact toolbar
+        // isn't overcrowded. Mirrors the Android `TreeScreen` overflow, down to
+        // the order of its rows (creation lives on the "+" instead).
         // (world switcher menu content lives in `worldSwitcherMenu` below.)
         ToolbarItem(placement: .topBarTrailing) {
             overflowMenu
@@ -286,14 +290,14 @@ struct TreeView: View {
     }
 
     /// The trailing overflow ("ellipsis") menu holding the secondary toolbar
-    /// actions: the list ⇄ overview toggle, the appearance & theme picker, and
-    /// the shared about/links (`AboutMenuItems`). Extracted from `toolbarItems`
-    /// so each expression stays small enough for SwiftUI's type checker, and to
-    /// mirror the Android `TreeScreen` overflow menu.
+    /// actions: the list ⇄ tiled toggle, the appearance & theme picker, and the
+    /// shared about/links (`AboutMenuItems`). Extracted from `toolbarItems` so
+    /// each expression stays small enough for SwiftUI's type checker, and to
+    /// mirror the Android `TreeScreen` overflow menu — same rows, same order.
     private var overflowMenu: some View {
         Menu {
-            // List ⇄ overview toggle (issue #44). Label + glyph both name the
-            // mode the tap switches *to*.
+            // List ⇄ tiled toggle (issue #44). Label + glyph both name the mode
+            // the tap switches *to*.
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     viewMode = (viewMode == .list) ? .overview : .list
@@ -303,7 +307,7 @@ struct TreeView: View {
                 Client.SessionsViewModeStore.shared.overviewMode = (viewMode == .overview)
             } label: {
                 Label(
-                    viewMode == .list ? "Switch to Overview" : "Switch to List",
+                    viewMode == .list ? "Switch to Tiled" : "Switch to List",
                     systemImage: viewMode == .list ? "square.grid.2x2" : "list.bullet"
                 )
             }
