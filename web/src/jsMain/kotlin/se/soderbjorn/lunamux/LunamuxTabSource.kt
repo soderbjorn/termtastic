@@ -25,16 +25,6 @@ import se.soderbjorn.darkness.web.shell.TabSource
 import se.soderbjorn.lunamux.client.WindowSocket
 import se.soderbjorn.lunamux.client.WindowStateRepository
 import se.soderbjorn.lunamux.WindowCommand
-import se.soderbjorn.lunamux.WorldConfig
-
-/**
- * The active world of a server config (by `activeWorldId`), falling back to
- * the first world, or `null` when the config carries no worlds (a legacy
- * pre-1.9 server / flat fixture). The toolkit shell renders exactly this
- * world's tabs; the world switcher lists all of [WindowConfig.worlds].
- */
-internal fun WindowConfig.activeWorldOrNull(): WorldConfig? =
-    worlds.firstOrNull { it.id == activeWorldId } ?: worlds.firstOrNull()
 
 /**
  * Inline SVGs used by the "New pane" hover dropdown. Same glyphs that
