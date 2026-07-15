@@ -83,25 +83,12 @@ final class TreeViewModel {
     private var minimizedPaneIds: Set<String> = []
 
     func subscribe() {
-        guard let client = ConnectionHolder.shared.client else {
-            NSLog("[Tree] subscribe(): no client — nothing will ever populate the list")
-            return
-        }
+        guard let client = ConnectionHolder.shared.client else { return }
 
         flowObserver.observe(flow: client.windowState.config) { [weak self] value in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.latestConfig = value as? Client.WindowConfig
-                // Distinguish the three ways this list goes empty: no config at
-                // all, a config whose active world resolves to nothing, or a
-                // resolved world that genuinely has no tabs.
-                if let cfg = self.latestConfig {
-                    NSLog("[Tree] config: worlds=%d activeWorldId=%@ legacyTabs=%d resolvedWorld=%@ tabs=%d",
-                          cfg.worlds.count, cfg.activeWorldId ?? "nil", cfg.tabs.count,
-                          self.activeWorld?.id ?? "nil(legacy fallback)", self.activeTabs.count)
-                } else {
-                    NSLog("[Tree] config: emitted nil/uncastable (%@)", String(describing: value))
-                }
                 // Repaint in the active world's theme pair before flattening the
                 // rows so the whole screen adopts the new world's colours the
                 // moment its config lands. Only the config flow carries the
