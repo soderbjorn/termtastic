@@ -17,7 +17,9 @@
  * The initial (silent) check is fired by the renderer itself in
  * [initAutoUpdaterListeners], *after* it has subscribed, so the main process can
  * never emit `update-available` before the renderer is listening
- * (`webContents.send` does not buffer). [triggerUserUpdateCheck] backs the
+ * (`webContents.send` does not buffer). The same function arms a slow periodic
+ * re-check ([UPDATE_RECHECK_INTERVAL_MS]) so a long-running app still learns of
+ * new releases without a relaunch. [triggerUserUpdateCheck] backs the
  * "Check for Updates…" Help-menu item.
  *
  * All entry points are safe outside Electron: they no-op when the `electronApi`
@@ -81,6 +83,15 @@ private data class UpdaterUiState(
     val releaseNotesUrl: String? = null,
 )
 
+/**
+ * How often the silent periodic re-check runs (4 hours). Lunamux is a terminal
+ * app that stays open for days or weeks, so the single launch check alone would
+ * leave long-running sessions permanently unaware of new releases. Silent like
+ * the launch check: only an actionable outcome (update available) surfaces the
+ * banner. See the interval armed in [initAutoUpdaterListeners].
+ */
+private const val UPDATE_RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
+
 /** The live updater state, updated by the events wired in [initAutoUpdaterListeners]. */
 private var updaterState = UpdaterUiState()
 
@@ -140,12 +151,33 @@ fun initAutoUpdaterListeners() {
         ))
     })
     api.onUpdateError({ err: dynamic ->
+        // If this error follows a "Restart to install" click, the app is still
+        // running after we suppressed the "Connection lost" modal in
+        // anticipation of the teardown — re-arm it and re-evaluate, so a server
+        // that WAS shut down before the install failed surfaces as disconnected
+        // instead of dying silently. No-op when nothing was suppressed.
+        if (suppressDisconnectedModal) {
+            suppressDisconnectedModal = false
+            updateAggregateStatus()
+        }
         setUpdaterState(UpdaterUiState(UpdaterStatus.ERROR, message = err?.message as? String))
     })
 
     // Silent initial check, fired only now that we're subscribed. Not user-initiated,
     // so a "nothing new" / offline result leaves the banner hidden.
     if (api.checkForUpdates != null) api.checkForUpdates()
+
+    // Slow periodic re-check (silent, like the launch check) so an app left
+    // open for weeks still learns of new releases. Skipped while an update flow
+    // is in progress: re-checking then would re-emit update-available and
+    // downgrade a DOWNLOADED banner back to "Download".
+    window.setInterval({
+        val s = updaterState.status
+        val busy = s == UpdaterStatus.CHECKING ||
+            s == UpdaterStatus.DOWNLOADING ||
+            s == UpdaterStatus.DOWNLOADED
+        if (!busy && api.checkForUpdates != null) api.checkForUpdates()
+    }, UPDATE_RECHECK_INTERVAL_MS)
 }
 
 /**
@@ -280,6 +312,11 @@ fun buildUpdateBanner(): HTMLElement {
         banner.style.setProperty("display", if (visible) "flex" else "none")
         if (!visible) return
         currentNotesUrl = s.releaseNotesUrl
+        // The "Restart to install" click disables the button optimistically
+        // (the pre-install server shutdown takes a few seconds). Every rendered
+        // state re-enables it, so a failed install's ERROR → "Try again" is
+        // actually clickable instead of inheriting the dead button.
+        (actionBtn.asDynamic()).disabled = false
 
         val showBody = s.status == UpdaterStatus.AVAILABLE ||
             s.status == UpdaterStatus.DOWNLOADED ||
@@ -326,7 +363,10 @@ fun buildUpdateBanner(): HTMLElement {
                 leftEl.textContent = s.message ?: "Something went wrong"
                 actionBtn.textContent = "Try again"
             }
-            else -> {}
+            // IDLE / NOT_AVAILABLE can't reach here: the visibility early-return
+            // above filters them out, which the compiler tracks through `visible`
+            // (so an `else` branch would be flagged as redundant).
+            UpdaterStatus.IDLE, UpdaterStatus.NOT_AVAILABLE -> {}
         }
     }
 

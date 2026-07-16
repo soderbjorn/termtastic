@@ -71,6 +71,70 @@ object UpdateChannels {
 private var updaterListenersBound = false
 
 /**
+ * Supplier of the live main window, stored by [initAutoUpdater] so
+ * [sendUpdateEvent] can reach the current renderer from anywhere in this file
+ * (not just the listener closures). Resolved at send time, so a window rebuild
+ * never severs event delivery.
+ */
+private var updaterWindowSupplier: (() -> BrowserWindow?)? = null
+
+/**
+ * Whether an update has been fully downloaded and is ready to install. Set by
+ * the `update-downloaded` event; cleared again by `update-available` (a newly
+ * discovered version invalidates the previous download, and the renderer's
+ * banner drops back to "Download" at the same moment, keeping both sides in
+ * agreement).
+ *
+ * Guards the `update:quit-and-install` IPC handler in [main]: without it, a
+ * renderer whose state got ahead of reality could shut the bundled server down
+ * for an install that [AutoUpdaterApi.quitAndInstall] will refuse, stranding a
+ * running app with a dead server.
+ */
+private var updateDownloaded = false
+
+/**
+ * Whether a downloaded update is ready to install right now.
+ *
+ * Called by the `update:quit-and-install` IPC handler in [main] before it
+ * commits to the pre-install teardown (quit-gate bypass + server shutdown).
+ *
+ * @return `true` once `update-downloaded` has fired for the currently-known
+ *   version, `false` before any download or after a newer version was found.
+ */
+fun isUpdateDownloaded(): Boolean = updateDownloaded
+
+/**
+ * Sends one update lifecycle event to the current renderer, dropping it when
+ * no live window exists. Shared by the [initAutoUpdater] listeners and the
+ * out-of-band error paths ([reportUpdateError]).
+ *
+ * @param channel one of the main → renderer [UpdateChannels].
+ * @param payload the plain-object payload for the channel, or `null`.
+ */
+private fun sendUpdateEvent(channel: String, payload: dynamic = null) {
+    val w = updaterWindowSupplier?.invoke() ?: return
+    if (!w.isDestroyed()) w.webContents.send(channel, payload)
+}
+
+/**
+ * Surfaces an update failure to the renderer's banner on the standard
+ * [UpdateChannels.ERROR] channel, exactly like electron-updater's own `error`
+ * event.
+ *
+ * Called by the `update:quit-and-install` IPC handler in [main] when it
+ * refuses an install (no downloaded update) and by [quitAndInstallUpdate]'s
+ * failure path — cases that never pass through the autoUpdater singleton and
+ * so would otherwise fail invisibly.
+ *
+ * @param message human-readable failure text, shown verbatim in the banner.
+ */
+fun reportUpdateError(message: String) {
+    val payload = js("({})")
+    payload.message = message
+    sendUpdateEvent(UpdateChannels.ERROR, payload)
+}
+
+/**
  * Configures [autoUpdater] and binds its lifecycle listeners once, forwarding
  * each event to the current renderer.
  *
@@ -93,24 +157,23 @@ fun initAutoUpdater(currentWindow: () -> BrowserWindow?) {
     // (electron-updater's default would auto-apply a pending download on quit).
     autoUpdater.autoInstallOnAppQuit = false
 
+    updaterWindowSupplier = currentWindow
     if (updaterListenersBound) return
     updaterListenersBound = true
 
-    fun send(channel: String, payload: dynamic = null) {
-        val w = currentWindow() ?: return
-        if (!w.isDestroyed()) w.webContents.send(channel, payload)
-    }
-
-    autoUpdater.on("checking-for-update") { send(UpdateChannels.CHECKING) }
+    autoUpdater.on("checking-for-update") { sendUpdateEvent(UpdateChannels.CHECKING) }
 
     autoUpdater.on("update-available") { info ->
+        // A newly discovered version invalidates any previously downloaded one
+        // (the renderer's banner falls back to "Download" on this same event).
+        updateDownloaded = false
         val payload = js("({})")
         payload.version = info?.version
         payload.releaseNotesUrl = releaseNotesUrl(info?.version as? String)
-        send(UpdateChannels.AVAILABLE, payload)
+        sendUpdateEvent(UpdateChannels.AVAILABLE, payload)
     }
 
-    autoUpdater.on("update-not-available") { send(UpdateChannels.NOT_AVAILABLE) }
+    autoUpdater.on("update-not-available") { sendUpdateEvent(UpdateChannels.NOT_AVAILABLE) }
 
     autoUpdater.on("download-progress") { progress ->
         val payload = js("({})")
@@ -118,20 +181,21 @@ fun initAutoUpdater(currentWindow: () -> BrowserWindow?) {
         payload.transferred = progress?.transferred
         payload.total = progress?.total
         payload.bytesPerSecond = progress?.bytesPerSecond
-        send(UpdateChannels.PROGRESS, payload)
+        sendUpdateEvent(UpdateChannels.PROGRESS, payload)
     }
 
     autoUpdater.on("update-downloaded") { info ->
+        updateDownloaded = true
         val payload = js("({})")
         payload.version = info?.version
         payload.releaseNotesUrl = releaseNotesUrl(info?.version as? String)
-        send(UpdateChannels.DOWNLOADED, payload)
+        sendUpdateEvent(UpdateChannels.DOWNLOADED, payload)
     }
 
     autoUpdater.on("error") { err ->
         val payload = js("({})")
         payload.message = (err?.message as? String) ?: "Update failed"
-        send(UpdateChannels.ERROR, payload)
+        sendUpdateEvent(UpdateChannels.ERROR, payload)
     }
 }
 
@@ -175,11 +239,25 @@ fun downloadUpdate() {
  * already-confirmed quit). Deferred via [setImmediate] so the IPC reply is
  * delivered before the app tears down.
  *
+ * If [AutoUpdaterApi.quitAndInstall] throws (e.g. no update is actually
+ * downloaded), the failure is surfaced to the renderer's banner via
+ * [reportUpdateError] and [onFailure] runs — without the try/catch the throw
+ * would be an uncaught main-process exception (Electron's error dialog) in an
+ * app whose server was just shut down.
+ *
+ * @param onFailure invoked when the install could not start and the app keeps
+ *   running; the caller uses it to undo its pre-install teardown (re-arming
+ *   the quit-confirmation gate).
  * @see AutoUpdaterApi.quitAndInstall
  */
-fun quitAndInstallUpdate() {
+fun quitAndInstallUpdate(onFailure: () -> Unit) {
     setImmediate {
-        autoUpdater.quitAndInstall()
+        try {
+            autoUpdater.quitAndInstall()
+        } catch (t: Throwable) {
+            reportUpdateError(t.message ?: "Installing the update failed")
+            onFailure()
+        }
     }
 }
 

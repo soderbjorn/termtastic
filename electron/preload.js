@@ -374,6 +374,22 @@ contextBridge.exposeInMainWorld("electronApi", {
   respondQuitConfirmation: (result) =>
     ipcRenderer.invoke("quit-confirmation-result", result),
 
+  /**
+   * Subscribes to the "quit cancelled" event the main process sends when a
+   * confirmed kill-server quit is abandoned (the server shutdown failed and
+   * the user chose Cancel in the native dialog). The renderer suppressed its
+   * "Connection lost" modal when it confirmed that quit; on this event it
+   * must re-arm the modal, since the app keeps running.
+   *
+   * @param {() => void} handler - Called with no arguments on each event.
+   * @returns {() => void} Unsubscribe function.
+   */
+  onQuitCancelled: (handler) => {
+    const wrapped = () => handler();
+    ipcRenderer.on("quit-cancelled", wrapped);
+    return () => ipcRenderer.removeListener("quit-cancelled", wrapped);
+  },
+
   // --- macOS native fullscreen state ---------------------------------------
 
   /**

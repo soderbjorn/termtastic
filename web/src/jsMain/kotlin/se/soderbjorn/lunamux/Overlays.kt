@@ -102,6 +102,13 @@ fun hidePendingApprovalOverlay() {
  * — a desktop update install ("Restart to install") or a confirmed quit that stops
  * the server — where the server is shut down on purpose and the brief "Connection
  * lost" flash before the app exits would be misleading.
+ *
+ * The teardown is expected to end the session, but when it is abandoned with the
+ * app still running the flag is cleared again so real disconnects aren't silently
+ * swallowed for the rest of the session: on the main process's `quit-cancelled`
+ * event (kill-server quit abandoned after a failed shutdown — see main.kt) and on
+ * an update-install error (see AutoUpdaterPanel's `onUpdateError`). Both re-run
+ * [updateAggregateStatus] so an already-dead server surfaces immediately.
  */
 internal var suppressDisconnectedModal = false
 

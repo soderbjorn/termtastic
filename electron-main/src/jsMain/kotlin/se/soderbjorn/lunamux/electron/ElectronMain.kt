@@ -546,6 +546,23 @@ private fun showShutdownFailedDialog(): Boolean {
 }
 
 /**
+ * Tells the renderer an in-flight quit was cancelled after it had already
+ * confirmed a kill-server quit. The renderer suppresses its "Connection lost"
+ * modal the moment it confirms such a quit (anticipating the intentional
+ * server teardown); when the quit is then abandoned — server shutdown failed
+ * and the user chose Cancel in [showShutdownFailedDialog] — the app keeps
+ * running, so the renderer must re-arm that modal or every later genuine
+ * disconnect would be swallowed silently.
+ *
+ * Called only from [requestQuit]'s cancel path; received by the renderer via
+ * `onQuitCancelled` (preload.js → web main.kt).
+ */
+private fun notifyQuitCancelled() {
+    val w = mainWindow
+    if (w != null && !w.isDestroyed()) w.webContents.send("quit-cancelled")
+}
+
+/**
  * Orchestrate a quit intent: show the modal, optionally stop the
  * server, then call [ElectronApp.quit] with the [quitConfirmed] flag
  * set so the next `before-quit` lets the quit through.
@@ -588,6 +605,10 @@ private fun requestQuit() {
                     app.quit()
                 } else {
                     quitInProgress = false
+                    // The renderer suppressed its "Connection lost" modal when
+                    // it confirmed this kill-server quit; the quit is now
+                    // abandoned, so tell it to re-arm the modal.
+                    notifyQuitCancelled()
                 }
             }
         } else {
@@ -1668,18 +1689,33 @@ fun main() {
         Unit
     }
     ipcMain.handle(UpdateChannels.QUIT_AND_INSTALL) { _, _ ->
-        // Installing an update is an already-confirmed quit. The window-close
-        // and before-quit gates route through the renderer quit-confirmation
-        // modal unless quitConfirmed is set, so mark it before handing off to
-        // Squirrel — otherwise the install-relaunch would be trapped by the modal.
-        quitConfirmed = true
-        // Stop the bundled server first (the same POST /admin/shutdown the
-        // killServer quit path uses), so the relaunched, updated app starts its
-        // own new-version server instead of reconnecting to the old one still
-        // bound to the TLS port. Best-effort and time-bounded: the install
-        // proceeds even if the server never confirms, so a stuck server can
-        // never trap the update.
-        postShutdown(5000).then { _ -> quitAndInstallUpdate() }
+        if (!isUpdateDownloaded()) {
+            // The renderer's state got ahead of reality (e.g. a stale renderer
+            // after a window rebuild). Refuse — rather than shut the server
+            // down for an install quitAndInstall would throw on — and surface
+            // the refusal in the banner so the button recovers.
+            reportUpdateError("No downloaded update to install — check for updates again")
+        } else {
+            // Installing an update is an already-confirmed quit. The window-close
+            // and before-quit gates route through the renderer quit-confirmation
+            // modal unless quitConfirmed is set, so mark it before handing off to
+            // Squirrel — otherwise the install-relaunch would be trapped by the modal.
+            quitConfirmed = true
+            // Stop the bundled server first (the same POST /admin/shutdown the
+            // killServer quit path uses), so the relaunched, updated app starts its
+            // own new-version server instead of reconnecting to the old one still
+            // bound to the TLS port. Best-effort and time-bounded: the install
+            // proceeds even if the server never confirms, so a stuck server can
+            // never trap the update.
+            postShutdown(5000).then { _ ->
+                quitAndInstallUpdate(onFailure = {
+                    // The app is still running (with its server now stopped);
+                    // re-arm the quit gate so the next quit intent is confirmed
+                    // normally instead of silently sailing through.
+                    quitConfirmed = false
+                })
+            }
+        }
         Unit
     }
 

@@ -21,7 +21,9 @@
 #   --repo <owner/repo>  Target GitHub repo. Default: soderbjorn/lunamux.
 #                        In a test build (see below) this ALSO sets the publish
 #                        provider baked into app-update.yml, so the built app
-#                        checks that repo for updates.
+#                        checks that repo for updates. Test builds REFUSE to
+#                        publish to the production repo — point this at a fork
+#                        (or use --no-publish).
 #   --identity <name>    Sign with this macOS code-signing identity instead of
 #                        the production Developer ID, and skip notarization.
 #                        Use a free self-signed "Code Signing" cert from Keychain
@@ -57,8 +59,13 @@ set -euo pipefail
 shopt -s nullglob
 
 # ── Args ─────────────────────────────────────────────────────────────
+# The real release target. Test builds may never publish here (see the guard
+# after arg parsing): a self-signed draft — or worse, a --clobber onto an
+# existing production tag — must not be one forgotten --repo away.
+PROD_REPO="soderbjorn/lunamux"
+
 VERSION=""
-REPO="soderbjorn/lunamux"
+REPO="$PROD_REPO"
 IDENTITY=""
 NO_NOTARIZE=0
 NO_PUBLISH=0
@@ -68,7 +75,10 @@ while [[ $# -gt 0 ]]; do
         --identity) IDENTITY="$2"; shift 2 ;;
         --no-notarize) NO_NOTARIZE=1; shift ;;
         --no-publish) NO_PUBLISH=1; shift ;;
-        -h|--help) sed -n '2,60p' "$0"; exit 0 ;;
+        # Print the header comment block (everything up to the first non-#
+        # line), stripped of the leading "# " — robust to the header growing,
+        # unlike a fixed line range.
+        -h|--help) awk 'NR>1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
         -*) echo "Unknown option: $1" >&2; exit 2 ;;
         *) if [[ -z "$VERSION" ]]; then VERSION="$1"; shift; else echo "Unexpected arg: $1" >&2; exit 2; fi ;;
     esac
@@ -90,6 +100,16 @@ TAG="v$VERSION"
 # A test build = anything not signed + notarized with the production Developer ID.
 TEST_BUILD=0
 if [[ -n "$IDENTITY" || "$NO_NOTARIZE" == "1" ]]; then TEST_BUILD=1; fi
+
+# Never let a test build near the production repo's releases. Without this, a
+# forgotten --repo on a fork-test run would upload self-signed artifacts to
+# $PROD_REPO — and, if the tag already existed, --clobber them over real ones.
+if [[ $TEST_BUILD == 1 && $NO_PUBLISH == 0 && "$REPO" == "$PROD_REPO" ]]; then
+    echo "error: refusing to publish a TEST build (--identity / --no-notarize) to $PROD_REPO." >&2
+    echo "       Pass --repo <owner/repo> pointing at your fork, or --no-publish for a" >&2
+    echo "       local-only build." >&2
+    exit 2
+fi
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$(pwd)"
@@ -197,7 +217,15 @@ if [[ $TEST_BUILD == 0 ]]; then
     : "${APPLE_ID_PERSONAL:?set APPLE_ID_PERSONAL for notarization}"
     : "${APPLE_APP_SPECIFIC_PASSWORD_PERSONAL:?set APPLE_APP_SPECIFIC_PASSWORD_PERSONAL}"
     : "${APPLE_TEAM_ID_PERSONAL:?set APPLE_TEAM_ID_PERSONAL}"
-    DMG="$(ls -t "$DIST"/Lunamux-*.dmg | head -1)"
+    # dist/ is wiped at the top of every run, so exactly one DMG exists. Guard
+    # anyway: under nullglob an empty match would otherwise hand `ls -t` zero
+    # args and it would happily pick the newest file of the CURRENT DIRECTORY.
+    DMGS=( "$DIST"/Lunamux-*.dmg )
+    if [[ ${#DMGS[@]} -ne 1 ]]; then
+        echo "error: expected exactly one Lunamux-*.dmg in $DIST, found ${#DMGS[@]}." >&2
+        exit 1
+    fi
+    DMG="${DMGS[0]}"
     IDENTITY_FULL="Developer ID Application: Robert Söderbjörn (CCJP95ZXG4)"
     echo "==> Signing + notarizing + stapling DMG container: $(basename "$DMG")"
     codesign --force --timestamp --sign "$IDENTITY_FULL" "$DMG"
@@ -207,6 +235,42 @@ if [[ $TEST_BUILD == 0 ]]; then
         --team-id "$APPLE_TEAM_ID_PERSONAL" --wait
     xcrun stapler staple "$DMG"
     xcrun stapler validate "$DMG"
+
+    # Signing + stapling just rewrote the DMG, but electron-builder computed
+    # latest-mac.yml's dmg sha512/size from the pre-staple bytes. macOS
+    # auto-update downloads the zip (untouched above), so the stale hash is
+    # latent — but a manifest that misdescribes an asset it lists is a landmine
+    # (it breaks the moment anything validates the dmg entry), so refresh it.
+    # The dmg .blockmap is left as-is deliberately: it only serves dmg
+    # differential downloads, which the macOS updater never performs.
+    DMG_PATH="$DMG" node -e '
+      const fs = require("fs"), path = require("path"), crypto = require("crypto");
+      const dmg = process.env.DMG_PATH;
+      const yml = path.join(path.dirname(dmg), "latest-mac.yml");
+      const name = path.basename(dmg);
+      const sha512 = crypto.createHash("sha512").update(fs.readFileSync(dmg)).digest("base64");
+      const size = fs.statSync(dmg).size;
+      const lines = fs.readFileSync(yml, "utf8").split("\n");
+      let inDmgEntry = false, patched = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const l = lines[i];
+        const url = l.match(/^\s*-\s+url:\s*(.+?)\s*$/);
+        if (url) { inDmgEntry = url[1] === name; continue; }
+        // Top-level `path:` names the primary artifact (the zip on macOS); its
+        // following top-level sha512 is patched only if it names the dmg.
+        const top = l.match(/^path:\s*(.+?)\s*$/);
+        if (top) { inDmgEntry = top[1] === name; continue; }
+        if (!inDmgEntry) continue;
+        if (/^\s*sha512:/.test(l)) { lines[i] = l.replace(/sha512:.*/, "sha512: " + sha512); patched++; }
+        else if (/^\s*size:/.test(l)) { lines[i] = l.replace(/size:.*/, "size: " + size); patched++; }
+      }
+      if (patched === 0) {
+        console.error("error: latest-mac.yml has no entry for " + name + " — refusing to publish a stale manifest.");
+        process.exit(1);
+      }
+      fs.writeFileSync(yml, lines.join("\n"));
+      console.error("==> Refreshed " + patched + " latest-mac.yml field(s) for " + name + " after stapling.");
+    '
 fi
 
 # Build-only: stop before publishing (fast local build → install loops).
@@ -221,14 +285,31 @@ fi
 
 # ── 4. Publish the draft release with ALL update metadata ────────────
 # The fixed glob is the whole point: dmg + zip + latest-mac.yml + every .blockmap,
-# so nothing electron-updater needs can be forgotten.
-ASSETS=( "$DIST"/*.dmg "$DIST"/*.zip "$DIST"/*.blockmap "$DIST"/latest-mac.yml )
+# so nothing electron-updater needs can be forgotten. nullglob would silently
+# drop an entire missing class from the upload — defeating that guarantee — so
+# assert each artifact kind actually exists before building the list.
+DMG_ASSETS=( "$DIST"/*.dmg )
+ZIP_ASSETS=( "$DIST"/*.zip )
+BLOCKMAP_ASSETS=( "$DIST"/*.blockmap )
+[[ ${#DMG_ASSETS[@]} -gt 0 ]] || { echo "error: no .dmg in $DIST." >&2; exit 1; }
+[[ ${#ZIP_ASSETS[@]} -gt 0 ]] || { echo "error: no .zip in $DIST — macOS electron-updater updates from the zip." >&2; exit 1; }
+[[ ${#BLOCKMAP_ASSETS[@]} -gt 0 ]] || { echo "error: no .blockmap in $DIST — differential updates need them." >&2; exit 1; }
+ASSETS=( "${DMG_ASSETS[@]}" "${ZIP_ASSETS[@]}" "${BLOCKMAP_ASSETS[@]}" "$DIST/latest-mac.yml" )
 echo "==> Uploading ${#ASSETS[@]} assets to $REPO draft release $TAG:"
 for a in "${ASSETS[@]}"; do echo "      $(basename "$a")"; done
 
 NOTES="Automated draft for $TAG. Review, then Publish to release the update to clients."
-if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-    echo "==> Release $TAG already exists — clobbering assets."
+if IS_DRAFT="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null)"; then
+    # Overwrite assets only while the release is still an unreviewed draft. A
+    # PUBLISHED release's assets are live for clients (possibly mid-download);
+    # clobbering them in place could hand out a zip that no longer matches the
+    # published latest-mac.yml. Cut a new version instead.
+    if [[ "$IS_DRAFT" != "true" ]]; then
+        echo "error: release $TAG on $REPO is already PUBLISHED — refusing to overwrite its assets." >&2
+        echo "       Cut a new version instead." >&2
+        exit 1
+    fi
+    echo "==> Draft release $TAG already exists — clobbering assets."
     gh release upload "$TAG" --repo "$REPO" --clobber "${ASSETS[@]}"
 else
     gh release create "$TAG" --repo "$REPO" --draft --title "$TAG" --notes "$NOTES" "${ASSETS[@]}"

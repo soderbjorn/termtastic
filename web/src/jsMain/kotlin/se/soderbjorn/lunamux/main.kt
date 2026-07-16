@@ -715,6 +715,18 @@ private fun start() {
         })
     }
 
+    // A confirmed kill-server quit was abandoned in the main process (server
+    // shutdown failed, user chose Cancel in the native dialog) — the app keeps
+    // running, so re-arm the "Connection lost" modal suppressed above and
+    // re-evaluate the current connection state. Without this, every later
+    // genuine disconnect for the rest of the session would fail silently.
+    if (electronApi?.onQuitCancelled != null) {
+        electronApi.onQuitCancelled({
+            suppressDisconnectedModal = false
+            updateAggregateStatus()
+        })
+    }
+
     // Browser dev console fallback for the macOS Debug menu (the menu
     // exists only inside Electron). Power users can still drive the
     // override from `window.__ttDebugSetPaneState('working')` etc.
