@@ -52,8 +52,8 @@ import se.soderbjorn.lunamux.android.net.ConnectionHolder
 import se.soderbjorn.lunamux.android.LunamuxDarkColorScheme
 import se.soderbjorn.lunamux.android.LunamuxLightColorScheme
 import se.soderbjorn.lunamux.client.viewmodel.ThemeBackingViewModel
-import se.soderbjorn.darkness.core.Appearance
 import se.soderbjorn.darkness.core.ThemeSnapshotV2
+import se.soderbjorn.darkness.core.isColorLight
 import se.soderbjorn.lunamux.WindowConfig
 
 /**
@@ -105,8 +105,13 @@ fun LunamuxApp(applicationContext: Context) {
             val onboardingTheme = remember(onboardingIsDark) {
                 ThemeSnapshotV2().resolve(onboardingIsDark)
             }
+            // Polarity from the resolved surface, not the raw OS flag, for the
+            // same reason as the main scheme below: the slot the OS flag selects
+            // may hold a theme of either polarity. Benign with today's default
+            // snapshot (its slots match by construction) but keeps the base
+            // scheme honest if the defaults ever change.
             MaterialTheme(
-                colorScheme = if (onboardingIsDark) LunamuxDarkColorScheme else LunamuxLightColorScheme,
+                colorScheme = if (!isColorLight(onboardingTheme.surface)) LunamuxDarkColorScheme else LunamuxLightColorScheme,
             ) {
                 CompositionLocalProvider(LocalUiSettings provides onboardingTheme) {
                     OnboardingScreen(
@@ -179,18 +184,20 @@ fun LunamuxApp(applicationContext: Context) {
         effectiveSnapshot.resolve(systemIsDark)
     }
 
-    // Drive the Material colour scheme from the *chosen* appearance (resolved
-    // against the system flag), not the raw OS setting, so the Material chrome
-    // (bottom sheets, dialogs, chips) flips light/dark together with the themed
-    // surfaces. Without this the app looks half-switched when the user forces an
-    // appearance that differs from the device's. Falls back to the OS flag until
-    // the snapshot has loaded. Appearance is GLOBAL (never per-world), so it
-    // reads from the canonical snapshot rather than the world-overlaid one.
-    val effectiveDark = when (themeSnapshot?.appearance) {
-        Appearance.Dark -> true
-        Appearance.Light -> false
-        Appearance.Auto, null -> systemIsDark
-    }
+    // Pick the light/dark base Material scheme from the *resolved palette*, not
+    // the appearance toggle. The toggle (Auto/Dark/Light) only selects which
+    // slot of the theme pair `resolve` painted; either slot may legitimately
+    // hold a theme of either polarity (a dark theme in the light slot is a
+    // supported configuration — see ThemeBackingViewModel.activeSlotIsDark /
+    // issue #97). Keying the base scheme off the toggle let LunamuxLightScheme's
+    // un-overridden slots (`background` #F5F5F7, `onBackground` #1C1C1E, plus
+    // every M3 default light value) paint light-grey chrome and dark-on-dark
+    // text over a dark palette. Deriving polarity from the surface the scheme
+    // actually paints keeps base scheme, overrides and palette consistent — the
+    // same fix the web shell (applyAppearanceClass) and iOS (backgroundIsDark)
+    // use. Falls back correctly before the snapshot loads because the default
+    // ThemeSnapshotV2 resolves an on-brand dark surface.
+    val effectiveDark = !isColorLight(theme.surface)
 
     // Re-validate the `/window` connection every time the app returns to
     // the foreground. While the phone sleeps (or the app sits in the

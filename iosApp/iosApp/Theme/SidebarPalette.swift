@@ -60,12 +60,15 @@ enum Palette {
     ///
     /// - Parameter systemIsDark: the current system "prefers dark" flag.
     /// - Returns: `true` when the surface's luminance reads as dark.
+    ///
+    /// Delegates to toolkit-core's shared `isColorLight` (the same WCAG
+    /// relative-luminance rule the web shell and Android use to derive chrome
+    /// polarity) rather than a private YIQ approximation, so all three
+    /// platforms classify a given surface identically — the two formulas
+    /// disagreed on mid-tone greys and could have flipped bar chrome one way on
+    /// iOS and the other on web/Android for the same theme.
     static func backgroundIsDark(systemIsDark: Bool) -> Bool {
-        let argb = resolved(isDark: systemIsDark).surface
-        let r = Double((argb >> 16) & 0xFF) / 255.0
-        let g = Double((argb >> 8) & 0xFF) / 255.0
-        let b = Double(argb & 0xFF) / 255.0
-        return (0.299 * r + 0.587 * g + 0.114 * b) < 0.5
+        !Client.ColorMathKt.isColorLight(color: resolved(isDark: systemIsDark).surface)
     }
 
     /// Theme accent colour derived from the terminal foreground.
